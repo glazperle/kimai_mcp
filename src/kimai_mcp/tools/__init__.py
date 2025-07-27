@@ -1,0 +1,1 @@
+"""Kimai MCP tools."""

@@ -1,0 +1,490 @@
+"""Data models for Kimai API entities."""
+
+from datetime import datetime
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field
+
+
+class User(BaseModel):
+    """User model."""
+    id: int
+    username: str
+    alias: Optional[str] = None
+    title: Optional[str] = None
+    enabled: bool = False
+    color: Optional[str] = None
+
+
+class Customer(BaseModel):
+    """Customer model."""
+    id: int
+    name: str
+    number: Optional[str] = None
+    comment: Optional[str] = None
+    visible: bool = True
+    billable: bool = True
+    color: Optional[str] = None
+
+
+class Project(BaseModel):
+    """Project model."""
+    id: int
+    name: str
+    customer: Optional[int] = None
+    comment: Optional[str] = None
+    visible: bool = True
+    billable: bool = True
+    global_activities: bool = Field(True, alias="globalActivities")
+    number: Optional[str] = None
+    color: Optional[str] = None
+
+
+class Activity(BaseModel):
+    """Activity model."""
+    id: int
+    name: str
+    project: Optional[int] = None
+    comment: Optional[str] = None
+    visible: bool = True
+    billable: bool = True
+    number: Optional[str] = None
+    color: Optional[str] = None
+
+
+class TimesheetEntity(BaseModel):
+    """Timesheet entity model."""
+    id: Optional[int] = None
+    activity: int
+    project: int
+    user: Optional[int] = None
+    tags: List[str] = []
+    begin: datetime
+    end: Optional[datetime] = None
+    duration: Optional[int] = 0
+    description: Optional[str] = None
+    rate: Optional[float] = 0.0
+    internal_rate: Optional[float] = Field(None, alias="internalRate")
+    fixed_rate: Optional[float] = Field(None, alias="fixedRate")
+    hourly_rate: Optional[float] = Field(None, alias="hourlyRate")
+    exported: bool = False
+    billable: bool = True
+    meta_fields: Optional[List[Dict[str, Any]]] = Field(None, alias="metaFields")
+
+
+class TimesheetEditForm(BaseModel):
+    """Timesheet edit form for creating/updating timesheets."""
+    begin: Optional[datetime] = None
+    end: Optional[datetime] = None
+    project: int
+    activity: int
+    description: Optional[str] = None
+    fixed_rate: Optional[float] = Field(None, alias="fixedRate")
+    hourly_rate: Optional[float] = Field(None, alias="hourlyRate")
+    user: Optional[int] = None
+    tags: Optional[str] = None  # Comma separated
+    exported: Optional[bool] = None
+    billable: Optional[bool] = None
+
+
+class TimesheetFilter(BaseModel):
+    """Filters for timesheet queries."""
+    user: Optional[str] = None  # User ID or "all"
+    users: Optional[List[int]] = None
+    customer: Optional[int] = None
+    customers: Optional[List[int]] = None
+    project: Optional[int] = None
+    projects: Optional[List[int]] = None
+    activity: Optional[int] = None
+    activities: Optional[List[int]] = None
+    page: Optional[int] = None
+    size: Optional[int] = None
+    tags: Optional[List[str]] = None
+    order_by: Optional[str] = Field(None, alias="orderBy")  # id, begin, end, rate
+    order: Optional[str] = None  # ASC, DESC
+    begin: Optional[datetime] = None
+    end: Optional[datetime] = None
+    exported: Optional[int] = None  # 0=not exported, 1=exported
+    active: Optional[int] = None  # 0=stopped, 1=active
+    billable: Optional[int] = None  # 0=non-billable, 1=billable
+    full: Optional[str] = None  # 0|1|false|true
+    term: Optional[str] = None
+    modified_after: Optional[datetime] = Field(None, alias="modified_after")
+
+
+class ProjectFilter(BaseModel):
+    """Filters for project queries."""
+    customer: Optional[int] = None
+    customers: Optional[List[int]] = None
+    visible: Optional[int] = 1  # 1=visible, 2=hidden, 3=both
+    start: Optional[datetime] = None
+    end: Optional[datetime] = None
+    ignore_dates: Optional[str] = Field(None, alias="ignoreDates")
+    global_activities: Optional[str] = Field(None, alias="globalActivities")  # 0|1
+    order: Optional[str] = None  # ASC, DESC
+    order_by: Optional[str] = Field(None, alias="orderBy")  # id, name, customer
+    term: Optional[str] = None
+
+
+class ActivityFilter(BaseModel):
+    """Filters for activity queries."""
+    project: Optional[int] = None
+    projects: Optional[List[int]] = None
+    visible: Optional[int] = 1  # 1=visible, 2=hidden, 3=all
+    globals: Optional[str] = None  # 0|1
+    order_by: Optional[str] = Field(None, alias="orderBy")  # id, name, project
+    order: Optional[str] = None  # ASC, DESC
+    term: Optional[str] = None
+
+
+class CustomerFilter(BaseModel):
+    """Filters for customer queries."""
+    visible: Optional[int] = 1  # 1=visible, 2=hidden, 3=both
+    order: Optional[str] = None  # ASC, DESC
+    order_by: Optional[str] = Field(None, alias="orderBy")  # id, name
+    term: Optional[str] = None
+
+
+class ApiError(BaseModel):
+    """API error response."""
+    message: str
+    code: Optional[int] = None
+
+
+class Version(BaseModel):
+    """Kimai version information."""
+    version: str
+    version_id: int = Field(alias="versionId")
+    copyright: str
+
+
+# Absence models
+
+class AbsenceForm(BaseModel):
+    """Form for creating absences."""
+    half_day: Optional[bool] = Field(None, alias="halfDay")
+    duration: Optional[str] = None  # Duration string format
+    comment: str
+    user: int
+    date: str  # Date format YYYY-MM-DD
+    end: Optional[str] = None  # End date for multi-day absences
+    type: str  # holiday, time_off, sickness, etc.
+
+
+class Absence(BaseModel):
+    """Absence model."""
+    id: Optional[int] = None
+    user: User
+    date: datetime
+    duration: Optional[int] = None
+    type: str = "other"
+    status: str = "new"
+    half_day: bool = Field(False, alias="halfDay")
+
+
+class AbsenceFilter(BaseModel):
+    """Filters for absence queries."""
+    user: Optional[str] = None
+    begin: Optional[datetime] = None
+    end: Optional[datetime] = None
+    status: Optional[str] = None  # approved, open, all
+
+
+# Team models
+
+class TeamMember(BaseModel):
+    """Team member model."""
+    user: User
+    teamlead: bool = False
+
+
+class TeamEditForm(BaseModel):
+    """Form for creating/editing teams."""
+    name: str
+    color: Optional[str] = None
+    members: List[Dict[str, Any]]  # List of {user: int, teamlead: bool}
+
+
+class Team(BaseModel):
+    """Team model."""
+    id: Optional[int] = None
+    name: str
+    members: List[TeamMember] = []
+    customers: List[Customer] = []
+    projects: List[Project] = []
+    activities: List[Activity] = []
+    color: Optional[str] = None
+
+
+class TeamFilter(BaseModel):
+    """Filters for team queries."""
+    pass  # Teams don't have many filter options
+
+
+# Tag models
+
+class TagEntity(BaseModel):
+    """Tag entity model."""
+    id: Optional[int] = None
+    name: str
+    visible: bool = True
+    color: Optional[str] = None
+    color_safe: Optional[str] = Field(None, alias="color-safe")
+
+
+class TagEditForm(BaseModel):
+    """Form for creating/editing tags."""
+    name: str
+    color: Optional[str] = None
+    visible: Optional[bool] = None
+
+
+class TagFilter(BaseModel):
+    """Filters for tag queries."""
+    name: Optional[str] = None
+
+
+# Invoice models
+
+class Invoice(BaseModel):
+    """Invoice model."""
+    id: Optional[int] = None
+    invoice_number: str = Field(alias="invoiceNumber")
+    comment: Optional[str] = None
+    customer: Customer
+    user: User
+    created_at: datetime = Field(alias="createdAt")
+    total: float = 0.0
+    tax: float = 0.0
+    currency: str
+    due_days: int = Field(30, alias="dueDays")
+    vat: float = 0.0
+    status: str = "new"
+    payment_date: Optional[datetime] = Field(None, alias="paymentDate")
+    meta_fields: Optional[List[Dict[str, Any]]] = Field(None, alias="metaFields")
+
+
+class InvoiceFilter(BaseModel):
+    """Filters for invoice queries."""
+    begin: Optional[datetime] = None
+    end: Optional[datetime] = None
+    customers: Optional[List[int]] = None
+    status: Optional[List[str]] = None  # pending, paid, canceled, new
+    page: Optional[int] = None
+    size: Optional[int] = None
+
+
+# Public Holiday models
+
+class PublicHolidayGroup(BaseModel):
+    """Public holiday group model."""
+    id: Optional[int] = None
+    name: str
+
+
+class PublicHoliday(BaseModel):
+    """Public holiday model."""
+    id: Optional[int] = None
+    date: datetime
+    name: str
+    public_holiday_group: Optional[PublicHolidayGroup] = Field(None, alias="publicHolidayGroup")
+    half_day: bool = Field(False, alias="halfDay")
+
+
+class PublicHolidayFilter(BaseModel):
+    """Filters for public holiday queries."""
+    group: Optional[int] = None
+    begin: Optional[datetime] = None
+    end: Optional[datetime] = None
+
+
+# User extended models
+
+class UserEntity(BaseModel):
+    """Extended user entity model."""
+    id: int
+    username: str
+    alias: Optional[str] = None
+    title: Optional[str] = None
+    avatar: Optional[str] = None
+    enabled: bool = False
+    roles: List[str] = []
+    supervisor: Optional[User] = None
+    color: Optional[str] = None
+    locale: Optional[str] = None
+    timezone: Optional[str] = None
+    language: Optional[str] = None
+    teams: List[Team] = []
+    preferences: Optional[List[Dict[str, Any]]] = None
+
+
+class UserEditForm(BaseModel):
+    """Form for updating users."""
+    alias: Optional[str] = None
+    title: Optional[str] = None
+    account_number: Optional[str] = Field(None, alias="accountNumber")
+    avatar: Optional[str] = None
+    color: Optional[str] = None
+    email: str
+    language: str
+    locale: str
+    timezone: str
+    supervisor: Optional[int] = None
+    roles: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+    system_account: Optional[bool] = Field(None, alias="systemAccount")
+    requires_password_reset: Optional[bool] = Field(None, alias="requiresPasswordReset")
+
+
+class UserCreateForm(BaseModel):
+    """Form for creating users."""
+    username: str
+    alias: Optional[str] = None
+    title: Optional[str] = None
+    account_number: Optional[str] = Field(None, alias="accountNumber")
+    avatar: Optional[str] = None
+    color: Optional[str] = None
+    email: str
+    language: str
+    locale: str
+    timezone: str
+    supervisor: Optional[int] = None
+    roles: Optional[List[str]] = None
+    plain_password: str = Field(alias="plainPassword")
+    plain_api_token: Optional[str] = Field(None, alias="plainApiToken")
+    enabled: Optional[bool] = None
+    system_account: Optional[bool] = Field(None, alias="systemAccount")
+    requires_password_reset: Optional[bool] = Field(None, alias="requiresPasswordReset")
+
+
+class UserFilter(BaseModel):
+    """Filters for user queries."""
+    visible: Optional[int] = 1
+    order_by: Optional[str] = Field(None, alias="orderBy")
+    order: Optional[str] = None
+    term: Optional[str] = None
+    full: Optional[str] = None
+
+
+# Plugin models
+
+class Plugin(BaseModel):
+    """Plugin model."""
+    name: str
+    version: str
+
+
+# Calendar event model
+
+class CalendarEvent(BaseModel):
+    """Calendar event model."""
+    title: str
+    color: Optional[str] = None
+    text_color: Optional[str] = Field(None, alias="textColor")
+    all_day: bool = Field(False, alias="allDay")
+    start: datetime
+    end: Optional[datetime] = None
+
+
+# Rate management models
+
+class Rate(BaseModel):
+    """Rate model."""
+    id: Optional[int] = None
+    user: Optional[User] = None
+    rate: float
+    internal_rate: Optional[float] = Field(None, alias="internalRate")
+    is_fixed: bool = Field(False, alias="isFixed")
+
+
+class RateForm(BaseModel):
+    """Form for creating/editing rates."""
+    user: Optional[int] = None
+    rate: float
+    internal_rate: Optional[float] = Field(None, alias="internalRate")
+    is_fixed: Optional[bool] = Field(None, alias="isFixed")
+
+
+# Meta field models
+
+class MetaField(BaseModel):
+    """Meta field model."""
+    name: str
+    value: Optional[str] = None
+
+
+class MetaFieldForm(BaseModel):
+    """Form for updating meta fields."""
+    name: str
+    value: str
+
+
+# Extended entity models with meta fields
+
+class CustomerExtended(Customer):
+    """Extended customer model with meta fields."""
+    meta_fields: Optional[List[MetaField]] = Field(None, alias="metaFields")
+
+
+class ProjectExtended(Project):
+    """Extended project model with meta fields."""
+    meta_fields: Optional[List[MetaField]] = Field(None, alias="metaFields")
+
+
+class ActivityExtended(Activity):
+    """Extended activity model with meta fields."""
+    meta_fields: Optional[List[MetaField]] = Field(None, alias="metaFields")
+
+
+# CRUD forms for administrative operations
+
+class CustomerEditForm(BaseModel):
+    """Form for creating/editing customers."""
+    name: str
+    number: Optional[str] = None
+    comment: Optional[str] = None
+    visible: Optional[bool] = None
+    billable: Optional[bool] = None
+    budget: Optional[float] = None
+    time_budget: Optional[int] = Field(None, alias="timeBudget")
+    color: Optional[str] = None
+    country: Optional[str] = None
+    currency: Optional[str] = None
+    phone: Optional[str] = None
+    fax: Optional[str] = None
+    mobile: Optional[str] = None
+    email: Optional[str] = None
+    homepage: Optional[str] = None
+    address: Optional[str] = None
+    contact: Optional[str] = None
+    company: Optional[str] = None
+    vat_id: Optional[str] = Field(None, alias="vatId")
+
+
+class ProjectEditForm(BaseModel):
+    """Form for creating/editing projects."""
+    name: str
+    customer: int
+    comment: Optional[str] = None
+    visible: Optional[bool] = None
+    billable: Optional[bool] = None
+    budget: Optional[float] = None
+    time_budget: Optional[int] = Field(None, alias="timeBudget")
+    color: Optional[str] = None
+    global_activities: Optional[bool] = Field(None, alias="globalActivities")
+    number: Optional[str] = None
+    order_number: Optional[str] = Field(None, alias="orderNumber")
+    start: Optional[datetime] = None
+    end: Optional[datetime] = None
+
+
+class ActivityEditForm(BaseModel):
+    """Form for creating/editing activities."""
+    name: str
+    project: Optional[int] = None
+    comment: Optional[str] = None
+    visible: Optional[bool] = None
+    billable: Optional[bool] = None
+    budget: Optional[float] = None
+    time_budget: Optional[int] = Field(None, alias="timeBudget")
+    color: Optional[str] = None
+    number: Optional[str] = None
