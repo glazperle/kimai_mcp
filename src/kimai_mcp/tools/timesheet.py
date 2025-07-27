@@ -16,7 +16,7 @@ def list_timesheets_tool() -> Tool:
     """Define the list timesheets tool."""
     return Tool(
         name="timesheet_list",
-        description="List timesheets with smart user selection and automatic pagination. When filtering by date range, user, or project, ALL matching records are fetched automatically. Manual pagination available via 'page' parameter. Choose user scope: 'self' (current user), 'all' (all users), or 'specific' with user ID.",
+        description="List timesheets with smart user selection and automatic pagination. When filtering by date range, user, or project, ALL matching records are fetched automatically. Smart defaults: project/customer filters automatically include all users unless specified otherwise. Manual pagination available via 'page' parameter. Choose user scope: 'self' (current user), 'all' (all users), or 'specific' with user ID.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -282,7 +282,10 @@ async def handle_list_timesheets(client: KimaiClient, arguments: Optional[Dict[s
     
     if arguments:
         # Handle smart user selection
-        user_scope = arguments.get('user_scope', 'self')
+        # Smart default: if filtering by project/customer, default to 'all' users
+        has_project_filter = 'project' in arguments or 'customer' in arguments
+        default_scope = 'all' if has_project_filter else 'self'
+        user_scope = arguments.get('user_scope', default_scope)
         include_user_list = arguments.get('include_user_list', False)
         
         # Set user filter based on scope

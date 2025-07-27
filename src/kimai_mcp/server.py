@@ -26,7 +26,7 @@ from .models import (
     TimesheetEditForm, TimesheetFilter,
     ProjectFilter, ActivityFilter, CustomerFilter
 )
-from .tools import timesheet, project, activity, customer, absence, user, team, tag, invoice, calendar, holiday
+from .tools import timesheet, project, activity, customer, absence, user, team, tag, invoice, calendar, holiday, project_analysis
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -100,6 +100,8 @@ class KimaiMCPServer:
             project.add_project_rate_tool(),
             project.delete_project_rate_tool(),
             project.update_project_meta_tool(),
+            # Project analysis tools
+            project_analysis.analyze_project_team_tool(),
         ])
         
         # Activity tools
@@ -245,6 +247,8 @@ class KimaiMCPServer:
                 return await project.handle_delete_project_rate(self.client, arguments)
             elif name == "project_meta_update":
                 return await project.handle_update_project_meta(self.client, arguments)
+            elif name == "analyze_project_team":
+                return await project_analysis.handle_analyze_project_team(self.client, arguments)
             
             # Activity tools
             elif name == "activity_list":
