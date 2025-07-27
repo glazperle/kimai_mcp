@@ -121,14 +121,15 @@ class KimaiClient:
         data = await self._request("GET", "/users/me")
         return User(**data)
     
-    async def get_users(self, visible: int = 1, term: Optional[str] = None) -> List[User]:
+    async def get_users(self, visible: int = 1, term: Optional[str] = None, full: bool = False) -> List[User]:
         """Get list of users.
         
         Args:
             visible: 1=visible, 2=hidden, 3=all
             term: Search term
+            full: Whether to fetch full objects including subresources (default: False for performance)
         """
-        params = {"visible": visible}
+        params = {"visible": visible, "full": "true" if full else "false"}
         if term:
             params["term"] = term
         

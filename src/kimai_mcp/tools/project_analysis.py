@@ -1,11 +1,12 @@
 """Project analysis tools for comprehensive timesheet analysis."""
 
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 from collections import defaultdict
 
 from mcp.types import Tool, TextContent
-from ..client import KimaiClient
+from ..client import KimaiClient, KimaiAPIError
 from ..models import TimesheetFilter
 
 
@@ -63,7 +64,31 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
             user='all'  # Explicitly set to all users
         )
         
-        timesheets = await client.get_timesheets(filters)
+        try:
+            # 3. Fetch data in parallel for better performance
+            timesheets, users, activities = await asyncio.gather(
+                client.get_timesheets(filters),
+                client.get_users(full=False),  # Use optimized performance mode
+                client.get_activities()
+            )
+        except KimaiAPIError as e:
+            error_str = str(e).lower()
+            if "403" in str(e) or "permission" in error_str or "unauthorized" in error_str:
+                return [TextContent(
+                    type="text", 
+                    text=f"❌ Insufficient permissions to access project '{project.name}' data.\n\n**Required permissions:**\n• `view_other_timesheet` - to see all team members\n• `view_user` - to access user information\n\n**Tip:** Try asking your Kimai admin to grant these permissions or use `user_scope: 'self'` to see only your own data."
+                )]
+            elif "not found" in error_str or "404" in str(e):
+                return [TextContent(
+                    type="text", 
+                    text=f"❌ Project '{project.name}' was found but some related data is not accessible. This might indicate deleted/archived data."
+                )]
+            else:
+                # Re-raise unexpected errors with more context
+                return [TextContent(
+                    type="text", 
+                    text=f"❌ API Error while analyzing project '{project.name}': {str(e)}\n\nPlease check your Kimai connection and try again."
+                )]
         
         if not timesheets:
             return [TextContent(
@@ -71,12 +96,22 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
                 text=f"📋 No timesheets found for project '{project.name}' in the specified period."
             )]
         
-        # 3. Get all users and activities for proper naming
-        users = await client.get_users()
-        activities = await client.get_activities()
+        # Safety check for very large datasets
+        if len(timesheets) > 10000:
+            return [TextContent(
+                type="text", 
+                text=f"⚠️ Dataset too large: {len(timesheets)} entries found for project '{project.name}'.\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
+            )]
         
         # Create lookup dictionaries
-        user_lookup = {u.id: f"{u.username} ({u.email})" for u in users}
+        user_lookup = {}
+        for u in users:
+            display_name = u.username
+            if hasattr(u, 'alias') and u.alias:
+                display_name = f"{u.alias} ({u.username})"
+            elif hasattr(u, 'title') and u.title:
+                display_name = f"{u.username} - {u.title}"
+            user_lookup[u.id] = display_name
         activity_lookup = {a.id: a.name for a in activities}
         
         # 4. Analyze data

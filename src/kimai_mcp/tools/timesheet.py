@@ -23,8 +23,7 @@ def list_timesheets_tool() -> Tool:
                 "user_scope": {
                     "type": "string", 
                     "enum": ["self", "all", "specific"],
-                    "description": "User scope: 'self' for current user only, 'all' for all users, 'specific' for a particular user ID",
-                    "default": "self"
+                    "description": "User scope: auto-detects 'all' for project/customer filters, otherwise 'self'. Options: 'self' (current user), 'all' (all users), 'specific' (particular user ID)"
                 },
                 "user": {
                     "type": "string", 
