@@ -46,8 +46,8 @@ python -m kimai_mcp --kimai-url=https://your-kimai.com --kimai-token=your-token
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/kimai-mcp.git
-cd kimai-mcp
+git clone https://github.com/glazperle/kimai_mcp.git
+cd kimai_mcp
 
 # Install the package
 pip install -e .
@@ -655,7 +655,7 @@ We welcome contributions! Please feel free to submit a Pull Request. For major c
 
 ## 📞 Support
 
-- **Issues**: Please use the [GitHub issue tracker](https://github.com/yourusername/kimai-mcp/issues)
+- **Issues**: Please use the [GitHub issue tracker](https://github.com/glazperle/kimai_mcp/issues)
 - **Documentation**: Check the examples in the `examples/` directory
 - **Kimai Documentation**: Visit [kimai.org](https://www.kimai.org/) for Kimai-specific questions
 
