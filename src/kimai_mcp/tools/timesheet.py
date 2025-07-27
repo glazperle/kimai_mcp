@@ -44,7 +44,7 @@ def list_timesheets_tool() -> Tool:
                 "include_user_list": {
                     "type": "boolean", 
                     "description": "Set to true to include a list of available users in the response",
-                    "default": false
+                    "default": False
                 }
             }
         }
