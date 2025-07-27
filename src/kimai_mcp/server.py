@@ -86,6 +86,7 @@ class KimaiMCPServer:
             timesheet.duplicate_timesheet_tool(),
             timesheet.toggle_timesheet_export_tool(),
             timesheet.update_timesheet_meta_tool(),
+            timesheet.timesheet_user_guide_tool(),
         ])
         
         # Project tools
@@ -222,6 +223,8 @@ class KimaiMCPServer:
                 return await timesheet.handle_toggle_timesheet_export(self.client, arguments)
             elif name == "timesheet_meta_update":
                 return await timesheet.handle_update_timesheet_meta(self.client, arguments)
+            elif name == "timesheet_user_guide":
+                return await timesheet.handle_timesheet_user_guide(self.client, arguments)
             
             # Project tools
             elif name == "project_list":

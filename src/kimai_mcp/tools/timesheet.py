@@ -16,11 +16,20 @@ def list_timesheets_tool() -> Tool:
     """Define the list timesheets tool."""
     return Tool(
         name="timesheet_list",
-        description="List timesheets with optional filters",
+        description="List timesheets with smart user selection. Choose from: 'self' (current user), 'all' (all users), or specific user ID. Use 'list_users' first to see available users if needed.",
         inputSchema={
             "type": "object",
             "properties": {
-                "user": {"type": "string", "description": "User ID or 'all' for all users"},
+                "user_scope": {
+                    "type": "string", 
+                    "enum": ["self", "all", "specific"],
+                    "description": "User scope: 'self' for current user only, 'all' for all users, 'specific' for a particular user ID",
+                    "default": "self"
+                },
+                "user": {
+                    "type": "string", 
+                    "description": "Specific user ID (required if user_scope is 'specific'). Use 'user_list' tool to see available users."
+                },
                 "project": {"type": "integer", "description": "Project ID filter"},
                 "activity": {"type": "integer", "description": "Activity ID filter"},
                 "customer": {"type": "integer", "description": "Customer ID filter"},
@@ -31,7 +40,12 @@ def list_timesheets_tool() -> Tool:
                 "billable": {"type": "integer", "enum": [0, 1], "description": "Billable status: 0=non-billable, 1=billable"},
                 "page": {"type": "integer", "description": "Page number for pagination"},
                 "size": {"type": "integer", "description": "Page size (default: 50)"},
-                "term": {"type": "string", "description": "Search term"}
+                "term": {"type": "string", "description": "Search term"},
+                "include_user_list": {
+                    "type": "boolean", 
+                    "description": "Set to true to include a list of available users in the response",
+                    "default": false
+                }
             }
         }
     )
@@ -241,16 +255,53 @@ def update_timesheet_meta_tool() -> Tool:
     )
 
 
+def timesheet_user_guide_tool() -> Tool:
+    """Define the timesheet user selection guide tool."""
+    return Tool(
+        name="timesheet_user_guide",
+        description="Get guidance on user selection options for timesheet queries and see available users",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "show_users": {
+                    "type": "boolean", 
+                    "description": "Show list of available users",
+                    "default": True
+                }
+            }
+        }
+    )
+
+
 # Tool handlers
 
 async def handle_list_timesheets(client: KimaiClient, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
-    """Handle listing timesheets."""
+    """Handle listing timesheets with smart user selection."""
     filters = TimesheetFilter()
+    user_info = ""
     
     if arguments:
-        # Parse filters
-        if 'user' in arguments:
+        # Handle smart user selection
+        user_scope = arguments.get('user_scope', 'self')
+        include_user_list = arguments.get('include_user_list', False)
+        
+        # Set user filter based on scope
+        if user_scope == 'self':
+            # Don't set user filter - will use current user by default
+            user_info = "Showing timesheets for: Current user only"
+        elif user_scope == 'all':
+            filters.user = 'all'
+            user_info = "Showing timesheets for: All users"
+        elif user_scope == 'specific':
+            if 'user' not in arguments:
+                return [TextContent(
+                    type="text", 
+                    text="Error: When user_scope is 'specific', you must provide a 'user' parameter. Use 'user_list' tool to see available users."
+                )]
             filters.user = arguments['user']
+            user_info = f"Showing timesheets for: User ID {arguments['user']}"
+        
+        # Parse other filters
         if 'project' in arguments:
             filters.project = arguments['project']
         if 'activity' in arguments:
@@ -274,10 +325,28 @@ async def handle_list_timesheets(client: KimaiClient, arguments: Optional[Dict[s
         if 'term' in arguments:
             filters.term = arguments['term']
     
+    # Include user list if requested
+    response_parts = []
+    if arguments and arguments.get('include_user_list', False):
+        try:
+            users = await client.get_users()
+            user_list = "\n📋 Available Users:\n"
+            for user in users[:10]:  # Limit to first 10 users
+                user_list += f"   • ID: {user.id} - {user.username} ({user.email})\n"
+            if len(users) > 10:
+                user_list += f"   ... and {len(users) - 10} more users\n"
+            response_parts.append(user_list)
+        except Exception as e:
+            response_parts.append(f"⚠️ Could not fetch user list: {str(e)}\n")
+    
+    # Get timesheets
     timesheets = await client.get_timesheets(filters)
     
     if not timesheets:
-        return [TextContent(type="text", text="No timesheets found matching the criteria.")]
+        no_results_msg = f"{user_info}\n\nNo timesheets found matching the criteria."
+        if response_parts:
+            return [TextContent(type="text", text="\n".join(response_parts) + "\n" + no_results_msg)]
+        return [TextContent(type="text", text=no_results_msg)]
     
     # Format results
     results = []
@@ -295,9 +364,15 @@ Rate: {ts.rate} | Billable: {'Yes' if ts.billable else 'No'} | Exported: {'Yes' 
 ---"""
         results.append(result)
     
-    summary = f"Found {len(timesheets)} timesheet(s):\n\n" + "\n".join(results)
+    # Build final response
+    summary = f"{user_info}\n\nFound {len(timesheets)} timesheet(s):\n\n" + "\n".join(results)
     
-    return [TextContent(type="text", text=summary)]
+    if response_parts:
+        final_response = "\n".join(response_parts) + "\n" + summary
+    else:
+        final_response = summary
+    
+    return [TextContent(type="text", text=final_response)]
 
 
 async def handle_get_timesheet(client: KimaiClient, arguments: Dict[str, Any]) -> List[TextContent]:
@@ -607,3 +682,44 @@ Project: {timesheet.project} | Activity: {timesheet.activity}
 Field: {arguments['name']} = {arguments['value']}"""
     
     return [TextContent(type="text", text=result)]
+
+
+async def handle_timesheet_user_guide(client: KimaiClient, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
+    """Handle timesheet user selection guide."""
+    show_users = arguments.get('show_users', True) if arguments else True
+    
+    guide = """📋 Timesheet User Selection Guide
+
+When querying timesheets, you can choose who's data to retrieve:
+
+🔹 **user_scope: "self"** (Default)
+   Shows only your own timesheets
+   
+🔹 **user_scope: "all"** 
+   Shows timesheets from all users (requires appropriate permissions)
+   
+🔹 **user_scope: "specific"**
+   Shows timesheets from a specific user
+   Requires: user: "USER_ID"
+
+💡 **Examples:**
+   • timesheet_list with user_scope: "self" 
+   • timesheet_list with user_scope: "all"
+   • timesheet_list with user_scope: "specific" and user: "5"
+
+⚠️ **Permission Note:** 
+   Viewing other users' timesheets requires appropriate Kimai permissions."""
+    
+    if show_users:
+        try:
+            users = await client.get_users()
+            guide += "\n\n👥 **Available Users:**\n"
+            for user in users:
+                guide += f"   • ID: {user.id} - {user.username}"
+                if hasattr(user, 'email') and user.email:
+                    guide += f" ({user.email})"
+                guide += "\n"
+        except Exception as e:
+            guide += f"\n\n⚠️ Could not fetch user list: {str(e)}"
+    
+    return [TextContent(type="text", text=guide)]

@@ -210,11 +210,18 @@ Then use this configuration:
 
 ### Timesheet Management
 
-#### `timesheet_list` - List Timesheets
-List timesheets with comprehensive filtering options.
+#### `timesheet_list` - List Timesheets with Smart User Selection
+List timesheets with comprehensive filtering and intelligent user selection.
 
-**Parameters:**
-- `user` (string): User ID or 'all' for all users
+**Smart User Selection:**
+- `user_scope` (enum): Choose data scope
+  - `"self"` (default): Your own timesheets only
+  - `"all"`: All users' timesheets (requires permissions)
+  - `"specific"`: Specific user's timesheets
+- `user` (string): User ID (required when user_scope is "specific")
+- `include_user_list` (boolean): Include available users in response
+
+**Other Parameters:**
 - `project` (integer): Project ID filter
 - `activity` (integer): Activity ID filter
 - `customer` (integer): Customer ID filter
@@ -226,6 +233,12 @@ List timesheets with comprehensive filtering options.
 - `page` (integer): Page number for pagination
 - `size` (integer): Page size (default: 50)
 - `term` (string): Search term
+
+#### `timesheet_user_guide` - User Selection Guide
+Get guidance on user selection options and see available users.
+
+**Parameters:**
+- `show_users` (boolean): Show list of available users (default: true)
 
 #### `timesheet_create` - Create Timesheet
 Create a new timesheet entry.
@@ -439,22 +452,74 @@ List all teams.
 
 ## Usage Examples
 
-### Starting a Timer
-```
-Use the timesheet_start tool with:
+### Smart User Selection for Timesheets
+
+#### Get User Selection Guide
+```json
 {
-  "project": 1,
-  "activity": 5,
-  "description": "Working on API integration"
+  "tool": "timesheet_user_guide",
+  "parameters": {
+    "show_users": true
+  }
+}
+```
+
+#### View Your Own Timesheets (Default)
+```json
+{
+  "tool": "timesheet_list",
+  "parameters": {
+    "user_scope": "self",
+    "project": 17
+  }
+}
+```
+
+#### View All Users' Timesheets
+```json
+{
+  "tool": "timesheet_list",
+  "parameters": {
+    "user_scope": "all",
+    "project": 17,
+    "include_user_list": true
+  }
+}
+```
+
+#### View Specific User's Timesheets
+```json
+{
+  "tool": "timesheet_list",
+  "parameters": {
+    "user_scope": "specific",
+    "user": "5",
+    "project": 17
+  }
+}
+```
+
+### Starting a Timer
+```json
+{
+  "tool": "timesheet_start",
+  "parameters": {
+    "project": 1,
+    "activity": 5,
+    "description": "Working on API integration"
+  }
 }
 ```
 
 ### Listing Today's Timesheets
-```
-Use the timesheet_list tool with:
+```json
 {
-  "begin": "2024-01-15T00:00:00",
-  "end": "2024-01-15T23:59:59"
+  "tool": "timesheet_list",
+  "parameters": {
+    "user_scope": "self",
+    "begin": "2024-01-15T00:00:00",
+    "end": "2024-01-15T23:59:59"
+  }
 }
 ```
 
