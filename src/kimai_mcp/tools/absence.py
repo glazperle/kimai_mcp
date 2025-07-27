@@ -42,6 +42,24 @@ def get_absence_types_tool() -> Tool:
     )
 
 
+def calendar_absences_tool() -> Tool:
+    """Define the calendar absences tool."""
+    return Tool(
+        name="calendar_absences",
+        description="Get absences for calendar integration",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User ID to filter absences"},
+                "begin": {"type": "string", "format": "date", "description": "Only absences after this date (YYYY-MM-DD)"},
+                "end": {"type": "string", "format": "date", "description": "Only absences before this date (YYYY-MM-DD)"},
+                "language": {"type": "string", "description": "Language code for display (e.g., 'en', 'de')"},
+                "status": {"type": "string", "enum": ["approved", "open", "all"], "description": "Status filter"}
+            }
+        }
+    )
+
+
 def create_absence_tool() -> Tool:
     """Define the create absence tool."""
     return Tool(
@@ -118,9 +136,17 @@ async def handle_list_absences(client: KimaiClient, arguments: Optional[Dict[str
         if 'user' in arguments:
             filters.user = arguments['user']
         if 'begin' in arguments:
-            filters.begin = datetime.fromisoformat(arguments['begin'])
+            # Parse date and create datetime at start of day
+            date_str = arguments['begin']
+            if 'T' not in date_str:  # Just date format
+                date_str += 'T00:00:00'
+            filters.begin = datetime.fromisoformat(date_str)
         if 'end' in arguments:
-            filters.end = datetime.fromisoformat(arguments['end'])
+            # Parse date and create datetime at end of day
+            date_str = arguments['end']
+            if 'T' not in date_str:  # Just date format
+                date_str += 'T23:59:59'
+            filters.end = datetime.fromisoformat(date_str)
         if 'status' in arguments:
             filters.status = arguments['status']
     
@@ -151,6 +177,55 @@ Status: {abs_entry.status.title()}{duration_str}
         results.append(result)
     
     summary = f"Found {len(absences)} absence(s):\n\n" + "\n".join(results)
+    
+    return [TextContent(type="text", text=summary)]
+
+
+async def handle_calendar_absences(client: KimaiClient, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
+    """Handle getting absences for calendar integration."""
+    filters = AbsenceFilter()
+    language = None
+    
+    if arguments:
+        if 'user' in arguments:
+            filters.user = arguments['user']
+        if 'begin' in arguments:
+            # Parse date and create datetime at start of day
+            date_str = arguments['begin']
+            if 'T' not in date_str:  # Just date format
+                date_str += 'T00:00:00'
+            filters.begin = datetime.fromisoformat(date_str)
+        if 'end' in arguments:
+            # Parse date and create datetime at end of day
+            date_str = arguments['end']
+            if 'T' not in date_str:  # Just date format
+                date_str += 'T23:59:59'
+            filters.end = datetime.fromisoformat(date_str)
+        if 'status' in arguments:
+            filters.status = arguments['status']
+        if 'language' in arguments:
+            language = arguments['language']
+    
+    calendar_events = await client.get_absences_calendar(filters, language)
+    
+    if not calendar_events:
+        return [TextContent(type="text", text="No calendar events found matching the criteria.")]
+    
+    # Format results for calendar view
+    results = []
+    for event in calendar_events:
+        all_day_str = " (All Day)" if event.all_day else ""
+        start_date = event.start.strftime('%Y-%m-%d %H:%M') if event.start else "Unknown"
+        end_date = event.end.strftime('%Y-%m-%d %H:%M') if event.end else "Ongoing"
+        
+        result = f"""📅 {event.title}{all_day_str}
+Start: {start_date}
+End: {end_date}
+Color: {event.color or 'Default'}
+---"""
+        results.append(result)
+    
+    summary = f"Found {len(calendar_events)} calendar event(s):\n\n" + "\n".join(results)
     
     return [TextContent(type="text", text=summary)]
 

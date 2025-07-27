@@ -550,11 +550,11 @@ class KimaiClient:
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
             
-            # Convert datetime to string format
+            # Convert datetime to HTML5 date format as per API spec
             if filters.begin:
-                params['begin'] = filters.begin.date().isoformat()
+                params['begin'] = filters.begin.strftime('%Y-%m-%d')
             if filters.end:
-                params['end'] = filters.end.date().isoformat()
+                params['end'] = filters.end.strftime('%Y-%m-%d')
         
         data = await self._request("GET", "/absences", params=params)
         return [Absence(**item) for item in data]
@@ -612,11 +612,11 @@ class KimaiClient:
         if filters:
             params.update(filters.model_dump(exclude_none=True, by_alias=True))
             
-            # Convert datetime to string format
+            # Convert datetime to HTML5 date format as per API spec
             if filters.begin:
-                params['begin'] = filters.begin.date().isoformat()
+                params['begin'] = filters.begin.strftime('%Y-%m-%d')
             if filters.end:
-                params['end'] = filters.end.date().isoformat()
+                params['end'] = filters.end.strftime('%Y-%m-%d')
         
         if language:
             params["language"] = language

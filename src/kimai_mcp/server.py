@@ -134,6 +134,7 @@ class KimaiMCPServer:
         tools.extend([
             absence.list_absences_tool(),
             absence.get_absence_types_tool(),
+            absence.calendar_absences_tool(),
             absence.create_absence_tool(),
             absence.delete_absence_tool(),
             absence.approve_absence_tool(),
@@ -295,6 +296,8 @@ class KimaiMCPServer:
                 return await absence.handle_list_absences(self.client, arguments)
             elif name == "absence_types":
                 return await absence.handle_get_absence_types(self.client, arguments)
+            elif name == "calendar_absences":
+                return await absence.handle_calendar_absences(self.client, arguments)
             elif name == "absence_create":
                 return await absence.handle_create_absence(self.client, arguments, self.default_user_id)
             elif name == "absence_delete":
