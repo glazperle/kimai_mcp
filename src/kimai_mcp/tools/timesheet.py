@@ -16,7 +16,7 @@ def list_timesheets_tool() -> Tool:
     """Define the list timesheets tool."""
     return Tool(
         name="timesheet_list",
-        description="List timesheets with smart user selection. Choose from: 'self' (current user), 'all' (all users), or specific user ID. Use 'list_users' first to see available users if needed.",
+        description="List timesheets with smart user selection and automatic pagination. When filtering by date range, user, or project, ALL matching records are fetched automatically. Manual pagination available via 'page' parameter. Choose user scope: 'self' (current user), 'all' (all users), or 'specific' with user ID.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -38,8 +38,8 @@ def list_timesheets_tool() -> Tool:
                 "exported": {"type": "integer", "enum": [0, 1], "description": "Export status: 0=not exported, 1=exported"},
                 "active": {"type": "integer", "enum": [0, 1], "description": "Active status: 0=stopped, 1=active"},
                 "billable": {"type": "integer", "enum": [0, 1], "description": "Billable status: 0=non-billable, 1=billable"},
-                "page": {"type": "integer", "description": "Page number for pagination"},
-                "size": {"type": "integer", "description": "Page size (default: 50)"},
+                "page": {"type": "integer", "description": "Page number for manual pagination (disables automatic fetching of all results)"},
+                "size": {"type": "integer", "description": "Page size (default: 50). Values >100 disable automatic pagination"},
                 "term": {"type": "string", "description": "Search term"},
                 "include_user_list": {
                     "type": "boolean", 

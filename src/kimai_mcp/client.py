@@ -144,8 +144,33 @@ class KimaiClient:
             filters: Timesheet filters
         """
         params = {}
+        should_paginate_all = False
+        
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
+            
+            # Determine if we should fetch all pages (smart defaults)
+            # Auto-paginate when:
+            # 1. A time range is specified (begin or end)
+            # 2. Filtering by specific user/project/customer
+            # 3. Not manually paginating (no page specified)
+            # 4. Not using a large size limit (size <= 100 or not specified)
+            has_time_filter = filters.begin is not None or filters.end is not None
+            has_entity_filter = (
+                filters.user is not None or 
+                filters.users is not None or
+                filters.projects is not None or
+                filters.customers is not None or
+                filters.activities is not None
+            )
+            manual_pagination = filters.page is not None
+            large_size = filters.size is not None and filters.size > 100
+            
+            should_paginate_all = (
+                (has_time_filter or has_entity_filter) and 
+                not manual_pagination and 
+                not large_size
+            )
             
             # Convert datetime to string format
             if filters.begin:
@@ -172,8 +197,43 @@ class KimaiClient:
                 params['tags[]'] = filters.tags
                 del params['tags']
         
-        data = await self._request("GET", "/timesheets", params=params)
-        return [TimesheetEntity(**item) for item in data]
+        # If not auto-paginating, just return single page
+        if not should_paginate_all:
+            data = await self._request("GET", "/timesheets", params=params)
+            return [TimesheetEntity(**item) for item in data]
+        
+        # Auto-pagination logic
+        all_timesheets = []
+        page = 1
+        page_size = filters.size if filters and filters.size else 50
+        
+        while True:
+            # Set pagination params
+            paginated_params = params.copy()
+            paginated_params['page'] = page
+            paginated_params['size'] = page_size
+            
+            # Fetch page
+            data = await self._request("GET", "/timesheets", params=paginated_params)
+            
+            if not data:
+                # No more results
+                break
+                
+            all_timesheets.extend([TimesheetEntity(**item) for item in data])
+            
+            # Check if we got less than page_size results (last page)
+            if len(data) < page_size:
+                break
+                
+            page += 1
+            
+            # Safety limit to prevent infinite loops
+            if page > 100:
+                # Log warning or raise exception
+                break
+        
+        return all_timesheets
     
     async def get_active_timesheets(self) -> List[TimesheetEntity]:
         """Get active timesheets for current user."""
