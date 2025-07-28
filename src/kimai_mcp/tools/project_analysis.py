@@ -22,6 +22,13 @@ def analyze_project_team_tool() -> Tool:
                 "project_name": {"type": "string", "description": "Project name (will be matched automatically)"},
                 "begin": {"type": "string", "format": "date-time", "description": "Start date (ISO format, e.g., '2025-01-01')"},
                 "end": {"type": "string", "format": "date-time", "description": "End date (ISO format, e.g., '2025-06-30')"},
+                "user_scope": {
+                    "type": "string", 
+                    "enum": ["self", "all", "specific", "team"],
+                    "description": "Analysis scope: 'self' (current user), 'all' (all users), 'specific' (particular user), 'team' (team members only). Default: 'all'"
+                },
+                "user": {"type": "string", "description": "Specific user ID (required if user_scope is 'specific')"},
+                "team": {"type": "integer", "description": "Team ID (required if user_scope is 'team')"},
                 "include_details": {"type": "boolean", "description": "Include detailed activity breakdown", "default": True}
             }
         }
@@ -56,21 +63,63 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
         
         project = matching_projects[0]
         
-        # 2. Get ALL timesheets for this project (all users, auto-paginated)
+        # 2. Handle user scope selection
+        user_scope = arguments.get('user_scope', 'all')
+        user_filter = 'all'  # Default to all users
+        
+        if user_scope == 'self':
+            # Current user only - don't set user filter (uses current user by default)
+            user_filter = None
+        elif user_scope == 'specific':
+            if 'user' not in arguments:
+                return [TextContent(
+                    type="text", 
+                    text="❌ Error: When user_scope is 'specific', you must provide a 'user' parameter."
+                )]
+            user_filter = arguments['user']
+        elif user_scope == 'team':
+            if 'team' not in arguments:
+                return [TextContent(
+                    type="text", 
+                    text="❌ Error: When user_scope is 'team', you must provide a 'team' parameter. Use team_list to see available teams."
+                )]
+            # For team scope, we'll need to get team members first
+            try:
+                team = await client.get_team(arguments['team'])
+                team_user_ids = [str(member.user.id) for member in team.members]
+                if not team_user_ids:
+                    return [TextContent(
+                        type="text", 
+                        text=f"❌ Team ID {arguments['team']} has no members."
+                    )]
+                # Note: Kimai API doesn't support multiple user IDs in filter, so we'll filter post-processing
+                user_filter = 'all'  # Get all and filter later
+            except Exception as e:
+                return [TextContent(
+                    type="text", 
+                    text=f"❌ Error accessing team {arguments['team']}: {str(e)}"
+                )]
+        
+        # 3. Get timesheets for this project with user filtering
         filters = TimesheetFilter(
             project=project.id,
             begin=begin,
             end=end,
-            user='all'  # Explicitly set to all users
+            user=user_filter
         )
         
         try:
-            # 3. Fetch data in parallel for better performance
+            # 4. Fetch data in parallel for better performance
             timesheets, users, activities = await asyncio.gather(
                 client.get_timesheets(filters),
                 client.get_users(full=False),  # Use optimized performance mode
                 client.get_activities()
             )
+            
+            # Post-process team filtering if needed
+            if user_scope == 'team':
+                team_user_ids_int = [int(uid) for uid in team_user_ids]
+                timesheets = [ts for ts in timesheets if ts.user in team_user_ids_int]
         except KimaiAPIError as e:
             error_str = str(e).lower()
             if "403" in str(e) or "permission" in error_str or "unauthorized" in error_str:
@@ -148,8 +197,17 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
         result_parts = []
         
         # Header
+        # Add scope information to header
+        scope_info = {
+            'all': "All users",
+            'self': "Current user only", 
+            'specific': f"User ID {arguments.get('user', 'unknown')}",
+            'team': f"Team ID {arguments.get('team', 'unknown')} members"
+        }.get(user_scope, "All users")
+        
         result_parts.append(f"""# 📊 Project Team Analysis: {project.name}
 
+**Analysis Scope:** {scope_info}
 **Period:** {begin.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}
 **Total Duration:** {total_project_duration // 3600}h {(total_project_duration % 3600) // 60}m
 **Team Members:** {len(unique_users)}
