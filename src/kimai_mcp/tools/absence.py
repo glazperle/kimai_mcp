@@ -15,11 +15,16 @@ def list_absences_tool() -> Tool:
     """Define the list absences tool."""
     return Tool(
         name="absence_list",
-        description="List absences with optional filters",
+        description="List absences with smart user selection. Supports 'all' users for comprehensive analysis or specific user IDs.",
         inputSchema={
             "type": "object",
             "properties": {
-                "user": {"type": "string", "description": "User ID to filter absences"},
+                "user_scope": {
+                    "type": "string", 
+                    "enum": ["self", "all", "specific"],
+                    "description": "User scope: 'self' (current user), 'all' (all users), 'specific' (particular user ID)"
+                },
+                "user": {"type": "string", "description": "Specific user ID (required if user_scope is 'specific')"},
                 "begin": {"type": "string", "format": "date", "description": "Only absences after this date (YYYY-MM-DD)"},
                 "end": {"type": "string", "format": "date", "description": "Only absences before this date (YYYY-MM-DD)"},
                 "status": {"type": "string", "enum": ["approved", "open", "all"], "description": "Status filter"}
@@ -133,7 +138,20 @@ async def handle_list_absences(client: KimaiClient, arguments: Optional[Dict[str
     filters = AbsenceFilter()
     
     if arguments:
-        if 'user' in arguments:
+        # Handle smart user selection similar to timesheet tools
+        user_scope = arguments.get('user_scope')
+        if user_scope == 'all':
+            # Don't set user filter to get all users' absences
+            pass
+        elif user_scope == 'specific':
+            if 'user' not in arguments:
+                return [TextContent(
+                    type="text", 
+                    text="Error: When user_scope is 'specific', you must provide a 'user' parameter."
+                )]
+            filters.user = arguments['user']
+        elif 'user' in arguments:
+            # Legacy support: direct user parameter
             filters.user = arguments['user']
         if 'begin' in arguments:
             # Parse date and create datetime at start of day
