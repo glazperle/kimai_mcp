@@ -550,11 +550,12 @@ class KimaiClient:
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
             
-            # Convert datetime to HTML5 date format as per API spec
+            # Convert datetime to HTML5 datetime-local format for absence API
+            # API documentation shows "HTML5" but other endpoints use datetime-local format
             if filters.begin:
-                params['begin'] = filters.begin.strftime('%Y-%m-%d')
+                params['begin'] = filters.begin.strftime('%Y-%m-%dT%H:%M:%S')
             if filters.end:
-                params['end'] = filters.end.strftime('%Y-%m-%d')
+                params['end'] = filters.end.strftime('%Y-%m-%dT%H:%M:%S')
         
         data = await self._request("GET", "/absences", params=params)
         return [Absence(**item) for item in data]
@@ -612,11 +613,11 @@ class KimaiClient:
         if filters:
             params.update(filters.model_dump(exclude_none=True, by_alias=True))
             
-            # Convert datetime to HTML5 date format as per API spec
+            # Convert datetime to HTML5 datetime-local format for absence calendar API
             if filters.begin:
-                params['begin'] = filters.begin.strftime('%Y-%m-%d')
+                params['begin'] = filters.begin.strftime('%Y-%m-%dT%H:%M:%S')
             if filters.end:
-                params['end'] = filters.end.strftime('%Y-%m-%d')
+                params['end'] = filters.end.strftime('%Y-%m-%dT%H:%M:%S')
         
         if language:
             params["language"] = language

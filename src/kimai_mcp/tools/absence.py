@@ -158,13 +158,13 @@ async def handle_list_absences(client: KimaiClient, arguments: Optional[Dict[str
     
     if arguments:
         if 'begin' in arguments:
-            # Parse date and create datetime at start of day
+            # Parse date and convert to datetime with start of day
             date_str = arguments['begin']
-            begin_date = datetime.fromisoformat(f"{date_str}T00:00:00")
+            begin_date = datetime.strptime(date_str, '%Y-%m-%d').replace(hour=0, minute=0, second=0, microsecond=0)
         if 'end' in arguments:
-            # Parse date and create datetime at end of day
+            # Parse date and convert to datetime with end of day
             date_str = arguments['end']
-            end_date = datetime.fromisoformat(f"{date_str}T23:59:59")
+            end_date = datetime.strptime(date_str, '%Y-%m-%d').replace(hour=23, minute=59, second=59, microsecond=999999)
         if 'status' in arguments:
             status_filter = arguments['status']
     
@@ -222,7 +222,18 @@ async def handle_list_absences(client: KimaiClient, arguments: Optional[Dict[str
     
     if not all_absences:
         scope_info = "all users" if analyze_all_users else f"user {user_id}" if user_id else "current user"
-        return [TextContent(type="text", text=f"No absences found for {scope_info} matching the criteria.")]
+        
+        # Provide helpful suggestions for troubleshooting
+        suggestions = []
+        if begin_date or end_date:
+            suggestions.append("Try without date filters to check if data exists in other periods")
+        if status_filter != 'all':
+            suggestions.append("Try with status: 'all' to include all absence statuses")
+        suggestions.append("Check if absences exist in the Kimai web interface")
+        
+        suggestion_text = "\n\n**Troubleshooting suggestions:**\n" + "\n".join([f"• {s}" for s in suggestions]) if suggestions else ""
+        
+        return [TextContent(type="text", text=f"No absences found for {scope_info} matching the criteria.{suggestion_text}")]
     
     # Sort by date for better analysis
     all_absences.sort(key=lambda x: x.date, reverse=True)
@@ -297,13 +308,13 @@ async def handle_calendar_absences(client: KimaiClient, arguments: Optional[Dict
         if 'user' in arguments:
             filters.user = arguments['user']
         if 'begin' in arguments:
-            # Parse date and create datetime at start of day
+            # Parse date - client converts to HTML5 format automatically
             date_str = arguments['begin']
-            filters.begin = datetime.fromisoformat(f"{date_str}T00:00:00")
+            filters.begin = datetime.strptime(date_str, '%Y-%m-%d')
         if 'end' in arguments:
-            # Parse date and create datetime at end of day
+            # Parse date - client converts to HTML5 format automatically
             date_str = arguments['end']
-            filters.end = datetime.fromisoformat(f"{date_str}T23:59:59")
+            filters.end = datetime.strptime(date_str, '%Y-%m-%d')
         if 'status' in arguments:
             filters.status = arguments['status']
         if 'language' in arguments:
