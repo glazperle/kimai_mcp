@@ -1,6 +1,7 @@
 """Consolidated Absence Manager tool for all absence operations."""
 
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import AbsenceForm, AbsenceFilter
@@ -143,11 +144,26 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
             return [TextContent(type="text", text="Error: 'user' parameter required when user_scope is 'specific'")]
     # user_scope == "all" means no user filter
     
-    # Build absence filter
+    # Build absence filter - convert string dates to datetime objects
+    begin_date = None
+    end_date = None
+    
+    if filters.get("begin"):
+        try:
+            begin_date = datetime.strptime(filters["begin"], "%Y-%m-%d")
+        except ValueError:
+            return [TextContent(type="text", text=f"Error: Invalid begin date format. Expected YYYY-MM-DD, got '{filters['begin']}'")]
+    
+    if filters.get("end"):
+        try:
+            end_date = datetime.strptime(filters["end"], "%Y-%m-%d")
+        except ValueError:
+            return [TextContent(type="text", text=f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{filters['end']}'")]
+    
     absence_filter = AbsenceFilter(
         user=user_filter,
-        begin=filters.get("begin"),
-        end=filters.get("end"),
+        begin=begin_date,
+        end=end_date,
         status=filters.get("status", "all")
     )
     
