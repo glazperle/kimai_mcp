@@ -184,18 +184,15 @@ Then use this Claude Desktop configuration:
 }
 ```
 
-## Available Tools
+## Usage Examples
 
 ### Timesheet Management
 
-#### Entity Tool - Timesheet Operations
-Use the entity tool with `type: "timesheet"` for comprehensive timesheet management:
-
+#### List Timesheets
 ```json
 {
-  "tool": "entity",
+  "tool": "timesheet",
   "parameters": {
-    "type": "timesheet",
     "action": "list",
     "filters": {
       "project": 17,
@@ -205,9 +202,24 @@ Use the entity tool with `type: "timesheet"` for comprehensive timesheet managem
 }
 ```
 
-#### Timer Tool - Active Timer Control
-Start, stop, and manage active timers:
+#### Create a Timesheet Entry
+```json
+{
+  "tool": "timesheet",
+  "parameters": {
+    "action": "create",
+    "data": {
+      "project": 1,
+      "activity": 5,
+      "description": "Working on API integration",
+      "begin": "2024-08-03T09:00:00",
+      "end": "2024-08-03T10:30:00"
+    }
+  }
+}
+```
 
+#### Start a Timer
 ```json
 {
   "tool": "timer",
@@ -222,9 +234,20 @@ Start, stop, and manage active timers:
 }
 ```
 
+#### Stop a Timer
+```json
+{
+  "tool": "timer",
+  "parameters": {
+    "action": "stop",
+    "id": 12345
+  }
+}
+```
+
 ### Project & Activity Management
 
-#### Entity Tool - Project Operations
+#### List Projects
 ```json
 {
   "tool": "entity",
@@ -236,9 +259,33 @@ Start, stop, and manage active timers:
 }
 ```
 
+#### Get Project Details
+```json
+{
+  "tool": "entity",
+  "parameters": {
+    "type": "project",
+    "action": "get",
+    "id": 17
+  }
+}
+```
+
+#### List Activities
+```json
+{
+  "tool": "entity",
+  "parameters": {
+    "type": "activity",
+    "action": "list",
+    "filters": {"project": 17}
+  }
+}
+```
+
 ### User & Team Management
 
-#### Entity Tool - User Operations
+#### List Users
 ```json
 {
   "tool": "entity",
@@ -249,7 +296,22 @@ Start, stop, and manage active timers:
 }
 ```
 
-#### Team Access Tool - Team Management
+#### Create a Team
+```json
+{
+  "tool": "entity",
+  "parameters": {
+    "type": "team",
+    "action": "create",
+    "data": {
+      "name": "Development Team",
+      "color": "#3498db"
+    }
+  }
+}
+```
+
+#### Add Team Member
 ```json
 {
   "tool": "team_access",
@@ -263,7 +325,7 @@ Start, stop, and manage active timers:
 
 ### Absence Management
 
-#### Absence Tool - Complete Workflow
+#### Create an Absence
 ```json
 {
   "tool": "absence",
@@ -276,6 +338,43 @@ Start, stop, and manage active timers:
       "type": "holiday"
     }
   }
+}
+```
+
+#### List Absences
+```json
+{
+  "tool": "absence",
+  "parameters": {
+    "action": "list",
+    "filters": {
+      "user": "5",
+      "status": "all"
+    }
+  }
+}
+```
+
+### Rate Management
+
+#### List Customer Rates
+```json
+{
+  "tool": "rate",
+  "parameters": {
+    "entity": "customer",
+    "action": "list",
+    "entity_id": 1
+  }
+}
+```
+
+### Current User Information
+
+#### Get Current User
+```json
+{
+  "tool": "user_current"
 }
 ```
 
