@@ -3,7 +3,7 @@
 from typing import List, Dict, Any, Optional
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
-from ..models import AbsenceForm
+from ..models import AbsenceForm, AbsenceFilter
 
 
 def absence_tool() -> Tool:
@@ -143,13 +143,16 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
             return [TextContent(type="text", text="Error: 'user' parameter required when user_scope is 'specific'")]
     # user_scope == "all" means no user filter
     
-    # Fetch absences
-    absences = await client.get_absences(
+    # Build absence filter
+    absence_filter = AbsenceFilter(
         user=user_filter,
         begin=filters.get("begin"),
         end=filters.get("end"),
         status=filters.get("status", "all")
     )
+    
+    # Fetch absences
+    absences = await client.get_absences(absence_filter)
     
     # Build response
     if user_scope == "all":

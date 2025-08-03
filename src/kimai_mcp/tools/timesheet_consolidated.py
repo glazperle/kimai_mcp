@@ -192,7 +192,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
     
     if user_scope == "self":
         current_user = await client.get_current_user()
-        user_filter = current_user.id
+        user_filter = str(current_user.id)
     elif user_scope == "specific":
         user_filter = filters.get("user")
         if not user_filter:
@@ -241,10 +241,12 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         duration = (ts.end - ts.begin).total_seconds() / 3600 if ts.end else "Running"
         status = "Running" if not ts.end else "Stopped"
         
-        result += f"ID: {ts.id} - {ts.project.name} / {ts.activity.name}\\n"
-        result += f"  User: {ts.user.username if ts.user else 'Unknown'}\\n"
+        result += f"ID: {ts.id} - Project ID: {ts.project} / Activity ID: {ts.activity}\\n"
+        result += f"  User ID: {ts.user if ts.user else 'Unknown'}\\n"
         result += f"  Duration: {duration:.2f} hours\\n" if isinstance(duration, float) else f"  Status: {status}\\n"
-        result += f"  Date: {ts.begin.strftime('%Y-%m-%d %H:%M')}\\n"
+        result += f"  Begin: {ts.begin.strftime('%Y-%m-%d %H:%M')}\\n"
+        if ts.end:
+            result += f"  End: {ts.end.strftime('%Y-%m-%d %H:%M')}\\n"
         
         if ts.description:
             result += f"  Description: {ts.description}\\n"
@@ -266,9 +268,9 @@ async def _handle_timesheet_get(client: KimaiClient, id: Optional[int]) -> List[
     status = "Running" if not ts.end else "Stopped"
     
     result = f"Timesheet ID: {ts.id}\\n"
-    result += f"Project: {ts.project.name} (ID: {ts.project.id})\\n"
-    result += f"Activity: {ts.activity.name} (ID: {ts.activity.id})\\n"
-    result += f"User: {ts.user.username if ts.user else 'Unknown'}\\n"
+    result += f"Project ID: {ts.project}\\n"
+    result += f"Activity ID: {ts.activity}\\n"
+    result += f"User ID: {ts.user if ts.user else 'Unknown'}\\n"
     result += f"Status: {status}\\n"
     
     result += f"Begin: {ts.begin.strftime('%Y-%m-%d %H:%M:%S')}\\n"
@@ -319,7 +321,7 @@ async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[Text
     status = "Started (running)" if not ts.end else "Created"
     return [TextContent(
         type="text",
-        text=f"{status} timesheet ID {ts.id} for {ts.project.name} / {ts.activity.name}"
+        text=f"{status} timesheet ID {ts.id} for project {ts.project} / activity {ts.activity}"
     )]
 
 
@@ -487,7 +489,7 @@ async def _handle_timer_start(client: KimaiClient, data: Dict) -> List[TextConte
     
     return [TextContent(
         type="text",
-        text=f"Started timer ID {ts.id} for {ts.project.name} / {ts.activity.name}"
+        text=f"Started timer ID {ts.id} for project {ts.project} / activity {ts.activity}"
     )]
 
 
@@ -514,7 +516,7 @@ async def _handle_timer_restart(client: KimaiClient, id: Optional[int]) -> List[
     
     return [TextContent(
         type="text",
-        text=f"Restarted timer ID {ts.id} for {ts.project.name} / {ts.activity.name}"
+        text=f"Restarted timer ID {ts.id} for project {ts.project} / activity {ts.activity}"
     )]
 
 
@@ -530,7 +532,7 @@ async def _handle_timer_active(client: KimaiClient) -> List[TextContent]:
     for ts in timesheets:
         elapsed = (datetime.now() - ts.begin).total_seconds() / 3600
         
-        result += f"ID: {ts.id} - {ts.project.name} / {ts.activity.name}\\n"
+        result += f"ID: {ts.id} - Project: {ts.project} / Activity: {ts.activity}\\n"
         result += f"  Started: {ts.begin.strftime('%Y-%m-%d %H:%M')}\\n"
         result += f"  Elapsed: {elapsed:.2f} hours\\n"
         
@@ -545,20 +547,29 @@ async def _handle_timer_active(client: KimaiClient) -> List[TextContent]:
 
 async def _handle_timer_recent(client: KimaiClient, size: int, begin: Optional[str]) -> List[TextContent]:
     """Handle timer recent action."""
+    from datetime import datetime
+    
+    begin_datetime = None
+    if begin:
+        try:
+            begin_datetime = datetime.fromisoformat(begin)
+        except ValueError:
+            return [TextContent(type="text", text=f"Error: Invalid date format '{begin}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+    
+    # Use regular timesheet list with recent parameters
     filter_params = TimesheetFilter(
         size=size,
-        begin=begin,
+        begin=begin_datetime,
         page=1
     )
-    
-    timesheets = await client.get_recent_timesheets(filter_params)
+    timesheets = await client.get_timesheets(filter_params)
     
     result = f"Recent {len(timesheets)} timesheet(s):\\n\\n"
     
     for ts in timesheets:
         duration = (ts.end - ts.begin).total_seconds() / 3600 if ts.end else "Running"
         
-        result += f"ID: {ts.id} - {ts.project.name} / {ts.activity.name}\\n"
+        result += f"ID: {ts.id} - Project: {ts.project} / Activity: {ts.activity}\\n"
         result += f"  Date: {ts.begin.strftime('%Y-%m-%d')}\\n"
         
         if isinstance(duration, float):

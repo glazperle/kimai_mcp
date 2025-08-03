@@ -6,7 +6,8 @@ from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import (
     ProjectEditForm, ActivityEditForm, CustomerEditForm,
-    UserCreateForm, UserEditForm, TeamEditForm, TagEditForm
+    UserCreateForm, UserEditForm, TeamEditForm, TagEditForm,
+    ProjectFilter, ActivityFilter, CustomerFilter
 )
 
 
@@ -146,21 +147,26 @@ class ProjectEntityHandler(BaseEntityHandler):
     """Handler for project operations."""
     
     async def list(self, filters: Dict) -> List[TextContent]:
-        projects = await self.client.get_projects(
+        project_filter = ProjectFilter(
             customer=filters.get("customer"),
             visible=filters.get("visible", 1),
-            term=filters.get("term")
+            order=filters.get("order"),
+            order_by=filters.get("order_by")
         )
+        projects = await self.client.get_projects(project_filter)
         
         result = f"Found {len(projects)} projects\\n\\n"
         for project in projects:
-            customer_name = project.customer.name if project.customer else "No customer"
+            customer_id = project.customer if project.customer else "No customer"
             status = "Active" if project.visible else "Inactive"
             result += f"ID: {project.id} - {project.name}\\n"
-            result += f"  Customer: {customer_name}\\n"
+            result += f"  Customer ID: {customer_id}\\n"
             result += f"  Status: {status}\\n"
+            result += f"  Billable: {'Yes' if project.billable else 'No'}\\n"
             if project.comment:
                 result += f"  Comment: {project.comment}\\n"
+            if project.color:
+                result += f"  Color: {project.color}\\n"
             result += "\\n"
         
         return [TextContent(type="text", text=result)]
@@ -169,14 +175,15 @@ class ProjectEntityHandler(BaseEntityHandler):
         project = await self.client.get_project(id)
         
         result = f"Project: {project.name} (ID: {project.id})\\n"
-        result += f"Customer: {project.customer.name if project.customer else 'None'}\\n"
+        result += f"Customer ID: {project.customer if project.customer else 'None'}\\n"
         result += f"Status: {'Active' if project.visible else 'Inactive'}\\n"
         result += f"Billable: {'Yes' if project.billable else 'No'}\\n"
+        result += f"Global Activities: {'Yes' if project.global_activities else 'No'}\\n"
         
-        if project.budget:
-            result += f"Budget: {project.budget} hours\\n"
-        if project.timeBudget:
-            result += f"Time Budget: {project.timeBudget} hours\\n"
+        if project.number:
+            result += f"Number: {project.number}\\n"
+        if project.color:
+            result += f"Color: {project.color}\\n"
         if project.comment:
             result += f"Comment: {project.comment}\\n"
         
@@ -207,12 +214,15 @@ class ActivityEntityHandler(BaseEntityHandler):
     """Handler for activity operations."""
     
     async def list(self, filters: Dict) -> List[TextContent]:
-        activities = await self.client.get_activities(
+        activity_filter = ActivityFilter(
             project=filters.get("project"),
             visible=filters.get("visible", 1),
             globals=filters.get("globals"),
-            term=filters.get("term")
+            term=filters.get("term"),
+            order=filters.get("order"),
+            order_by=filters.get("order_by")
         )
+        activities = await self.client.get_activities(activity_filter)
         
         result = f"Found {len(activities)} activities\\n\\n"
         for activity in activities:
@@ -264,20 +274,26 @@ class CustomerEntityHandler(BaseEntityHandler):
     """Handler for customer operations."""
     
     async def list(self, filters: Dict) -> List[TextContent]:
-        customers = await self.client.get_customers(
+        customer_filter = CustomerFilter(
             visible=filters.get("visible", 1),
-            term=filters.get("term")
+            term=filters.get("term"),
+            order=filters.get("order"),
+            order_by=filters.get("order_by")
         )
+        customers = await self.client.get_customers(customer_filter)
         
         result = f"Found {len(customers)} customers\\n\\n"
         for customer in customers:
             status = "Active" if customer.visible else "Inactive"
             result += f"ID: {customer.id} - {customer.name}\\n"
             result += f"  Status: {status}\\n"
-            if customer.contact:
-                result += f"  Contact: {customer.contact}\\n"
-            if customer.email:
-                result += f"  Email: {customer.email}\\n"
+            result += f"  Billable: {'Yes' if customer.billable else 'No'}\\n"
+            if customer.number:
+                result += f"  Number: {customer.number}\\n"
+            if customer.color:
+                result += f"  Color: {customer.color}\\n"
+            if customer.comment:
+                result += f"  Comment: {customer.comment}\\n"
             result += "\\n"
         
         return [TextContent(type="text", text=result)]
@@ -289,14 +305,10 @@ class CustomerEntityHandler(BaseEntityHandler):
         result += f"Status: {'Active' if customer.visible else 'Inactive'}\\n"
         result += f"Billable: {'Yes' if customer.billable else 'No'}\\n"
         
-        if customer.contact:
-            result += f"Contact: {customer.contact}\\n"
-        if customer.email:
-            result += f"Email: {customer.email}\\n"
-        if customer.phone:
-            result += f"Phone: {customer.phone}\\n"
-        if customer.address:
-            result += f"Address: {customer.address}\\n"
+        if customer.number:
+            result += f"Number: {customer.number}\\n"
+        if customer.color:
+            result += f"Color: {customer.color}\\n"
         if customer.comment:
             result += f"Comment: {customer.comment}\\n"
         
@@ -329,9 +341,7 @@ class UserEntityHandler(BaseEntityHandler):
     async def list(self, filters: Dict) -> List[TextContent]:
         users = await self.client.get_users(
             visible=filters.get("visible", 1),
-            term=filters.get("term"),
-            order_by=filters.get("order_by"),
-            order=filters.get("order")
+            term=filters.get("term")
         )
         
         result = f"Found {len(users)} users\\n\\n"
@@ -339,10 +349,10 @@ class UserEntityHandler(BaseEntityHandler):
             status = "Active" if user.enabled else "Inactive"
             result += f"ID: {user.id} - {user.username}\\n"
             result += f"  Name: {user.alias or 'Not set'}\\n"
-            result += f"  Email: {user.email}\\n"
+            result += f"  Title: {user.title or 'Not set'}\\n"
             result += f"  Status: {status}\\n"
-            if user.roles:
-                result += f"  Roles: {', '.join(user.roles)}\\n"
+            if user.color:
+                result += f"  Color: {user.color}\\n"
             result += "\\n"
         
         return [TextContent(type="text", text=result)]
@@ -352,15 +362,11 @@ class UserEntityHandler(BaseEntityHandler):
         
         result = f"User: {user.username} (ID: {user.id})\\n"
         result += f"Name: {user.alias or 'Not set'}\\n"
-        result += f"Email: {user.email}\\n"
+        result += f"Title: {user.title or 'Not set'}\\n"
         result += f"Status: {'Active' if user.enabled else 'Inactive'}\\n"
-        result += f"Language: {user.language}\\n"
-        result += f"Timezone: {user.timezone}\\n"
         
-        if user.roles:
-            result += f"Roles: {', '.join(user.roles)}\\n"
-        if hasattr(user, "supervisor") and user.supervisor:
-            result += f"Supervisor: {user.supervisor.username}\\n"
+        if user.color:
+            result += f"Color: {user.color}\\n"
         
         return [TextContent(type="text", text=result)]
     
