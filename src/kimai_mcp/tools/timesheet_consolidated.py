@@ -336,6 +336,7 @@ async def _handle_timesheet_update(client: KimaiClient, id: Optional[int], data:
     if "tags" in data:
         # Keep tags as string for model compatibility
         # data["tags"] is already a string from input
+        pass
     
     form = TimesheetEditForm(**data)
     ts = await client.update_timesheet(id, form)

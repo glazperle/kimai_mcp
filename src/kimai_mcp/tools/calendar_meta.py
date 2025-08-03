@@ -178,12 +178,14 @@ async def handle_user_current(client: KimaiClient, **params) -> List[TextContent
         
         result = f"Current User: {user.username} (ID: {user.id})\\n"
         result += f"Name: {user.alias or 'Not set'}\\n"
-        result += f"Email: {user.email}\\n"
+        result += f"Title: {user.title or 'Not set'}\\n"
         result += f"Status: {'Active' if user.enabled else 'Inactive'}\\n"
-        result += f"Language: {user.language}\\n"
-        result += f"Timezone: {user.timezone}\\n"
         
-        if user.roles:
+        if hasattr(user, 'language') and user.language:
+            result += f"Language: {user.language}\\n"
+        if hasattr(user, 'timezone') and user.timezone:
+            result += f"Timezone: {user.timezone}\\n"
+        if hasattr(user, 'roles') and user.roles:
             result += f"Roles: {', '.join(user.roles)}\\n"
         
         if hasattr(user, "supervisor") and user.supervisor:
@@ -198,13 +200,24 @@ async def handle_user_current(client: KimaiClient, **params) -> List[TextContent
 async def _handle_calendar_absences(client: KimaiClient, filters: Dict) -> List[TextContent]:
     """Handle calendar absences request."""
     # Build filter object - API doesn't support year/month, only begin/end dates
+    # Convert date formats to ISO with time like in absence manager
     filter_params = {}
     if filters.get("user"):
         filter_params["user"] = str(filters["user"])
     if filters.get("begin"):
-        filter_params["begin"] = filters["begin"]
+        from datetime import datetime
+        try:
+            parsed_date = datetime.strptime(filters["begin"], "%Y-%m-%d")
+            filter_params["begin"] = parsed_date.strftime("%Y-%m-%dT00:00:00")
+        except ValueError:
+            filter_params["begin"] = filters["begin"]  # Use as-is if not in expected format
     if filters.get("end"):
-        filter_params["end"] = filters["end"]
+        from datetime import datetime
+        try:
+            parsed_date = datetime.strptime(filters["end"], "%Y-%m-%d")
+            filter_params["end"] = parsed_date.strftime("%Y-%m-%dT23:59:59")
+        except ValueError:
+            filter_params["end"] = filters["end"]  # Use as-is if not in expected format
     
     from ..models import AbsenceFilter
     absence_filter = AbsenceFilter(**filter_params) if filter_params else None
