@@ -173,11 +173,17 @@ class KimaiClient:
                 not large_size
             )
             
-            # Convert datetime to string format
+            # Convert datetime to string format or use string as-is
             if filters.begin:
-                params['begin'] = filters.begin.isoformat()
+                if hasattr(filters.begin, 'isoformat'):
+                    params['begin'] = filters.begin.isoformat()
+                else:
+                    params['begin'] = filters.begin
             if filters.end:
-                params['end'] = filters.end.isoformat()
+                if hasattr(filters.end, 'isoformat'):
+                    params['end'] = filters.end.isoformat()
+                else:
+                    params['end'] = filters.end
             if filters.modified_after:
                 params['modified_after'] = filters.modified_after.isoformat()
             
