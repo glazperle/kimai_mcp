@@ -55,7 +55,7 @@ def entity_tool() -> Tool:
                 "data": {
                     "type": "object",
                     "description": "Data for create/update actions (entity-specific fields)",
-                    "additionalProperties": true
+                    "additionalProperties": True
                 }
             }
         }
