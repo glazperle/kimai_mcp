@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import TimesheetEditForm, TimesheetFilter, MetaFieldForm
+from .timesheet_analytics import TimesheetAnalytics
 
 
 def timesheet_tool() -> Tool:
@@ -50,7 +51,9 @@ def timesheet_tool() -> Tool:
                         "page": {"type": "integer"},
                         "size": {"type": "integer"},
                         "term": {"type": "string"},
-                        "include_user_list": {"type": "boolean", "default": False}
+                        "include_user_list": {"type": "boolean", "default": False},
+                        "calculate_stats": {"type": "boolean", "default": False, "description": "Calculate statistics from the results"},
+                        "stats_format": {"type": "string", "enum": ["summary", "detailed", "json"], "default": "summary"}
                     }
                 },
                 "data": {
@@ -215,8 +218,24 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         term=filters.get("term")
     )
     
-    # Fetch timesheets
+    # Fetch timesheets - with pagination if needed
     timesheets = await client.get_timesheets(timesheet_filter)
+    
+    # Auto-fetch all pages if calculate_stats is enabled
+    if filters.get("calculate_stats") and len(timesheets) == timesheet_filter.size:
+        # Might have more pages, fetch all
+        all_timesheets = list(timesheets)
+        page = 2
+        while True:
+            timesheet_filter.page = page
+            batch = await client.get_timesheets(timesheet_filter)
+            if not batch:
+                break
+            all_timesheets.extend(batch)
+            if len(batch) < timesheet_filter.size:
+                break
+            page += 1
+        timesheets = all_timesheets
     
     # Build response
     if user_scope == "all":
@@ -235,6 +254,30 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         if len(users) > 10:
             result += f"  ... and {len(users) - 10} more users\\n"
         result += "\\n"
+    
+    # Calculate statistics if requested
+    if filters.get("calculate_stats"):
+        stats = TimesheetAnalytics.calculate_statistics(timesheets)
+        
+        # Load project names for better display
+        try:
+            projects = await client.get_projects()
+            project_map = {p.id: p.name for p in projects}
+            stats["project_names"] = project_map
+        except:
+            project_map = {}
+        
+        if filters.get("stats_format") == "json":
+            result += "\\n## Statistics (JSON):\\n"
+            result += json.dumps(stats, indent=2)
+            result += "\\n\\n"
+        else:
+            result += "\\n" + TimesheetAnalytics.format_statistics_report(stats, project_map)
+            result += "\\n\\n"
+        
+        # If only stats requested, return early
+        if filters.get("stats_format") == "summary":
+            return [TextContent(type="text", text=result)]
     
     # List timesheets
     for ts in timesheets:
