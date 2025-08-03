@@ -27,7 +27,7 @@ def entity_tool() -> Tool:
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["list", "get", "create", "update", "delete"],
+                    "enum": ["list", "get", "create", "update", "delete", "unlock_month"],
                     "description": "The action to perform"
                 },
                 "id": {
@@ -57,6 +57,11 @@ def entity_tool() -> Tool:
                     "type": "object",
                     "description": "Data for create/update actions (entity-specific fields)",
                     "additionalProperties": True
+                },
+                "month": {
+                    "type": "string",
+                    "description": "Month to unlock (YYYY-MM-DD format, for unlock_month action on user entities)",
+                    "pattern": "[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])"
                 }
             }
         }
@@ -112,10 +117,19 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
             if not entity_id:
                 return [TextContent(type="text", text="Error: 'id' parameter is required for delete action")]
             return await handler.delete(entity_id)
+        elif action == "unlock_month":
+            if entity_type != "user":
+                return [TextContent(type="text", text="Error: 'unlock_month' action is only available for user entities")]
+            if not entity_id:
+                return [TextContent(type="text", text="Error: 'id' parameter is required for unlock_month action")]
+            month = params.get("month")
+            if not month:
+                return [TextContent(type="text", text="Error: 'month' parameter is required for unlock_month action")]
+            return await handler.unlock_month(entity_id, month)
         else:
             return [TextContent(
                 type="text",
-                text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete"
+                text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, unlock_month"
             )]
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {str(e)}")]
@@ -390,6 +404,14 @@ class UserEntityHandler(BaseEntityHandler):
         return [TextContent(
             type="text",
             text="Error: Users cannot be deleted. Use update with enabled=false to deactivate."
+        )]
+    
+    async def unlock_month(self, user_id: int, month: str) -> List[TextContent]:
+        """Unlock working time months for a user."""
+        await self.client.unlock_work_contract_month(user_id, month)
+        return [TextContent(
+            type="text",
+            text=f"Unlocked working time months from {month} onwards for user ID {user_id}"
         )]
 
 

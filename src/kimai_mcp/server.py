@@ -138,12 +138,15 @@ class KimaiMCPServer:
                 )]
                 
         except KimaiAPIError as e:
+            logger.error(f"Kimai API Error in tool {name}: {e.message} (Status: {e.status_code})")
+            logger.error(f"Arguments were: {arguments}")
             return [TextContent(
                 type="text",
                 text=f"Kimai API Error: {e.message} (Status: {e.status_code})"
             )]
         except Exception as e:
             logger.error(f"Error calling tool {name}: {str(e)}", exc_info=True)
+            logger.error(f"Arguments were: {arguments}")
             return [TextContent(
                 type="text",
                 text=f"Error: {str(e)}"

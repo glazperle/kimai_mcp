@@ -131,7 +131,7 @@ async def handle_absence(client: KimaiClient, **params) -> List[TextContent]:
 
 async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextContent]:
     """Handle absence list action."""
-    # Handle user scope
+    # Handle user scope - API only supports single user or no user filter
     user_scope = filters.get("user_scope", "self")
     user_filter = None
     
@@ -142,24 +142,27 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
         user_filter = filters.get("user")
         if not user_filter:
             return [TextContent(type="text", text="Error: 'user' parameter required when user_scope is 'specific'")]
-    # user_scope == "all" means no user filter
+    elif user_scope == "all":
+        # API doesn't support "all users" in one call - leave user_filter as None
+        user_filter = None
     
-    # Build absence filter - convert string dates to datetime objects
-    begin_date = None
-    end_date = None
+    # Validate date format (should be YYYY-MM-DD)
+    begin_date = filters.get("begin")
+    end_date = filters.get("end")
     
-    if filters.get("begin"):
+    if begin_date:
         try:
-            begin_date = datetime.strptime(filters["begin"], "%Y-%m-%d")
+            datetime.strptime(begin_date, "%Y-%m-%d")
         except ValueError:
-            return [TextContent(type="text", text=f"Error: Invalid begin date format. Expected YYYY-MM-DD, got '{filters['begin']}'")]
+            return [TextContent(type="text", text=f"Error: Invalid begin date format. Expected YYYY-MM-DD, got '{begin_date}'")]
     
-    if filters.get("end"):
+    if end_date:
         try:
-            end_date = datetime.strptime(filters["end"], "%Y-%m-%d")
+            datetime.strptime(end_date, "%Y-%m-%d")
         except ValueError:
-            return [TextContent(type="text", text=f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{filters['end']}'")]
+            return [TextContent(type="text", text=f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{end_date}'")]
     
+    # Build absence filter - pass strings directly
     absence_filter = AbsenceFilter(
         user=user_filter,
         begin=begin_date,

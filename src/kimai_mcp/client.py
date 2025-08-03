@@ -549,12 +549,6 @@ class KimaiClient:
         params = {}
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
-            
-            # Convert datetime to HTML5 date format as per API spec
-            if filters.begin:
-                params['begin'] = filters.begin.strftime('%Y-%m-%d')
-            if filters.end:
-                params['end'] = filters.end.strftime('%Y-%m-%d')
         
         data = await self._request("GET", "/absences", params=params)
         return [Absence(**item) for item in data]
@@ -611,18 +605,23 @@ class KimaiClient:
         params = {}
         if filters:
             params.update(filters.model_dump(exclude_none=True, by_alias=True))
-            
-            # Convert datetime to HTML5 date format as per API spec
-            if filters.begin:
-                params['begin'] = filters.begin.strftime('%Y-%m-%d')
-            if filters.end:
-                params['end'] = filters.end.strftime('%Y-%m-%d')
         
         if language:
             params["language"] = language
         
         data = await self._request("GET", "/absences/calendar", params=params)
         return [CalendarEvent(**item) for item in data]
+    
+    # Working Contract endpoints
+    
+    async def unlock_work_contract_month(self, user_id: int, month: str) -> None:
+        """Unlock working time months for a user.
+        
+        Args:
+            user_id: User ID whose months to unlock
+            month: Month in YYYY-MM-DD format (all months from this one to end of year will be unlocked)
+        """
+        await self._request("DELETE", f"/work-contract/approval/{user_id}/{month}")
     
     # Public Holiday endpoints
     

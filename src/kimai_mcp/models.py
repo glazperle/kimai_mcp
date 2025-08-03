@@ -101,14 +101,14 @@ class TimesheetFilter(BaseModel):
     tags: Optional[List[str]] = None
     order_by: Optional[str] = Field(None, alias="orderBy")  # id, begin, end, rate
     order: Optional[str] = None  # ASC, DESC
-    begin: Optional[datetime] = None
-    end: Optional[datetime] = None
+    begin: Optional[str] = None  # HTML5 date format (YYYY-MM-DD)
+    end: Optional[str] = None    # HTML5 date format (YYYY-MM-DD)
     exported: Optional[int] = None  # 0=not exported, 1=exported
     active: Optional[int] = None  # 0=stopped, 1=active
     billable: Optional[int] = None  # 0=non-billable, 1=billable
     full: Optional[str] = None  # 0|1|false|true
     term: Optional[str] = None
-    modified_after: Optional[datetime] = Field(None, alias="modified_after")
+    modified_after: Optional[str] = Field(None, alias="modified_after")  # HTML5 date format
 
 
 class ProjectFilter(BaseModel):
@@ -116,8 +116,8 @@ class ProjectFilter(BaseModel):
     customer: Optional[int] = None
     customers: Optional[List[int]] = None
     visible: Optional[int] = 1  # 1=visible, 2=hidden, 3=both
-    start: Optional[datetime] = None
-    end: Optional[datetime] = None
+    start: Optional[str] = None  # HTML5 date format (YYYY-MM-DD)
+    end: Optional[str] = None    # HTML5 date format (YYYY-MM-DD)
     ignore_dates: Optional[str] = Field(None, alias="ignoreDates")
     global_activities: Optional[str] = Field(None, alias="globalActivities")  # 0|1
     order: Optional[str] = None  # ASC, DESC
@@ -184,8 +184,8 @@ class Absence(BaseModel):
 class AbsenceFilter(BaseModel):
     """Filters for absence queries."""
     user: Optional[str] = None
-    begin: Optional[datetime] = None
-    end: Optional[datetime] = None
+    begin: Optional[str] = None  # HTML5 date format (YYYY-MM-DD)
+    end: Optional[str] = None    # HTML5 date format (YYYY-MM-DD)
     status: Optional[str] = None  # approved, open, all
 
 
