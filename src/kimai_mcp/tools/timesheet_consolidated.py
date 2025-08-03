@@ -53,7 +53,8 @@ def timesheet_tool() -> Tool:
                         "term": {"type": "string"},
                         "include_user_list": {"type": "boolean", "default": False},
                         "calculate_stats": {"type": "boolean", "default": False, "description": "Calculate statistics from the results"},
-                        "stats_format": {"type": "string", "enum": ["summary", "detailed", "json"], "default": "summary"}
+                        "stats_format": {"type": "string", "enum": ["summary", "detailed", "json"], "default": "summary"},
+                        "breakdown_by_year": {"type": "boolean", "default": False, "description": "Break down statistics by year (auto-enabled if time span > 1 year)"}
                     }
                 },
                 "data": {
@@ -257,7 +258,23 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
     
     # Calculate statistics if requested
     if filters.get("calculate_stats"):
-        stats = TimesheetAnalytics.calculate_statistics(timesheets)
+        # Auto-enable year breakdown if time span > 1 year
+        breakdown_by_year = filters.get("breakdown_by_year", False)
+        if not breakdown_by_year and filters.get("begin") and filters.get("end"):
+            try:
+                from datetime import datetime
+                begin_date = datetime.fromisoformat(filters["begin"].replace('Z', '+00:00'))
+                end_date = datetime.fromisoformat(filters["end"].replace('Z', '+00:00'))
+                time_span = end_date - begin_date
+                if time_span.days > 365:  # More than 1 year
+                    breakdown_by_year = True
+            except:
+                pass
+        
+        stats = TimesheetAnalytics.calculate_statistics(
+            timesheets, 
+            breakdown_by_year=breakdown_by_year
+        )
         
         # Load project names for better display
         try:
