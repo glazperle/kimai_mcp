@@ -28,14 +28,6 @@ def calendar_tool() -> Tool:
                             "type": "integer",
                             "description": "User ID filter (for absences)"
                         },
-                        "year": {
-                            "type": "integer",
-                            "description": "Year filter"
-                        },
-                        "month": {
-                            "type": "integer",
-                            "description": "Month filter (1-12)"
-                        },
                         "begin": {
                             "type": "string",
                             "format": "date",
@@ -205,31 +197,37 @@ async def handle_user_current(client: KimaiClient, **params) -> List[TextContent
 
 async def _handle_calendar_absences(client: KimaiClient, filters: Dict) -> List[TextContent]:
     """Handle calendar absences request."""
-    absences = await client.get_calendar_absences(
-        user=filters.get("user"),
-        year=filters.get("year"),
-        month=filters.get("month"),
-        begin=filters.get("begin"),
-        end=filters.get("end")
-    )
+    # Build filter object - API doesn't support year/month, only begin/end dates
+    filter_params = {}
+    if filters.get("user"):
+        filter_params["user"] = str(filters["user"])
+    if filters.get("begin"):
+        filter_params["begin"] = filters["begin"]
+    if filters.get("end"):
+        filter_params["end"] = filters["end"]
+    
+    from ..models import AbsenceFilter
+    absence_filter = AbsenceFilter(**filter_params) if filter_params else None
+    
+    absences = await client.get_absences_calendar(absence_filter)
     
     if not absences:
         result = "No absences found for the specified calendar period"
     else:
-        result = f"Found {len(absences)} absence(s) in calendar:\\n\\n"
+        result = f"Found {len(absences)} absence event(s) in calendar:\\n\\n"
         
-        for absence in absences:
-            result += f"Date: {absence.date} - {absence.type}\\n"
-            result += f"  User: {absence.user.username if absence.user else 'Unknown'}\\n"
+        for event in absences:
+            result += f"Title: {event.title}\\n"
+            result += f"  Start: {event.start}\\n"
             
-            if hasattr(absence, "endDate") and absence.endDate:
-                result += f"  End Date: {absence.endDate}\\n"
+            if event.end:
+                result += f"  End: {event.end}\\n"
             
-            if hasattr(absence, "halfDay") and absence.halfDay:
-                result += f"  Half Day: Yes\\n"
+            if event.all_day:
+                result += f"  All Day: Yes\\n"
             
-            if absence.comment:
-                result += f"  Comment: {absence.comment}\\n"
+            if event.color:
+                result += f"  Color: {event.color}\\n"
             
             result += "\\n"
     
@@ -238,24 +236,35 @@ async def _handle_calendar_absences(client: KimaiClient, filters: Dict) -> List[
 
 async def _handle_calendar_holidays(client: KimaiClient, filters: Dict) -> List[TextContent]:
     """Handle calendar holidays request."""
-    holidays = await client.get_calendar_holidays(
-        year=filters.get("year"),
-        month=filters.get("month")
-    )
+    # Build filter object - API doesn't support year/month, only begin/end dates
+    filter_params = {}
+    if filters.get("begin"):
+        filter_params["begin"] = filters["begin"]
+    if filters.get("end"):
+        filter_params["end"] = filters["end"]
+    
+    from ..models import PublicHolidayFilter
+    holiday_filter = PublicHolidayFilter(**filter_params) if filter_params else None
+    
+    holidays = await client.get_public_holidays_calendar(holiday_filter)
     
     if not holidays:
         result = "No holidays found for the specified calendar period"
     else:
-        result = f"Found {len(holidays)} holiday(s) in calendar:\\n\\n"
+        result = f"Found {len(holidays)} holiday event(s) in calendar:\\n\\n"
         
-        for holiday in holidays:
-            result += f"Date: {holiday.date} - {holiday.name}\\n"
+        for event in holidays:
+            result += f"Title: {event.title}\\n"
+            result += f"  Start: {event.start}\\n"
             
-            if hasattr(holiday, "type") and holiday.type:
-                result += f"  Type: {holiday.type}\\n"
+            if event.end:
+                result += f"  End: {event.end}\\n"
             
-            if hasattr(holiday, "country") and holiday.country:
-                result += f"  Country: {holiday.country}\\n"
+            if event.all_day:
+                result += f"  All Day: Yes\\n"
+            
+            if event.color:
+                result += f"  Color: {event.color}\\n"
             
             result += "\\n"
     

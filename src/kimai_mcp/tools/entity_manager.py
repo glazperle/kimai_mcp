@@ -372,7 +372,7 @@ class UserEntityHandler(BaseEntityHandler):
         return [TextContent(type="text", text=result)]
     
     async def get(self, id: int) -> List[TextContent]:
-        user = await self.client.get_user(id)
+        user = await self.client.get_user_extended(id)
         
         result = f"User: {user.username} (ID: {user.id})\\n"
         result += f"Name: {user.alias or 'Not set'}\\n"
@@ -472,7 +472,12 @@ class TagEntityHandler(BaseEntityHandler):
     """Handler for tag operations."""
     
     async def list(self, filters: Dict) -> List[TextContent]:
-        tags = await self.client.get_tags(name=filters.get("name"))
+        # Get all tags and filter locally since API doesn't support name filter
+        all_tags = await self.client.get_tags_full()
+        if filters.get("name"):
+            tags = [tag for tag in all_tags if filters["name"].lower() in tag.name.lower()]
+        else:
+            tags = all_tags
         
         result = f"Found {len(tags)} tags\\n\\n"
         for tag in tags:
@@ -575,7 +580,7 @@ class HolidayEntityHandler(BaseEntityHandler):
     """Handler for holiday operations."""
     
     async def list(self, filters: Dict) -> List[TextContent]:
-        holidays = await self.client.get_holidays(
+        holidays = await self.client.get_public_holidays(
             year=filters.get("year"),
             month=filters.get("month")
         )
@@ -609,5 +614,5 @@ class HolidayEntityHandler(BaseEntityHandler):
         )]
     
     async def delete(self, id: int) -> List[TextContent]:
-        await self.client.delete_holiday(id)
+        await self.client.delete_public_holiday(id)
         return [TextContent(type="text", text=f"Deleted holiday ID {id}")]

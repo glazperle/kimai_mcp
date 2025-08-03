@@ -35,11 +35,6 @@ def team_access_tool() -> Tool:
                 "target_id": {
                     "type": "integer",
                     "description": "Target entity ID (required for grant/revoke actions)"
-                },
-                "teamlead": {
-                    "type": "boolean",
-                    "description": "Whether the user is a team lead (for add_member action)",
-                    "default": False
                 }
             }
         }
@@ -53,14 +48,13 @@ async def handle_team_access(client: KimaiClient, **params) -> List[TextContent]
     target = params.get("target")
     user_id = params.get("user_id")
     target_id = params.get("target_id")
-    teamlead = params.get("teamlead", False)
     
     if not team_id:
         return [TextContent(type="text", text="Error: 'team_id' parameter is required")]
     
     try:
         if action == "add_member":
-            return await _handle_add_member(client, team_id, user_id, teamlead)
+            return await _handle_add_member(client, team_id, user_id)
         elif action == "remove_member":
             return await _handle_remove_member(client, team_id, user_id)
         elif action == "grant":
@@ -76,17 +70,16 @@ async def handle_team_access(client: KimaiClient, **params) -> List[TextContent]
         return [TextContent(type="text", text=f"Error: {str(e)}")]
 
 
-async def _handle_add_member(client: KimaiClient, team_id: int, user_id: Optional[int], teamlead: bool) -> List[TextContent]:
+async def _handle_add_member(client: KimaiClient, team_id: int, user_id: Optional[int]) -> List[TextContent]:
     """Handle adding a member to a team."""
     if not user_id:
         return [TextContent(type="text", text="Error: 'user_id' parameter is required for add_member action")]
     
-    await client.add_team_member(team_id, user_id, teamlead)
+    await client.add_team_member(team_id, user_id)
     
-    role = "team lead" if teamlead else "member"
     return [TextContent(
         type="text",
-        text=f"Added user ID {user_id} as {role} to team ID {team_id}"
+        text=f"Added user ID {user_id} as member to team ID {team_id}"
     )]
 
 

@@ -1,7 +1,7 @@
 """Consolidated Timesheet tools for all timesheet operations."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
@@ -300,16 +300,16 @@ async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[Text
     if not data.get("project") or not data.get("activity"):
         return [TextContent(type="text", text="Error: 'project' and 'activity' are required for create action")]
     
-    # Parse tags if provided
-    tags = data.get("tags", "").split(",") if data.get("tags") else []
+    # Keep tags as string - model expects comma-separated string
+    tags_str = data.get("tags", "")
     
     form = TimesheetEditForm(
         project=data["project"],
         activity=data["activity"],
-        begin=data.get("begin", datetime.now().isoformat()),
+        begin=data.get("begin", datetime.now(timezone.utc).isoformat()),
         end=data.get("end"),
         description=data.get("description"),
-        tags=tags,
+        tags=tags_str,
         user=data.get("user"),
         billable=data.get("billable", True),
         fixedRate=data.get("fixedRate"),
@@ -334,7 +334,8 @@ async def _handle_timesheet_update(client: KimaiClient, id: Optional[int], data:
     
     # Parse tags if provided
     if "tags" in data:
-        data["tags"] = data["tags"].split(",") if data["tags"] else []
+        # Keep tags as string for model compatibility
+        # data["tags"] is already a string from input
     
     form = TimesheetEditForm(**data)
     ts = await client.update_timesheet(id, form)
@@ -386,12 +387,16 @@ async def _handle_timesheet_meta_update(client: KimaiClient, id: Optional[int], 
     if not meta:
         return [TextContent(type="text", text="Error: 'meta' parameter is required for meta_update action")]
     
-    meta_fields = [MetaFieldForm(**field) for field in meta]
-    await client.update_timesheet_meta(id, meta_fields)
+    # API accepts one meta field per request - iterate through each field
+    updated_count = 0
+    for field_data in meta:
+        meta_field = MetaFieldForm(**field_data)
+        await client.update_timesheet_meta(id, meta_field)
+        updated_count += 1
     
     return [TextContent(
         type="text",
-        text=f"Updated {len(meta_fields)} meta field(s) for timesheet ID {id}"
+        text=f"Updated {updated_count} meta field(s) for timesheet ID {id}"
     )]
 
 
@@ -475,14 +480,15 @@ async def _handle_timer_start(client: KimaiClient, data: Dict) -> List[TextConte
     if not data.get("project") or not data.get("activity"):
         return [TextContent(type="text", text="Error: 'project' and 'activity' are required in data for start action")]
     
-    tags = data.get("tags", "").split(",") if data.get("tags") else []
+    # Keep tags as string - model expects comma-separated string
+    tags_str = data.get("tags", "")
     
     form = TimesheetEditForm(
         project=data["project"],
         activity=data["activity"],
-        begin=datetime.now().isoformat(),
+        begin=datetime.now(timezone.utc).isoformat(),
         description=data.get("description"),
-        tags=tags
+        tags=tags_str
     )
     
     ts = await client.create_timesheet(form)

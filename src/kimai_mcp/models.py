@@ -1,7 +1,7 @@
 """Data models for Kimai API entities."""
 
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -167,18 +167,21 @@ class AbsenceForm(BaseModel):
     user: int
     date: str  # Date format YYYY-MM-DD
     end: Optional[str] = None  # End date for multi-day absences
-    type: str  # holiday, time_off, sickness, etc.
+    type: Literal["holiday", "time_off", "sickness", "sickness_child", "other", "parental", "unpaid_vacation"] = "other"  # Absence types from API
 
 
 class Absence(BaseModel):
-    """Absence model."""
+    """Absence model matching API Absence2 schema."""
     id: Optional[int] = None
     user: User
     date: datetime
-    duration: Optional[int] = None
+    duration: Optional[int] = None  # Duration in seconds according to API
     type: str = "other"
     status: str = "new"
     half_day: bool = Field(False, alias="halfDay")
+    # Optional fields that might be present in responses
+    comment: Optional[str] = None
+    end_date: Optional[datetime] = Field(None, alias="endDate")
 
 
 class AbsenceFilter(BaseModel):
@@ -488,3 +491,14 @@ class ActivityEditForm(BaseModel):
     time_budget: Optional[int] = Field(None, alias="timeBudget")
     color: Optional[str] = None
     number: Optional[str] = None
+
+
+# Calendar models
+class CalendarEvent(BaseModel):
+    """Calendar event model for calendar integration."""
+    title: str
+    color: Optional[str] = None
+    text_color: Optional[str] = Field(None, alias="textColor")
+    all_day: bool = Field(False, alias="allDay")
+    start: datetime
+    end: Optional[datetime] = None

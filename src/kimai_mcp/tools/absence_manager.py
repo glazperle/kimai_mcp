@@ -11,19 +11,19 @@ def absence_tool() -> Tool:
     """Define the consolidated absence management tool."""
     return Tool(
         name="absence",
-        description="Universal absence management tool for complete absence workflow. Replaces 7 individual absence tools with one flexible interface.",
+        description="Universal absence management tool for complete absence workflow. Supports list, create, delete, approve, reject, and request approval actions. Replaces 7 individual absence tools with one flexible interface.",
         inputSchema={
             "type": "object",
             "required": ["action"],
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "types", "create", "delete", "approve", "reject"],
+                    "enum": ["list", "types", "create", "delete", "approve", "reject", "request"],
                     "description": "The action to perform"
                 },
                 "id": {
                     "type": "integer",
-                    "description": "Absence ID (required for delete, approve, reject actions)"
+                    "description": "Absence ID (required for delete, approve, reject, request actions)"
                 },
                 "filters": {
                     "type": "object",
@@ -72,7 +72,9 @@ def absence_tool() -> Tool:
                         },
                         "type": {
                             "type": "string",
-                            "description": "Type of absence (holiday, time_off, sickness, etc.)"
+                            "enum": ["holiday", "time_off", "sickness", "sickness_child", "other", "parental", "unpaid_vacation"],
+                            "description": "Type of absence",
+                            "default": "other"
                         },
                         "user": {
                             "type": "integer",
@@ -120,10 +122,12 @@ async def handle_absence(client: KimaiClient, **params) -> List[TextContent]:
             return await _handle_absence_approve(client, params.get("id"))
         elif action == "reject":
             return await _handle_absence_reject(client, params.get("id"))
+        elif action == "request":
+            return await _handle_absence_request(client, params.get("id"))
         else:
             return [TextContent(
                 type="text",
-                text=f"Error: Unknown action '{action}'. Valid actions: list, types, create, delete, approve, reject"
+                text=f"Error: Unknown action '{action}'. Valid actions: list, types, create, delete, approve, reject, request"
             )]
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {str(e)}")]
@@ -146,19 +150,23 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
         # API doesn't support "all users" in one call - leave user_filter as None
         user_filter = None
     
-    # Validate date format (should be YYYY-MM-DD)
+    # Process date formats - convert YYYY-MM-DD to ISO 8601 with time
     begin_date = filters.get("begin")
     end_date = filters.get("end")
     
     if begin_date:
         try:
-            datetime.strptime(begin_date, "%Y-%m-%d")
+            # Parse the date and add time component
+            parsed_date = datetime.strptime(begin_date, "%Y-%m-%d")
+            begin_date = parsed_date.strftime("%Y-%m-%dT00:00:00")
         except ValueError:
             return [TextContent(type="text", text=f"Error: Invalid begin date format. Expected YYYY-MM-DD, got '{begin_date}'")]
     
     if end_date:
         try:
-            datetime.strptime(end_date, "%Y-%m-%d")
+            # Parse the date and add time component (end of day)
+            parsed_date = datetime.strptime(end_date, "%Y-%m-%d")
+            end_date = parsed_date.strftime("%Y-%m-%dT23:59:59")
         except ValueError:
             return [TextContent(type="text", text=f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{end_date}'")]
     
@@ -198,7 +206,7 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
         if hasattr(absence, "halfDay") and absence.halfDay:
             result += f"  Half Day: Yes\\n"
         
-        if absence.comment:
+        if hasattr(absence, "comment") and absence.comment:
             result += f"  Comment: {absence.comment}\\n"
         
         if hasattr(absence, "duration") and absence.duration:
@@ -276,7 +284,7 @@ async def _handle_absence_approve(client: KimaiClient, id: Optional[int]) -> Lis
     if not id:
         return [TextContent(type="text", text="Error: 'id' parameter is required for approve action")]
     
-    await client.approve_absence(id)
+    await client.confirm_absence_approval(id)
     return [TextContent(type="text", text=f"Approved absence ID {id}")]
 
 
@@ -285,5 +293,14 @@ async def _handle_absence_reject(client: KimaiClient, id: Optional[int]) -> List
     if not id:
         return [TextContent(type="text", text="Error: 'id' parameter is required for reject action")]
     
-    await client.reject_absence(id)
+    await client.reject_absence_approval(id)
     return [TextContent(type="text", text=f"Rejected absence ID {id}")]
+
+
+async def _handle_absence_request(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+    """Handle absence request approval action."""
+    if not id:
+        return [TextContent(type="text", text="Error: 'id' parameter is required for request action")]
+    
+    await client.request_absence_approval(id)
+    return [TextContent(type="text", text=f"Requested approval for absence ID {id}")]

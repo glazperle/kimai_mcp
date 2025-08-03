@@ -103,8 +103,8 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
         # 3. Get timesheets for this project with user filtering
         filters = TimesheetFilter(
             project=project.id,
-            begin=begin,
-            end=end,
+            begin=begin.isoformat(),
+            end=end.isoformat(),
             user=user_filter
         )
         
