@@ -4,7 +4,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-A comprehensive Model Context Protocol (MCP) server for integrating with the Kimai time-tracking API. This server allows AI assistants like Claude to interact with Kimai instances to manage time tracking, projects, activities, customers, users, teams, absences, and more.
+A comprehensive Model Context Protocol (MCP) server for integrating with the Kimai time-tracking API. This server provides **10 powerful consolidated tools** (87% reduction from 73 individual tools) that allow AI assistants like Claude to efficiently interact with Kimai instances to manage time tracking, projects, activities, customers, users, teams, absences, and more.
 
 ## 🚀 Quick Start
 
@@ -16,7 +16,27 @@ pip install -e .
 python -m kimai_mcp --kimai-url=https://your-kimai.com --kimai-token=your-token
 ```
 
-## Features
+## ⚡ Consolidated Architecture
+
+This server features a **consolidated tool architecture** that reduces complexity while maintaining full functionality:
+
+- **87% Tool Reduction**: From 73 individual tools to 10 powerful consolidated tools
+- **Action-Based Interface**: Consistent parameter patterns across all tools
+- **Better Discoverability**: All related operations grouped in logical tools
+- **Reduced Maintenance**: Less code duplication and easier updates
+
+### 🛠️ Consolidated Tools
+
+1. **Entity Tool** - Universal CRUD operations for projects, activities, customers, users, teams, tags, invoices, holidays
+2. **Timesheet Tool** - Complete timesheet management (list, create, update, delete, export)
+3. **Timer Tool** - Active timer operations (start, stop, restart, view active/recent)
+4. **Rate Tool** - Rate management across all entity types
+5. **Team Access Tool** - Team member and permission management
+6. **Absence Tool** - Complete absence workflow (create, approve, reject, list)
+7. **Calendar Tool** - Unified calendar data access
+8. **Meta Tool** - Custom field management across entities
+9. **User Current Tool** - Current user information
+10. **Project Analysis Tool** - Advanced project analytics
 
 ### Complete Kimai Integration
 - **Timesheet Management** - Create, update, delete, start/stop timers, view active timers
