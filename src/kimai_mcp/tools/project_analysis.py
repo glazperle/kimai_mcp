@@ -197,17 +197,8 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
         result_parts = []
         
         # Header
-        # Add scope information to header
-        scope_info = {
-            'all': "All users",
-            'self': "Current user only", 
-            'specific': f"User ID {arguments.get('user', 'unknown')}",
-            'team': f"Team ID {arguments.get('team', 'unknown')} members"
-        }.get(user_scope, "All users")
-        
         result_parts.append(f"""# 📊 Project Team Analysis: {project.name}
 
-**Analysis Scope:** {scope_info}
 **Period:** {begin.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}
 **Total Duration:** {total_project_duration // 3600}h {(total_project_duration % 3600) // 60}m
 **Team Members:** {len(unique_users)}

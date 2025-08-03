@@ -1,4 +1,11 @@
-"""Absence-related MCP tools."""
+"""Absence management tools for Kimai MCP.
+
+Provides comprehensive absence tracking capabilities including:
+- Individual user absence queries
+- Cross-user absence analysis with statistics
+- Flexible date and status filtering
+- Calendar integration support
+"""
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -12,21 +19,21 @@ from ..models import AbsenceForm, AbsenceFilter
 # Tool definitions
 
 def list_absences_tool() -> Tool:
-    """Define the list absences tool."""
+    """Define the absence listing tool with comprehensive analysis support."""
     return Tool(
         name="absence_list",
-        description="List absences with smart user selection. Supports 'all' users for comprehensive analysis or specific user IDs.",
+        description="List absences from specific user or all users with comprehensive analysis. Automatically queries all users individually when needed.",
         inputSchema={
             "type": "object",
             "properties": {
-                "user_scope": {
-                    "type": "string", 
-                    "enum": ["self", "all", "specific"],
-                    "description": "User scope: 'self' (current user), 'all' (all users), 'specific' (particular user ID)"
+                "all_users": {
+                    "type": "boolean", 
+                    "description": "Set to true to analyze absences from all users with detailed statistics",
+                    "default": False
                 },
-                "user": {"type": "string", "description": "Specific user ID (required if user_scope is 'specific')"},
-                "begin": {"type": "string", "format": "date", "description": "Only absences after this date (YYYY-MM-DD)"},
-                "end": {"type": "string", "format": "date", "description": "Only absences before this date (YYYY-MM-DD)"},
+                "user": {"type": "string", "description": "Specific user ID to query (ignored if all_users is true)"},
+                "begin": {"type": "string", "format": "date", "description": "Start date filter (YYYY-MM-DD)"},
+                "end": {"type": "string", "format": "date", "description": "End date filter (YYYY-MM-DD)"},
                 "status": {"type": "string", "enum": ["approved", "open", "all"], "description": "Status filter"}
             }
         }
@@ -134,48 +141,136 @@ def reject_absence_tool() -> Tool:
 # Tool handlers
 
 async def handle_list_absences(client: KimaiClient, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
-    """Handle listing absences."""
-    filters = AbsenceFilter()
+    """Handle absence listing requests.
+    
+    Supports both single-user queries and comprehensive multi-user analysis.
+    When analyzing all users, queries each user individually as required by the API.
+    """
+    import asyncio
+    from collections import defaultdict
+    
+    # Parse arguments
+    analyze_all_users = arguments.get('all_users', False) if arguments else False
+    user_id = arguments.get('user') if arguments else None
+    begin_date = None
+    end_date = None
+    status_filter = None
     
     if arguments:
-        # Handle smart user selection similar to timesheet tools
-        user_scope = arguments.get('user_scope')
-        if user_scope == 'all':
-            # Don't set user filter to get all users' absences
-            pass
-        elif user_scope == 'specific':
-            if 'user' not in arguments:
-                return [TextContent(
-                    type="text", 
-                    text="Error: When user_scope is 'specific', you must provide a 'user' parameter."
-                )]
-            filters.user = arguments['user']
-        elif 'user' in arguments:
-            # Legacy support: direct user parameter
-            filters.user = arguments['user']
         if 'begin' in arguments:
-            # Parse date and create datetime at start of day
+            # Parse date - client converts to HTML5 format automatically
             date_str = arguments['begin']
-            if 'T' not in date_str:  # Just date format
-                date_str += 'T00:00:00'
-            filters.begin = datetime.fromisoformat(date_str)
+            begin_date = datetime.strptime(date_str, '%Y-%m-%d')
         if 'end' in arguments:
-            # Parse date and create datetime at end of day
+            # Parse date - client converts to HTML5 format automatically
             date_str = arguments['end']
-            if 'T' not in date_str:  # Just date format
-                date_str += 'T23:59:59'
-            filters.end = datetime.fromisoformat(date_str)
+            end_date = datetime.strptime(date_str, '%Y-%m-%d')
         if 'status' in arguments:
-            filters.status = arguments['status']
+            status_filter = arguments['status']
     
-    absences = await client.get_absences(filters)
+    all_absences = []
     
-    if not absences:
-        return [TextContent(type="text", text="No absences found matching the criteria.")]
+    if analyze_all_users:
+        # Query all users individually (API requirement for cross-user data)
+        try:
+            users = await client.get_users()
+            user_absence_tasks = []
+            
+            for user in users:
+                filters = AbsenceFilter()
+                filters.user = str(user.id)
+                if begin_date:
+                    filters.begin = begin_date
+                if end_date:
+                    filters.end = end_date
+                if status_filter:
+                    filters.status = status_filter
+                
+                # Create async task for each user
+                user_absence_tasks.append(client.get_absences(filters))
+            
+            # Execute all user queries in parallel
+            user_absence_results = await asyncio.gather(*user_absence_tasks, return_exceptions=True)
+            
+            # Collect all absences, handling any API errors gracefully
+            for i, result in enumerate(user_absence_results):
+                if isinstance(result, Exception):
+                    # Log but continue - some users might not have permission
+                    continue
+                elif result:  # Only add if there are absences
+                    all_absences.extend(result)
+            
+        except Exception as e:
+            return [TextContent(
+                type="text", 
+                text=f"❌ Error during comprehensive analysis: {str(e)}\n\n**Tip:** This might be a permission issue. Ensure you have 'contract_other_profile' permission to view all users' absences."
+            )]
     
-    # Format results
+    else:
+        # Standard single-user query
+        filters = AbsenceFilter()
+        if user_id:
+            filters.user = user_id
+        if begin_date:
+            filters.begin = begin_date
+        if end_date:
+            filters.end = end_date
+        if status_filter:
+            filters.status = status_filter
+        
+        all_absences = await client.get_absences(filters)
+    
+    if not all_absences:
+        scope_info = "all users" if analyze_all_users else f"user {user_id}" if user_id else "current user"
+        
+        # Provide helpful suggestions for troubleshooting
+        suggestions = []
+        if begin_date or end_date:
+            suggestions.append("Try without date filters to check if data exists in other periods")
+        if status_filter != 'all':
+            suggestions.append("Try with status: 'all' to include all absence statuses")
+        suggestions.append("Check if absences exist in the Kimai web interface")
+        
+        suggestion_text = "\n\n**Troubleshooting suggestions:**\n" + "\n".join([f"• {s}" for s in suggestions]) if suggestions else ""
+        
+        return [TextContent(type="text", text=f"No absences found for {scope_info} matching the criteria.{suggestion_text}")]
+    
+    # Sort by date for better analysis
+    all_absences.sort(key=lambda x: x.date, reverse=True)
+    
+    # Generate comprehensive summary if requested
+    if analyze_all_users:
+        user_stats = defaultdict(lambda: {'total': 0, 'by_type': defaultdict(int), 'by_status': defaultdict(int)})
+        
+        for abs_entry in all_absences:
+            user_key = f"{abs_entry.user.username} (ID: {abs_entry.user.id})"
+            user_stats[user_key]['total'] += 1
+            user_stats[user_key]['by_type'][abs_entry.type] += 1
+            user_stats[user_key]['by_status'][abs_entry.status] += 1
+        
+        # Build comprehensive summary
+        analysis_summary = [f"📊 **Comprehensive Absence Analysis** ({len(all_absences)} total absences from {len(user_stats)} users)\n"]
+        
+        # Sort users by total absences (most absent first)
+        sorted_users = sorted(user_stats.items(), key=lambda x: x[1]['total'], reverse=True)
+        
+        for user, stats in sorted_users:
+            analysis_summary.append(f"**{user}:** {stats['total']} absences")
+            
+            # Show breakdown by type
+            type_breakdown = []
+            for abs_type, count in stats['by_type'].items():
+                type_icon = {"holiday": "🏖️", "sickness": "🤒", "time_off": "🆓", "other": "📝"}.get(abs_type, "📋")
+                type_breakdown.append(f"{type_icon} {abs_type.replace('_', ' ')}: {count}")
+            
+            analysis_summary.append(f"  Types: {', '.join(type_breakdown)}")
+            analysis_summary.append("")
+        
+        analysis_summary.append("---\n")
+    
+    # Format detailed results
     results = []
-    for abs_entry in absences:
+    for abs_entry in all_absences:
         status_icon = {"approved": "✅", "open": "⏳", "new": "🆕"}.get(abs_entry.status, "❓")
         type_icon = {"holiday": "🏖️", "sickness": "🤒", "time_off": "🆓", "other": "📝"}.get(abs_entry.type, "📋")
         half_day = " (Half Day)" if abs_entry.half_day else ""
@@ -194,7 +289,12 @@ Status: {abs_entry.status.title()}{duration_str}
 ---"""
         results.append(result)
     
-    summary = f"Found {len(absences)} absence(s):\n\n" + "\n".join(results)
+    # Build final response
+    if analyze_all_users:
+        summary = "\n".join(analysis_summary) + "\n".join(results)
+    else:
+        scope_info = f"user {user_id}" if user_id else "current user"
+        summary = f"Found {len(all_absences)} absence(s) for {scope_info}:\n\n" + "\n".join(results)
     
     return [TextContent(type="text", text=summary)]
 
@@ -208,17 +308,13 @@ async def handle_calendar_absences(client: KimaiClient, arguments: Optional[Dict
         if 'user' in arguments:
             filters.user = arguments['user']
         if 'begin' in arguments:
-            # Parse date and create datetime at start of day
+            # Parse date - client converts to HTML5 format automatically
             date_str = arguments['begin']
-            if 'T' not in date_str:  # Just date format
-                date_str += 'T00:00:00'
-            filters.begin = datetime.fromisoformat(date_str)
+            filters.begin = datetime.strptime(date_str, '%Y-%m-%d')
         if 'end' in arguments:
-            # Parse date and create datetime at end of day
+            # Parse date - client converts to HTML5 format automatically
             date_str = arguments['end']
-            if 'T' not in date_str:  # Just date format
-                date_str += 'T23:59:59'
-            filters.end = datetime.fromisoformat(date_str)
+            filters.end = datetime.strptime(date_str, '%Y-%m-%d')
         if 'status' in arguments:
             filters.status = arguments['status']
         if 'language' in arguments:
