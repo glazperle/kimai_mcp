@@ -4,7 +4,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-A comprehensive Model Context Protocol (MCP) server for integrating with the Kimai time-tracking API. This server provides **10 powerful consolidated tools** (87% reduction from 73 individual tools) that allow AI assistants like Claude to efficiently interact with Kimai instances to manage time tracking, projects, activities, customers, users, teams, absences, and more.
+A comprehensive Model Context Protocol (MCP) server for integrating with the Kimai time-tracking API. This server allows AI assistants like Claude to efficiently interact with Kimai instances to manage time tracking, projects, activities, customers, users, teams, absences, and more.
 
 ## 🚀 Quick Start
 
@@ -13,20 +13,12 @@ A comprehensive Model Context Protocol (MCP) server for integrating with the Kim
 pip install -e .
 
 # Run with your Kimai credentials
-python -m kimai_mcp --kimai-url=https://your-kimai.com --kimai-token=your-token
+python -m kimai_mcp.server --kimai-url=https://your-kimai.com --kimai-token=your-token
 ```
 
-## ⚡ Consolidated Architecture
+## 🛠️ Available Tools
 
-This server features a **consolidated tool architecture** that reduces complexity while maintaining full functionality:
-
-- **87% Tool Reduction**: From 73 individual tools to 10 powerful consolidated tools
-- **Action-Based Interface**: Consistent parameter patterns across all tools
-- **Better Discoverability**: All related operations grouped in logical tools
-- **Reduced Maintenance**: Less code duplication and easier updates
-
-### 🛠️ Consolidated Tools
-
+### Core Management Tools
 1. **Entity Tool** - Universal CRUD operations for projects, activities, customers, users, teams, tags, invoices, holidays
 2. **Timesheet Tool** - Complete timesheet management (list, create, update, delete, export)
 3. **Timer Tool** - Active timer operations (start, stop, restart, view active/recent)
@@ -53,7 +45,7 @@ This server features a **consolidated tool architecture** that reduces complexit
 - **Comprehensive Filtering** - Advanced filters for all data types
 - **Permission Management** - Respect Kimai's role-based permissions
 - **Error Handling** - Proper error handling with meaningful messages
-- **No .env Dependencies** - Configuration through MCP client (Claude Desktop)
+- **Flexible Configuration** - Multiple configuration methods (CLI args, .env files, environment variables)
 
 ## Installation
 
@@ -75,7 +67,7 @@ pip install -e .
 
 ### Alternative: Install Dependencies Only
 ```bash
-pip install mcp httpx pydantic
+pip install mcp httpx pydantic python-dotenv
 ```
 
 ## Configuration
@@ -146,7 +138,7 @@ Then use this Claude Desktop configuration:
   "mcpServers": {
     "kimai": {
       "command": "python",
-      "args": ["-m", "kimai_mcp"],
+      "args": ["-m", "kimai_mcp.server"],
       "cwd": "/path/to/your/kimai_mcp/directory"
     }
   }
@@ -165,7 +157,7 @@ Then use this Claude Desktop configuration:
   "mcpServers": {
     "kimai": {
       "command": "python",
-      "args": ["-m", "kimai_mcp"],
+      "args": ["-m", "kimai_mcp.server"],
       "cwd": "C:/Users/YourName/Projects/kimai_mcp"
     }
   }
@@ -186,41 +178,7 @@ Then use this Claude Desktop configuration:
   "mcpServers": {
     "kimai": {
       "command": "python",
-      "args": ["-m", "kimai_mcp"]
-    }
-  }
-}
-```
-
-#### Method 3: Using a Python Script
-Create a script `run_kimai_mcp.py`:
-```python
-#!/usr/bin/env python3
-import asyncio
-from kimai_mcp.server import KimaiMCPServer
-
-async def main():
-    server = KimaiMCPServer(
-        base_url="https://your-kimai-instance.com",
-        api_token="your-api-token-here",
-        default_user_id="1"  # Optional
-    )
-    try:
-        await server.run()
-    finally:
-        await server.cleanup()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-Then use this configuration:
-```json
-{
-  "mcpServers": {
-    "kimai": {
-      "command": "python",
-      "args": ["run_kimai_mcp.py"]
+      "args": ["-m", "kimai_mcp.server"]
     }
   }
 }
@@ -230,340 +188,94 @@ Then use this configuration:
 
 ### Timesheet Management
 
-#### `timesheet_list` - List Timesheets with Smart User Selection
-List timesheets with comprehensive filtering and intelligent user selection.
+#### Entity Tool - Timesheet Operations
+Use the entity tool with `type: "timesheet"` for comprehensive timesheet management:
 
-**Smart User Selection:**
-- `user_scope` (enum): Choose data scope
-  - `"self"` (default): Your own timesheets only
-  - `"all"`: All users' timesheets (requires permissions)
-  - `"specific"`: Specific user's timesheets
-- `user` (string): User ID (required when user_scope is "specific")
-- `include_user_list` (boolean): Include available users in response
+```json
+{
+  "tool": "entity",
+  "parameters": {
+    "type": "timesheet",
+    "action": "list",
+    "filters": {
+      "project": 17,
+      "user_scope": "self"
+    }
+  }
+}
+```
 
-**Other Parameters:**
-- `project` (integer): Project ID filter
-- `activity` (integer): Activity ID filter
-- `customer` (integer): Customer ID filter
-- `begin` (datetime): Start date filter (ISO format)
-- `end` (datetime): End date filter (ISO format)
-- `exported` (0|1): Export status filter
-- `active` (0|1): Active status filter
-- `billable` (0|1): Billable status filter
-- `page` (integer): Page number for pagination
-- `size` (integer): Page size (default: 50)
-- `term` (string): Search term
+#### Timer Tool - Active Timer Control
+Start, stop, and manage active timers:
 
-#### `timesheet_user_guide` - User Selection Guide
-Get guidance on user selection options and see available users.
-
-**Parameters:**
-- `show_users` (boolean): Show list of available users (default: true)
-
-#### `timesheet_create` - Create Timesheet
-Create a new timesheet entry.
-
-**Parameters:**
-- `project` (integer, required): Project ID
-- `activity` (integer, required): Activity ID
-- `begin` (datetime): Start time (ISO format, default: now)
-- `end` (datetime): End time (if not set, timer runs)
-- `description` (string): Description/notes
-- `tags` (string): Comma-separated tags
-- `billable` (boolean): Whether entry is billable
-- `fixedRate` (number): Fixed rate override
-- `hourlyRate` (number): Hourly rate override
-
-#### `timesheet_start` - Start Timer
-Start a new timer (creates a running timesheet).
-
-**Parameters:**
-- `project` (integer, required): Project ID
-- `activity` (integer, required): Activity ID
-- `description` (string): Description/notes
-- `tags` (string): Comma-separated tags
-
-#### `timesheet_stop` - Stop Timer
-Stop a running timer.
-
-**Parameters:**
-- `id` (integer, required): Timesheet ID of the running timer
-
-#### `timesheet_active` - Get Active Timers
-Get all active/running timers for the current user.
-
-#### `timesheet_recent` - Recent Activities
-Get recent timesheet activities for quick access.
-
-**Parameters:**
-- `size` (integer): Number of entries to return (default: 10)
-- `begin` (datetime): Only entries after this date
+```json
+{
+  "tool": "timer",
+  "parameters": {
+    "action": "start",
+    "data": {
+      "project": 1,
+      "activity": 5,
+      "description": "Working on API integration"
+    }
+  }
+}
+```
 
 ### Project & Activity Management
 
-#### `project_list` - List Projects
-**Parameters:**
-- `customer` (integer): Customer ID filter
-- `visible` (1|2|3): Visibility filter (1=visible, 2=hidden, 3=both)
-- `term` (string): Search term
+#### Entity Tool - Project Operations
+```json
+{
+  "tool": "entity",
+  "parameters": {
+    "type": "project",
+    "action": "list",
+    "filters": {"customer": 1}
+  }
+}
+```
 
-#### `project_get` - Get Project Details
-**Parameters:**
-- `id` (integer, required): Project ID
+### User & Team Management
 
-#### `activity_list` - List Activities
-**Parameters:**
-- `project` (integer): Project ID filter
-- `visible` (1|2|3): Visibility filter
-- `globals` ("0"|"1"): Global activities filter
-- `term` (string): Search term
+#### Entity Tool - User Operations
+```json
+{
+  "tool": "entity",
+  "parameters": {
+    "type": "user",
+    "action": "list"
+  }
+}
+```
 
-#### `activity_get` - Get Activity Details
-**Parameters:**
-- `id` (integer, required): Activity ID
-
-### Customer Management
-
-#### `customer_list` - List Customers
-**Parameters:**
-- `visible` (1|2|3): Visibility filter
-- `term` (string): Search term
-
-#### `customer_get` - Get Customer Details
-**Parameters:**
-- `id` (integer, required): Customer ID
-
-### User Management
-
-#### `user_list` - List Users
-**Parameters:**
-- `visible` (1|2|3): Visibility filter
-- `term` (string): Search term
-- `order_by` (string): Sort field (id, username, alias, email)
-- `order` (ASC|DESC): Sort order
-
-#### `user_get` - Get User Details
-**Parameters:**
-- `id` (integer, required): User ID
-
-#### `user_current` - Get Current User
-Get information about the currently authenticated user.
-
-#### `user_create` - Create User
-**Parameters:**
-- `username` (string, required): Unique username
-- `email` (string, required): User email address
-- `language` (string, required): Language code (e.g., 'en', 'de')
-- `locale` (string, required): Locale code (e.g., 'en_US', 'de_DE')
-- `timezone` (string, required): Timezone (e.g., 'Europe/Berlin')
-- `plainPassword` (string, required): Plain text password
-- Plus optional fields: alias, title, roles, supervisor, etc.
-
-#### `user_update` - Update User
-**Parameters:**
-- `id` (integer, required): User ID to update
-- `email` (string, required): User email address
-- `language` (string, required): Language code
-- `locale` (string, required): Locale code
-- `timezone` (string, required): Timezone
-- Plus optional fields: alias, title, roles, supervisor, etc.
-
-### Team Management
-
-#### `team_list` - List Teams
-List all teams.
-
-#### `team_get` - Get Team Details
-**Parameters:**
-- `id` (integer, required): Team ID
-
-#### `team_create` - Create Team
-**Parameters:**
-- `name` (string, required): Team name
-- `color` (string): Team color (hex format)
-- `members` (array): Initial team members with user IDs and teamlead status
-
-#### `team_update` - Update Team
-**Parameters:**
-- `id` (integer, required): Team ID to update
-- `name` (string, required): Team name
-- `color` (string): Team color
-- `members` (array): Team members (replaces existing)
-
-#### `team_delete` - Delete Team
-**Parameters:**
-- `id` (integer, required): Team ID to delete
-
-#### `team_add_member` - Add Team Member
-**Parameters:**
-- `team_id` (integer, required): Team ID
-- `user_id` (integer, required): User ID to add
-
-#### `team_remove_member` - Remove Team Member
-**Parameters:**
-- `team_id` (integer, required): Team ID
-- `user_id` (integer, required): User ID to remove
+#### Team Access Tool - Team Management
+```json
+{
+  "tool": "team_access",
+  "parameters": {
+    "action": "add_member",
+    "team_id": 1,
+    "user_id": 5
+  }
+}
+```
 
 ### Absence Management
 
-#### `absence_list` - List Absences
-**Parameters:**
-- `user` (string): User ID to filter absences
-- `begin` (date): Only absences after this date (YYYY-MM-DD)
-- `end` (date): Only absences before this date (YYYY-MM-DD)
-- `status` (approved|open|all): Status filter
-
-#### `absence_types` - Get Absence Types
-**Parameters:**
-- `language` (string): Language code for translations
-
-#### `absence_create` - Create Absence
-**Parameters:**
-- `comment` (string, required): Comment/reason for the absence
-- `date` (date, required): Start date of absence (YYYY-MM-DD)
-- `type` (string, required): Type of absence (holiday, time_off, sickness, etc.)
-- `user` (integer): User ID (requires permission, defaults to current user)
-- `end` (date): End date for multi-day absences
-- `halfDay` (boolean): Whether this is a half-day absence
-- `duration` (string): Duration in Kimai format
-
-#### `absence_delete` - Delete Absence
-**Parameters:**
-- `id` (integer, required): Absence ID to delete
-
-#### `absence_approve` - Approve Absence
-**Parameters:**
-- `id` (integer, required): Absence ID to approve
-
-#### `absence_reject` - Reject Absence
-**Parameters:**
-- `id` (integer, required): Absence ID to reject
-
-### Tag Management
-
-#### `tag_list` - List Tags
-**Parameters:**
-- `name` (string): Filter tags by name (partial match)
-
-#### `tag_create` - Create Tag
-**Parameters:**
-- `name` (string, required): Tag name
-- `color` (string): Tag color (hex format)
-- `visible` (boolean): Whether tag is visible
-
-#### `tag_delete` - Delete Tag
-**Parameters:**
-- `id` (integer, required): Tag ID to delete
-
-### Invoice Queries
-
-#### `invoice_list` - List Invoices
-**Parameters:**
-- `begin` (date): Start date filter (YYYY-MM-DD)
-- `end` (date): End date filter (YYYY-MM-DD)
-- `customers` (array): Customer IDs to filter by
-- `status` (array): Invoice status filter (new, pending, paid, canceled)
-- `page` (integer): Page number for pagination
-- `size` (integer): Number of items per page
-
-#### `invoice_get` - Get Invoice Details
-**Parameters:**
-- `id` (integer, required): Invoice ID to retrieve
-
-## Usage Examples
-
-### Smart User Selection for Timesheets
-
-#### Get User Selection Guide
+#### Absence Tool - Complete Workflow
 ```json
 {
-  "tool": "timesheet_user_guide",
+  "tool": "absence",
   "parameters": {
-    "show_users": true
+    "action": "create",
+    "data": {
+      "comment": "Vacation in the mountains",
+      "date": "2024-02-15",
+      "end": "2024-02-20",
+      "type": "holiday"
+    }
   }
-}
-```
-
-#### View Your Own Timesheets (Default)
-```json
-{
-  "tool": "timesheet_list",
-  "parameters": {
-    "user_scope": "self",
-    "project": 17
-  }
-}
-```
-
-#### View All Users' Timesheets
-```json
-{
-  "tool": "timesheet_list",
-  "parameters": {
-    "user_scope": "all",
-    "project": 17,
-    "include_user_list": true
-  }
-}
-```
-
-#### View Specific User's Timesheets
-```json
-{
-  "tool": "timesheet_list",
-  "parameters": {
-    "user_scope": "specific",
-    "user": "5",
-    "project": 17
-  }
-}
-```
-
-### Starting a Timer
-```json
-{
-  "tool": "timesheet_start",
-  "parameters": {
-    "project": 1,
-    "activity": 5,
-    "description": "Working on API integration"
-  }
-}
-```
-
-### Listing Today's Timesheets
-```json
-{
-  "tool": "timesheet_list",
-  "parameters": {
-    "user_scope": "self",
-    "begin": "2024-01-15T00:00:00",
-    "end": "2024-01-15T23:59:59"
-  }
-}
-```
-
-### Creating an Absence
-```
-Use the absence_create tool with:
-{
-  "comment": "Vacation in the mountains",
-  "date": "2024-02-15",
-  "end": "2024-02-20",
-  "type": "holiday"
-}
-```
-
-### Managing Teams
-```
-Use the team_create tool with:
-{
-  "name": "Development Team",
-  "color": "#3498db",
-  "members": [
-    {"user": 1, "teamlead": true},
-    {"user": 2, "teamlead": false}
-  ]
 }
 ```
 
@@ -595,10 +307,10 @@ For debugging, you can run the server directly:
 python -m kimai_mcp.server --kimai-url=https://your-kimai.com --kimai-token=your-token
 
 # Using .env file (make sure you're in the directory with the .env file)
-python -m kimai_mcp
+python -m kimai_mcp.server
 
 # Test the package module execution
-python -m kimai_mcp.server
+python -m kimai_mcp.server --help
 ```
 
 ### Logging
@@ -623,15 +335,13 @@ kimai_mcp/
 │   │   ├── client.py         # Kimai API client
 │   │   ├── models.py         # Data models
 │   │   └── tools/            # MCP tool implementations
-│   │       ├── timesheet.py
-│   │       ├── project.py
-│   │       ├── activity.py
-│   │       ├── customer.py
-│   │       ├── user.py
-│   │       ├── team.py
-│   │       ├── absence.py
-│   │       ├── tag.py
-│   │       └── invoice.py
+│   │       ├── entity_manager.py
+│   │       ├── timesheet_consolidated.py
+│   │       ├── rate_manager.py
+│   │       ├── team_access_manager.py
+│   │       ├── absence_manager.py
+│   │       ├── calendar_meta.py
+│   │       └── project_analysis.py
 ├── tests/
 ├── README.md
 ├── pyproject.toml
@@ -684,19 +394,3 @@ We welcome contributions! Please feel free to submit a Pull Request. For major c
 - **Anthropic** for creating the Model Context Protocol
 - **Kimai Team** for the excellent time-tracking software and API
 - **MCP Community** for examples and best practices
-
-## 📈 Changelog
-
-### v1.0.0 - Initial Release
-- ✅ Complete Kimai API integration (73 MCP tools)
-- ✅ Full CRUD operations for projects, activities, customers
-- ✅ Advanced timesheet management with timer controls
-- ✅ Team management with granular access controls
-- ✅ Absence management and approval workflows
-- ✅ Calendar integration and public holiday management
-- ✅ Rate management for customers, projects, and activities
-- ✅ Custom field (meta) support across all entities
-- ✅ Multiple configuration methods (.env, CLI args, env vars)
-- ✅ Claude Desktop integration with comprehensive documentation
-- ✅ Comprehensive test suite and error handling
-- ✅ MIT License for maximum compatibility
