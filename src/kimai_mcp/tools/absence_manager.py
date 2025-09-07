@@ -137,18 +137,6 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
     """Handle absence list action."""
     # Handle user scope - API only supports single user or no user filter
     user_scope = filters.get("user_scope", "self")
-    user_filter = None
-    
-    if user_scope == "self":
-        current_user = await client.get_current_user()
-        user_filter = str(current_user.id)
-    elif user_scope == "specific":
-        user_filter = filters.get("user")
-        if not user_filter:
-            return [TextContent(type="text", text="Error: 'user' parameter required when user_scope is 'specific'")]
-    elif user_scope == "all":
-        # API doesn't support "all users" in one call - leave user_filter as None
-        user_filter = None
     
     # Process date formats - convert YYYY-MM-DD to ISO 8601 with time
     begin_date = filters.get("begin")
@@ -170,22 +158,68 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
         except ValueError:
             return [TextContent(type="text", text=f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{end_date}'")]
     
-    # Build absence filter - pass strings directly
-    absence_filter = AbsenceFilter(
-        user=user_filter,
-        begin=begin_date,
-        end=end_date,
-        status=filters.get("status", "all")
-    )
+    # Handle different user scopes
+    absences = []
     
-    # Fetch absences
-    absences = await client.get_absences(absence_filter)
+    if user_scope == "self":
+        # Get absences for current user
+        current_user = await client.get_current_user()
+        absence_filter = AbsenceFilter(
+            user=str(current_user.id),
+            begin=begin_date,
+            end=end_date,
+            status=filters.get("status", "all")
+        )
+        absences = await client.get_absences(absence_filter)
+        
+    elif user_scope == "specific":
+        # Get absences for specific user
+        user_filter = filters.get("user")
+        if not user_filter:
+            return [TextContent(type="text", text="Error: 'user' parameter required when user_scope is 'specific'")]
+        
+        absence_filter = AbsenceFilter(
+            user=user_filter,
+            begin=begin_date,
+            end=end_date,
+            status=filters.get("status", "all")
+        )
+        absences = await client.get_absences(absence_filter)
+        
+    elif user_scope == "all":
+        # API doesn't support "all users" in one call - iterate over all users
+        try:
+            # Fetch all users first
+            users = await client.get_users()
+            all_absences = []
+            
+            # Iterate over all users and collect their absences
+            for user in users:
+                try:
+                    user_filter = AbsenceFilter(
+                        user=str(user.id),
+                        begin=begin_date,
+                        end=end_date,
+                        status=filters.get("status", "all")
+                    )
+                    user_absences = await client.get_absences(user_filter)
+                    all_absences.extend(user_absences)
+                except Exception as e:
+                    # Skip users we don't have permission to view
+                    # This can happen if user doesn't have 'contract_other_profile' permission
+                    continue
+            
+            absences = all_absences
+            
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error fetching all users' absences: {str(e)}")]
     
     # Build response
     if user_scope == "all":
         result = f"Found {len(absences)} absence(s) for all users\\n\\n"
     elif user_scope == "specific":
-        result = f"Found {len(absences)} absence(s) for user {user_filter}\\n\\n"
+        user_id = filters.get("user")
+        result = f"Found {len(absences)} absence(s) for user {user_id}\\n\\n"
     else:
         result = f"Found {len(absences)} absence(s) for current user\\n\\n"
     
