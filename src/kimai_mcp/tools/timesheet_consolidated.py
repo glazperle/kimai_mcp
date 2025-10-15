@@ -43,8 +43,16 @@ def timesheet_tool() -> Tool:
                         "project": {"type": "integer"},
                         "activity": {"type": "integer"},
                         "customer": {"type": "integer"},
-                        "begin": {"type": "string", "format": "date-time"},
-                        "end": {"type": "string", "format": "date-time"},
+                        "begin": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00) Only records after this date will be included."
+                        },
+                        "end": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00). Only records before this date will be included."
+                        },
                         "exported": {"type": "integer", "enum": [0, 1]},
                         "active": {"type": "integer", "enum": [0, 1]},
                         "billable": {"type": "integer", "enum": [0, 1]},

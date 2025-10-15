@@ -47,8 +47,16 @@ def entity_tool() -> Tool:
                         "size": {"type": "integer", "description": "Page size"},
                         "order_by": {"type": "string", "description": "Sort field"},
                         "order": {"type": "string", "enum": ["ASC", "DESC"], "description": "Sort order"},
-                        "begin": {"type": "string", "format": "date", "description": "Start date filter"},
-                        "end": {"type": "string", "format": "date", "description": "End date filter"},
+                        "begin": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00) Only records after this date will be included."
+                        },
+                        "end": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00). Only records before this date will be included."
+                        },
                         "customers": {"type": "array", "items": {"type": "integer"}, "description": "Customer IDs (for invoices)"},
                         "status": {"type": "array", "items": {"type": "string"}, "description": "Status filter (for invoices)"}
                     }
