@@ -28,7 +28,13 @@ def entity_tool() -> Tool:
                 "action": {
                     "type": "string",
                     "enum": ["list", "get", "create", "update", "delete", "unlock_month"],
-                    "description": "The action to perform"
+                    "description": """The action to perform:
+                    - list: List entities matching the given filters
+                    - create: Create a new entity
+                    - get: Get a single entity by ID
+                    - update: Update an existing entity by ID
+                    - delete: Delete an existing entity by ID
+                    """
                 },
                 "id": {
                     "type": "integer",
