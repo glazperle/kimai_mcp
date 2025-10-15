@@ -39,7 +39,7 @@ def entity_tool() -> Tool:
                     "description": "Filters for list action (e.g., visible, term, customer, project)",
                     "properties": {
                         "visible": {"type": "integer", "enum": [1, 2, 3], "description": "1=visible, 2=hidden, 3=both"},
-                        "term": {"type": "string", "description": "Search term"},
+                        "term": {"type": "string", "description": "Search exact term. For entity types other then invoice and holiday you can just list all if you don't find it on first try."},
                         "customer": {"type": "integer", "description": "Customer ID filter (for projects)"},
                         "project": {"type": "integer", "description": "Project ID filter (for activities)"},
                         "globals": {"type": "string", "enum": ["0", "1"], "description": "Global activities filter"},
