@@ -101,14 +101,14 @@ class TimesheetFilter(BaseModel):
     tags: Optional[List[str]] = None
     order_by: Optional[str] = Field(None, alias="orderBy")  # id, begin, end, rate
     order: Optional[str] = None  # ASC, DESC
-    begin: Optional[str] = None  # HTML5 date format (YYYY-MM-DD)
-    end: Optional[str] = None    # HTML5 date format (YYYY-MM-DD)
+    begin: Optional[str | datetime] = None  # HTML5 date format (YYYY-MM-DD)
+    end: Optional[str | datetime] = None    # HTML5 date format (YYYY-MM-DD)
     exported: Optional[int] = None  # 0=not exported, 1=exported
     active: Optional[int] = None  # 0=stopped, 1=active
     billable: Optional[int] = None  # 0=non-billable, 1=billable
     full: Optional[str] = None  # 0|1|false|true
     term: Optional[str] = None
-    modified_after: Optional[str] = Field(None, alias="modified_after")  # HTML5 date format
+    modified_after: Optional[str | datetime] = Field(None, alias="modified_after")  # HTML5 date format
 
 
 class ProjectFilter(BaseModel):

@@ -56,12 +56,12 @@ def timesheet_tool() -> Tool:
                         "begin": {
                             "type": "string",
                             "format": "date-time",
-                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00) Only records after this date will be included."
+                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00) Only records after this date and time will be included."
                         },
                         "end": {
                             "type": "string",
                             "format": "date-time",
-                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00). Only records before this date will be included."
+                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00). Only records before this date and time will be included."
                         },
                         "exported": {"type": "integer", "enum": [0, 1]},
                         "active": {"type": "integer", "enum": [0, 1]},
