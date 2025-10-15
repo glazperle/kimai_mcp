@@ -116,7 +116,7 @@ def timer_tool() -> Tool:
     """Define the timer management tool."""
     return Tool(
         name="timer",
-        description="Timer management tool for start, stop, restart, and active timer operations. Replaces 4 individual timer tools.",
+        description="Timer management tool for start, stop, restart, and active timer operations.",
         inputSchema={
             "type": "object",
             "required": ["action"],
