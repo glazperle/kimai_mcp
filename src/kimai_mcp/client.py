@@ -1,7 +1,7 @@
 """Kimai API client wrapper."""
 
 import os
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
 from datetime import datetime
 import httpx
 from pydantic import ValidationError
@@ -138,11 +138,16 @@ class KimaiClient:
     
     # Timesheet endpoints
     
-    async def get_timesheets(self, filters: Optional[TimesheetFilter] = None) -> List[TimesheetEntity]:
+    async def get_timesheets(self, filters: Optional[TimesheetFilter] = None) -> Tuple[List[TimesheetEntity], bool, Optional[int]]:
         """Get list of timesheets.
         
         Args:
             filters: Timesheet filters
+
+        Returns:
+            * List of timesheets and a flag indicating if there are more results to fetch
+            * Did we fetched all timesheets?
+            * The last page fetched
         """
         params = {}
         should_paginate_all = False
@@ -210,12 +215,22 @@ class KimaiClient:
         # If not auto-paginating, just return single page
         if not should_paginate_all:
             data = await self._request("GET", "/timesheets", params=params)
-            return [TimesheetEntity(**item) for item in data]
+            if filters and filters.size:
+                if filters.size > len(data):
+                    fetched_all = True
+                else:
+                    fetched_all = False
+            elif len(data) < 50:
+                fetched_all = True
+            else:
+                fetched_all = False
+            return [TimesheetEntity(**item) for item in data], fetched_all, filters.page if filters and filters.page else 1
         
         # Auto-pagination logic
         all_timesheets = []
         page = 1
         page_size = filters.size if filters and filters.size else 50
+        fetched_all = True
         
         while True:
             # Set pagination params
@@ -241,9 +256,10 @@ class KimaiClient:
             # Safety limit to prevent infinite loops
             if page > 100:
                 # Log warning or raise exception
+                fetched_all = False
                 break
         
-        return all_timesheets
+        return all_timesheets, fetched_all, page
     
     async def get_active_timesheets(self) -> List[TimesheetEntity]:
         """Get active timesheets for current user."""

@@ -115,6 +115,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
                 client.get_users(full=False),  # Use optimized performance mode
                 client.get_activities()
             )
+            timesheets, fetched_all, last_page = timesheets
             
             # Post-process team filtering if needed
             if user_scope == 'team':

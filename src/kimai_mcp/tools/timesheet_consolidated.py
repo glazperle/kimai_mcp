@@ -256,7 +256,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
     )
     
     # Fetch timesheets - with pagination if needed
-    timesheets = await client.get_timesheets(timesheet_filter)
+    timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
     
     # Auto-fetch all pages if calculate_stats is enabled
     if filters.get("calculate_stats") and len(timesheets) == timesheet_filter.size:
@@ -265,7 +265,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         page = 2
         while True:
             timesheet_filter.page = page
-            batch = await client.get_timesheets(timesheet_filter)
+            batch, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
             if not batch:
                 break
             all_timesheets.extend(batch)
@@ -281,6 +281,9 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         result = f"Found {len(timesheets)} timesheets for user {user_filter}\\n\\n"
     else:
         result = f"Found {len(timesheets)} timesheets for current user\\n\\n"
+
+    if not fetched_all:
+        result += f"Not all records were returned obtained records up to page f{last_page}\\n\\n"
     
     # Include user list if requested
     if filters.get("include_user_list"):
@@ -684,7 +687,7 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: Optional[s
         begin=begin_datetime,
         page=1
     )
-    timesheets = await client.get_timesheets(filter_params)
+    timesheets, fetched_all, last_page = await client.get_timesheets(filter_params)
     
     result = f"Recent {len(timesheets)} timesheet(s):\\n\\n"
     
