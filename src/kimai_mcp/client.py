@@ -175,17 +175,20 @@ class KimaiClient:
             
             # Convert datetime to string format or use string as-is
             if filters.begin:
-                if hasattr(filters.begin, 'isoformat'):
-                    params['begin'] = filters.begin.isoformat()
+                if isinstance(filters.begin, datetime):
+                    params['begin'] = filters.begin.replace(microsecond=0).isoformat()
                 else:
                     params['begin'] = filters.begin
             if filters.end:
-                if hasattr(filters.end, 'isoformat'):
-                    params['end'] = filters.end.isoformat()
+                if isinstance(filters.end, datetime):
+                    params['end'] = filters.end.replace(microsecond=0).isoformat()
                 else:
                     params['end'] = filters.end
             if filters.modified_after:
-                params['modified_after'] = filters.modified_after.isoformat()
+                if isinstance(filters.modified_after, datetime):
+                    params['modified_after'] = filters.modified_after.replace(microsecond=0).isoformat()
+                else:
+                    params['modified_after'] = filters.modified_after
             
             # Handle array parameters
             if filters.users:
@@ -276,9 +279,9 @@ class KimaiClient:
         
         # Convert datetime to ISO format
         if timesheet.begin:
-            payload['begin'] = timesheet.begin.isoformat()
+            payload['begin'] = timesheet.begin.replace(microsecond=0).isoformat()
         if timesheet.end:
-            payload['end'] = timesheet.end.isoformat()
+            payload['end'] = timesheet.end.replace(microsecond=0).isoformat()
         
         data = await self._request("POST", "/timesheets", json=payload)
         return TimesheetEntity(**data)
@@ -294,9 +297,9 @@ class KimaiClient:
         
         # Convert datetime to ISO format
         if timesheet.begin:
-            payload['begin'] = timesheet.begin.isoformat()
+            payload['begin'] = timesheet.begin.replace(microsecond=0).isoformat()
         if timesheet.end:
-            payload['end'] = timesheet.end.isoformat()
+            payload['end'] = timesheet.end.replace(microsecond=0).isoformat()
         
         data = await self._request("PATCH", f"/timesheets/{timesheet_id}", json=payload)
         return TimesheetEntity(**data)
@@ -322,7 +325,7 @@ class KimaiClient:
         if copy_all:
             payload['copy'] = 'all'
         if begin:
-            payload['begin'] = begin.isoformat()
+            payload['begin'] = begin.replace(microsecond=0).isoformat()
         
         data = await self._request("PATCH", f"/timesheets/{timesheet_id}/restart", json=payload)
         return TimesheetEntity(**data)
@@ -355,7 +358,7 @@ class KimaiClient:
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
             
-            # Convert datetime to string format
+            # Convert date to string format
             if filters.start:
                 params['start'] = filters.start.isoformat()
             if filters.end:
@@ -391,7 +394,7 @@ class KimaiClient:
         """Update an existing project."""
         payload = project.model_dump(exclude_none=True, by_alias=True)
         
-        # Convert datetime to ISO format
+        # Convert date to ISO format
         if project.start:
             payload['start'] = project.start.isoformat()
         if project.end:
@@ -816,9 +819,9 @@ class KimaiClient:
             
             # Convert datetime to string format
             if filters.begin:
-                params['begin'] = filters.begin.isoformat()
+                params['begin'] = filters.begin.replace(microsecond=0).isoformat()
             if filters.end:
-                params['end'] = filters.end.isoformat()
+                params['end'] = filters.end.replace(microsecond=0).isoformat()
             
             # Handle array parameters
             if filters.customers:

@@ -208,6 +208,8 @@ async def handle_timer(client: KimaiClient, **params) -> List[TextContent]:
 # Timesheet action handlers
 async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[TextContent]:
     """Handle timesheet list action."""
+    from datetime import datetime
+
     # Handle user scope
     user_scope = filters.get("user_scope", "self")
     user_filter = None
@@ -220,6 +222,22 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         if not user_filter:
             return [TextContent(type="text", text="Error: 'user' parameter required when user_scope is 'specific'")]
     # user_scope == "all" means no user filter
+
+    begin_datetime = None
+    if "begin" in filters:
+        try:
+            begin_datetime = datetime.fromisoformat(filters["begin"])
+        except ValueError:
+            return [TextContent(type="text",
+                                text=f"Error: Invalid date format for field begin '{filters['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+
+    end_datetime = None
+    if "end" in filters:
+        try:
+            end_datetime = datetime.fromisoformat(filters["end"])
+        except ValueError:
+            return [TextContent(type="text",
+                                text=f"Error: Invalid date format for field end '{filters['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
     
     # Build filter
     timesheet_filter = TimesheetFilter(
@@ -227,8 +245,8 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         project=filters.get("project"),
         activity=filters.get("activity"),
         customer=filters.get("customer"),
-        begin=filters.get("begin"),
-        end=filters.get("end"),
+        begin=begin_datetime,
+        end=end_datetime,
         exported=filters.get("exported"),
         active=filters.get("active"),
         billable=filters.get("billable"),
@@ -375,17 +393,36 @@ async def _handle_timesheet_get(client: KimaiClient, id: Optional[int]) -> List[
 
 async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[TextContent]:
     """Handle timesheet create action."""
+    from datetime import datetime
+
     if not data.get("project") or not data.get("activity"):
         return [TextContent(type="text", text="Error: 'project' and 'activity' are required for create action")]
     
     # Keep tags as string - model expects comma-separated string
     tags_str = data.get("tags", "")
+
+    if "begin" in data:
+        try:
+            begin_datetime = datetime.fromisoformat(data["begin"])
+        except ValueError:
+            return [TextContent(type="text",
+                                text=f"Error: Invalid date format for field begin '{data['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+    else:
+        begin_datetime = datetime.now(timezone.utc).replace(microsecond=0)
+
+    end_datetime = None
+    if "end" in data:
+        try:
+            end_datetime = datetime.fromisoformat(data["end"])
+        except ValueError:
+            return [TextContent(type="text",
+                                text=f"Error: Invalid date format for field end '{data['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
     
     form = TimesheetEditForm(
         project=data["project"],
         activity=data["activity"],
-        begin=data.get("begin", datetime.now(timezone.utc).isoformat()),
-        end=data.get("end"),
+        begin=begin_datetime,
+        end=end_datetime,
         description=data.get("description"),
         tags=tags_str,
         user=data.get("user"),
