@@ -21,7 +21,17 @@ def timesheet_tool() -> Tool:
                 "action": {
                     "type": "string",
                     "enum": ["list", "get", "create", "update", "delete", "duplicate", "export_toggle", "meta_update", "user_guide"],
-                    "description": "The action to perform"
+                    "description": """The action to perform:
+                    - list: List timesheets
+                    - create: Create a new timesheet
+                    - get: Get a timesheet by ID
+                    - update: Update a timesheet by ID
+                    - delete: Delete a timesheet by ID
+                    - duplicate: Duplicate a timesheet by ID
+                    - export_toggle: Toggle export status (bool) for a timesheet by ID
+                    - meta_update: Update meta fields for a timesheet by ID
+                    - user_guide: Gives information about how to limit users when listing timesheets and lists available users.
+                    """
                 },
                 "id": {
                     "type": "integer",
