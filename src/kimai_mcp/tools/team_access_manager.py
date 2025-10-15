@@ -9,7 +9,7 @@ def team_access_tool() -> Tool:
     """Define the consolidated team access management tool."""
     return Tool(
         name="team_access",
-        description="Universal team access management tool for member management and permission control. Replaces 8 individual team tools with one flexible interface.",
+        description="Universal team access management tool for member management and permission control.",
         inputSchema={
             "type": "object",
             "required": ["team_id", "action"],

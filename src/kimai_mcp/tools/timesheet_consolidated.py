@@ -13,7 +13,7 @@ def timesheet_tool() -> Tool:
     """Define the consolidated timesheet management tool."""
     return Tool(
         name="timesheet",
-        description="Consolidated timesheet management tool for list, get, create, update, delete, duplicate, and export operations. Replaces 9 individual timesheet tools.",
+        description="Consolidated timesheet management tool for list, get, create, update, delete, duplicate, and export operations.",
         inputSchema={
             "type": "object",
             "required": ["action"],

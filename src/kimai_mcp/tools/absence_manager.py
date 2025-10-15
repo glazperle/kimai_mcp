@@ -11,7 +11,7 @@ def absence_tool() -> Tool:
     """Define the consolidated absence management tool."""
     return Tool(
         name="absence",
-        description="Universal absence management tool for complete absence workflow. Supports list, create, delete, approve, reject, and request approval actions. Replaces 7 individual absence tools with one flexible interface.",
+        description="Universal absence management tool for complete absence workflow. Supports list, create, delete, approve, reject, and request approval actions.",
         inputSchema={
             "type": "object",
             "required": ["action"],

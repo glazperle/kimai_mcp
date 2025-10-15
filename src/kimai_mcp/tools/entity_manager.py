@@ -15,7 +15,7 @@ def entity_tool() -> Tool:
     """Define the consolidated entity management tool."""
     return Tool(
         name="entity",
-        description="Universal entity management tool for CRUD operations on projects, activities, customers, users, teams, tags, invoices, and holidays. Replaces 35 individual tools with one flexible interface.",
+        description="Universal entity management tool for CRUD operations on projects, activities, customers, users, teams, tags, invoices, and holidays.",
         inputSchema={
             "type": "object",
             "required": ["type", "action"],

@@ -10,7 +10,7 @@ def calendar_tool() -> Tool:
     """Define the consolidated calendar tool."""
     return Tool(
         name="calendar",
-        description="Universal calendar tool for accessing absences and holidays data. Replaces 2 individual calendar tools.",
+        description="Universal calendar tool for accessing absences and holidays data.",
         inputSchema={
             "type": "object",
             "required": ["type"],
@@ -49,7 +49,7 @@ def meta_tool() -> Tool:
     """Define the consolidated meta fields tool."""
     return Tool(
         name="meta",
-        description="Universal meta fields management tool for custom field operations across all entity types. Replaces 4 individual meta tools.",
+        description="Universal meta fields management tool for custom field operations across all entity types.",
         inputSchema={
             "type": "object",
             "required": ["entity", "entity_id", "action"],
@@ -94,7 +94,7 @@ def user_current_tool() -> Tool:
     """Define the current user tool."""
     return Tool(
         name="user_current",
-        description="Get information about the currently authenticated user. This is a specialized tool kept separate from the entity tool.",
+        description="Get information about the currently authenticated user.",
         inputSchema={
             "type": "object",
             "properties": {}

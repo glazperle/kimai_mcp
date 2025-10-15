@@ -10,7 +10,7 @@ def rate_tool() -> Tool:
     """Define the consolidated rate management tool."""
     return Tool(
         name="rate",
-        description="Universal rate management tool for customer, project, and activity rates. Replaces 9 individual rate tools with one flexible interface.",
+        description="Universal rate management tool for customer, project, and activity rates.",
         inputSchema={
             "type": "object",
             "required": ["entity", "entity_id", "action"],
