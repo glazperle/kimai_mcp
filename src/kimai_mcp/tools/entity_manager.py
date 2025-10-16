@@ -77,7 +77,32 @@ def entity_tool() -> Tool:
                     "description": "Month to unlock (YYYY-MM-DD format, for unlock_month action on user entities)",
                     "pattern": "[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])"
                 }
-            }
+            },
+            "allOff": [
+                {
+                    "if": {
+                        "properties": {
+                            "action": {"enum": ["create", "update"]}
+                        }
+                    },
+                    "else": {
+                        "properties": {
+                            "data": {"not": {}}  # `data` should not be present / empty if action is not create / update
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "action": {"enum": ["get", "update", "delete"]}
+                        }
+                    },
+                    "then": {
+                        "required": ["id"]
+                    }
+                }
+            ]
+
         }
     )
 
