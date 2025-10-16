@@ -1,7 +1,7 @@
 """Consolidated Timesheet tools for all timesheet operations."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
@@ -238,6 +238,11 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         except ValueError:
             return [TextContent(type="text",
                                 text=f"Error: Invalid date time format for field end '{filters['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+
+
+    if begin_datetime == end_datetime and begin_datetime.time() == datetime.min.time():
+        # AI Probably just specified a single day
+        end_datetime = begin_datetime + timedelta(days=1)
     
     # Build filter
     timesheet_filter = TimesheetFilter(
