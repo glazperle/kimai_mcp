@@ -85,8 +85,8 @@ class TimesheetEditForm(BaseModel):
     """Timesheet edit form for creating/updating timesheets."""
     begin: Optional[datetime] = None
     end: Optional[datetime] = None
-    project: int
-    activity: int
+    project: Optional[int]  # Required for creation
+    activity: Optional[int]  # Required for creation
     description: Optional[str] = None
     fixed_rate: Optional[float] = Field(None, alias="fixedRate")
     hourly_rate: Optional[float] = Field(None, alias="hourlyRate")
