@@ -477,8 +477,8 @@ class CustomerEditForm(BaseModel):
 
 class ProjectEditForm(BaseModel):
     """Form for creating/editing projects."""
-    name: str
-    customer: int
+    name: Optional[str] = None  # Required for creation
+    customer: Optional[int] = None  # Required for creation
     comment: Optional[str] = None
     visible: Optional[bool] = None
     billable: Optional[bool] = None
