@@ -28,9 +28,11 @@ logger = logging.getLogger(__name__)
 
 class KimaiAPIError(Exception):
     """Kimai API error."""
-    def __init__(self, message: str, status_code: Optional[int] = None):
+
+    def __init__(self, message: str, status_code: Optional[int] = None, details: Optional[Any] = None):
         self.message = message
         self.status_code = status_code
+        self.details = details
         super().__init__(self.message)
 
 
@@ -96,17 +98,43 @@ class KimaiClient:
             
         except httpx.HTTPStatusError as e:
             # Try to parse error response
+            error_details: Optional[Any] = None
             try:
                 error_data = e.response.json()
+                # Extract message
                 message = error_data.get('message', str(e))
-            except:
+
+                # Helper to prune empty dicts recursively
+                def _prune_empty_dicts(obj: Any) -> Any:
+                    if isinstance(obj, dict):
+                        # First prune children
+                        pruned = {k: _prune_empty_dicts(v) for k, v in obj.items()}
+                        # Then drop keys where value is an empty dict
+                        return {k: v for k, v in pruned.items() if not (isinstance(v, dict) and len(v) == 0)}
+                    elif isinstance(obj, list):
+                        return [_prune_empty_dicts(v) for v in obj]
+                    else:
+                        return obj
+
+                # Extract errors if present and prune empty dicts
+                if isinstance(error_data, dict):
+                    if 'errors' in error_data:
+                        error_details = _prune_empty_dicts(error_data['errors'])
+                    else:
+                        # Fallback to full payload (pruned) for context
+                        error_details = _prune_empty_dicts(error_data)
+                else:
+                    error_details = None
+            except Exception:
                 message = str(e)
+                error_details = None
 
             logging.error(
                 f"API error: {message} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
+                + (f" | details: {error_details}" if error_details else "")
             )
 
-            raise KimaiAPIError(message, e.response.status_code)
+            raise KimaiAPIError(message, e.response.status_code, details=error_details)
         except httpx.RequestError as e:
             logging.error(
                 f"API error: {str(e)} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
