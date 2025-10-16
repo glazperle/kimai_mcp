@@ -443,6 +443,9 @@ class ActivityExtended(Activity):
 class CustomerEditForm(BaseModel):
     """Form for creating/editing customers."""
     name: str
+    country: str
+    currency: str
+    timezone: str
     number: Optional[str] = None
     comment: Optional[str] = None
     visible: Optional[bool] = None
@@ -450,8 +453,6 @@ class CustomerEditForm(BaseModel):
     budget: Optional[float] = None
     time_budget: Optional[int] = Field(None, alias="timeBudget")
     color: Optional[str] = None
-    country: Optional[str] = None
-    currency: Optional[str] = None
     phone: Optional[str] = None
     fax: Optional[str] = None
     mobile: Optional[str] = None
