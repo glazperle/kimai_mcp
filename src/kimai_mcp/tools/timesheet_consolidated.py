@@ -56,12 +56,12 @@ def timesheet_tool() -> Tool:
                         "begin": {
                             "type": "string",
                             "format": "date-time",
-                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00) Only records after this date and time will be included."
+                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00)."
                         },
                         "end": {
                             "type": "string",
                             "format": "date-time",
-                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00). Only records before this date and time will be included."
+                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00)."
                         },
                         "exported": {"type": "integer", "enum": [0, 1]},
                         "active": {"type": "integer", "enum": [0, 1]},
@@ -229,7 +229,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
             begin_datetime = datetime.fromisoformat(filters["begin"])
         except ValueError:
             return [TextContent(type="text",
-                                text=f"Error: Invalid date format for field begin '{filters['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+                                text=f"Error: Invalid date time format for field begin '{filters['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
 
     end_datetime = None
     if "end" in filters:
@@ -237,7 +237,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
             end_datetime = datetime.fromisoformat(filters["end"])
         except ValueError:
             return [TextContent(type="text",
-                                text=f"Error: Invalid date format for field end '{filters['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+                                text=f"Error: Invalid date time format for field end '{filters['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
     
     # Build filter
     timesheet_filter = TimesheetFilter(
