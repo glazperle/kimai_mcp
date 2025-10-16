@@ -210,6 +210,92 @@ def entity_tool() -> Tool:
                 {
                     "if": {
                         "properties": {
+                            "type": {"const": "project"},
+                            "action": {"enum": ["create", "update"]}
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "data": {
+                                "type": "object",
+                                "description": "Data structure required for creating or updating a 'project' entity. This mirrors the ProjectEditForm API definition.",
+                                "required": [
+                                    "name",
+                                    "customer"
+                                ],
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "description": "The official or internal name of the project.",
+                                        "minLength": 2,
+                                        "maxLength": 150
+                                    },
+                                    "number": {
+                                        "type": "string",
+                                        "maxLength": 10,
+                                        "description": "An internal tracking number or code for the project."
+                                    },
+                                    "comment": {
+                                        "type": "string",
+                                        "description": "Any additional notes or descriptive comments regarding the project."
+                                    },
+                                    "invoiceText": {
+                                        "type": "string",
+                                        "description": "Custom text that should appear on invoices generated for this project."
+                                    },
+                                    "orderNumber": {
+                                        "type": "string",
+                                        "maxLength": 50,
+                                        "description": "The client's purchase order number or internal order reference for the project."
+                                    },
+                                    "orderDate": {
+                                        "type": "string",
+                                        "format": "date",
+                                        "description": "The date when the project was ordered or officially started (YYYY-MM-DD format). Note: Times are not included."
+                                    },
+                                    "start": {
+                                        "type": "string",
+                                        "format": "date",
+                                        "description": "The official start date of the project (YYYY-MM-DD). Timesheets cannot be recorded before this date."
+                                    },
+                                    "end": {
+                                        "type": "string",
+                                        "format": "date",
+                                        "description": "The projected or actual end date of the project (YYYY-MM-DD). Timesheets cannot be recorded after this date."
+                                    },
+                                    "customer": {
+                                        "description": "The unique ID of the customer to whom this project belongs.",
+                                        "type": "integer"
+                                    },
+                                    "color": {
+                                        "description": "The assigned display color for the project in HTML hex format (e.g., #dd1d00). If left empty, a color might be auto-calculated.",
+                                        "type": "string"
+                                    },
+                                    "globalActivities": {
+                                        "type": "boolean",
+                                        "description": "Indicates whether this project allows the booking of globally defined activities.",
+                                        "default": True
+                                    },
+                                    "visible": {
+                                        "type": "boolean",
+                                        "description": "Controls the visibility of the project. If False, timesheets usually cannot be recorded against it.",
+                                        "default": True
+                                    },
+                                    "billable": {
+                                        "type": "boolean",
+                                        "default": True,
+                                        "description": "Determines if time and expenses recorded against this project are considered billable to the customer."
+                                    },
+                                },
+                                "additionalProperties": False
+                            }
+                        },
+                        "required": ["data"]
+                    },
+                },
+                {
+                    "if": {
+                        "properties": {
                             "action": {"enum": ["create", "update"]}
                         }
                     },
