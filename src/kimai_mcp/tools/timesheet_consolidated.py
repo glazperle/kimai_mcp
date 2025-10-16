@@ -391,10 +391,10 @@ async def _handle_timesheet_get(client: KimaiClient, id: Optional[int]) -> List[
         result += f"Tags: {', '.join(ts.tags)}\\n"
     if ts.rate:
         result += f"Rate: {ts.rate}\\n"
-    if ts.fixedRate:
-        result += f"Fixed Rate: {ts.fixedRate}\\n"
-    if ts.hourlyRate:
-        result += f"Hourly Rate: {ts.hourlyRate}\\n"
+    if ts.fixed_rate:
+        result += f"Fixed Rate: {ts.fixed_rate}\\n"
+    if ts.hourly_rate:
+        result += f"Hourly Rate: {ts.hourly_rate}\\n"
     
     return [TextContent(type="text", text=result)]
 
