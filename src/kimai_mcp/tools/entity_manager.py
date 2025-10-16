@@ -1,15 +1,17 @@
 """Consolidated Entity Manager tool for all CRUD operations."""
-
+import logging
 from typing import List, Dict
 
 from mcp.types import Tool, TextContent
 
-from ..client import KimaiClient
+from ..client import KimaiClient, KimaiAPIError
 from ..models import (
     ProjectEditForm, ActivityEditForm, CustomerEditForm,
     UserCreateForm, UserEditForm, TeamEditForm, TagEditForm,
     ProjectFilter, ActivityFilter, CustomerFilter, Customer
 )
+
+logger = logging.getLogger(__name__)
 
 
 def entity_tool() -> Tool:
@@ -385,6 +387,17 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
                 type="text",
                 text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, unlock_month"
             )]
+    except KimaiAPIError as e:
+        logger.error(f"Kimai API Error in tool entity: {e.message} (Status: {e.status_code})")
+        logger.error(f"Arguments were: {params}")
+        if e.details:
+            logger.error(f"Details: {e.details}")
+
+        return [TextContent(
+            type="text",
+            text=f"Kimai API Error: {e.message} (Status: {e.status_code})" + (
+                f" (Details: {e.details})" if e.details else "")
+        )]
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {str(e)}")]
 
