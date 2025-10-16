@@ -8,7 +8,7 @@ from ..client import KimaiClient
 from ..models import (
     ProjectEditForm, ActivityEditForm, CustomerEditForm,
     UserCreateForm, UserEditForm, TeamEditForm, TagEditForm,
-    ProjectFilter, ActivityFilter, CustomerFilter
+    ProjectFilter, ActivityFilter, CustomerFilter, Customer
 )
 
 
@@ -328,6 +328,22 @@ class BaseEntityHandler:
 class ProjectEntityHandler(BaseEntityHandler):
     """Handler for project operations."""
 
+    def serialize_project(self, project) -> str:
+        result = f"Project: {project.name} (ID: {project.id})\n"
+        result += f"Customer ID: {project.customer if project.customer else 'None'}\n"
+        result += f"Status: {'Active' if project.visible else 'Inactive'}\n"
+        result += f"Billable: {'Yes' if project.billable else 'No'}\n"
+        if hasattr(project, 'global_activities'):
+            result += f"Global Activities: {'Yes' if project.global_activities else 'No'}\n"
+        if getattr(project, 'number', None):
+            result += f"Number: {project.number}\n"
+        if getattr(project, 'color', None):
+            result += f"Color: {project.color}\n"
+        if getattr(project, 'comment', None):
+            result += f"Comment: {project.comment}\n"
+        result += "\n"
+        return result
+
     async def list(self, filters: Dict) -> List[TextContent]:
         project_filter = ProjectFilter(
             customer=filters.get("customer"),
@@ -339,35 +355,14 @@ class ProjectEntityHandler(BaseEntityHandler):
 
         result = f"Found {len(projects)} projects\\n\\n"
         for project in projects:
-            customer_id = project.customer if project.customer else "No customer"
-            status = "Active" if project.visible else "Inactive"
-            result += f"ID: {project.id} - {project.name}\\n"
-            result += f"  Customer ID: {customer_id}\\n"
-            result += f"  Status: {status}\\n"
-            result += f"  Billable: {'Yes' if project.billable else 'No'}\\n"
-            if project.comment:
-                result += f"  Comment: {project.comment}\\n"
-            if project.color:
-                result += f"  Color: {project.color}\\n"
-            result += "\\n"
+            result += self.serialize_project(project)
 
         return [TextContent(type="text", text=result)]
 
     async def get(self, id: int) -> List[TextContent]:
         project = await self.client.get_project(id)
 
-        result = f"Project: {project.name} (ID: {project.id})\\n"
-        result += f"Customer ID: {project.customer if project.customer else 'None'}\\n"
-        result += f"Status: {'Active' if project.visible else 'Inactive'}\\n"
-        result += f"Billable: {'Yes' if project.billable else 'No'}\\n"
-        result += f"Global Activities: {'Yes' if project.global_activities else 'No'}\\n"
-
-        if project.number:
-            result += f"Number: {project.number}\\n"
-        if project.color:
-            result += f"Color: {project.color}\\n"
-        if project.comment:
-            result += f"Comment: {project.comment}\\n"
+        result = self.serialize_project(project)
 
         return [TextContent(type="text", text=result)]
 
@@ -376,7 +371,7 @@ class ProjectEntityHandler(BaseEntityHandler):
         project = await self.client.create_project(form)
         return [TextContent(
             type="text",
-            text=f"Created project '{project.name}' with ID {project.id}"
+            text="Created " + self.serialize_project(project)
         )]
 
     async def update(self, id: int, data: Dict) -> List[TextContent]:
@@ -384,7 +379,7 @@ class ProjectEntityHandler(BaseEntityHandler):
         project = await self.client.update_project(id, form)
         return [TextContent(
             type="text",
-            text=f"Updated project '{project.name}' (ID: {project.id})"
+            text="Updated " + self.serialize_project(project)
         )]
 
     async def delete(self, id: int) -> List[TextContent]:
@@ -394,6 +389,17 @@ class ProjectEntityHandler(BaseEntityHandler):
 
 class ActivityEntityHandler(BaseEntityHandler):
     """Handler for activity operations."""
+
+    def serialize_activity(self, activity) -> str:
+        result = f"Activity: {activity.name} (ID: {activity.id})\n"
+        result += f"Status: {'Active' if activity.visible else 'Inactive'}\n"
+        result += f"Billable: {'Yes' if activity.billable else 'No'}\n"
+        if hasattr(activity, 'global'):
+            result += f"Global: {'Yes' if getattr(activity, 'global', False) else 'No'}\n"
+        if getattr(activity, 'comment', None):
+            result += f"Comment: {activity.comment}\n"
+        result += "\n"
+        return result
 
     async def list(self, filters: Dict) -> List[TextContent]:
         activity_filter = ActivityFilter(
@@ -408,26 +414,14 @@ class ActivityEntityHandler(BaseEntityHandler):
 
         result = f"Found {len(activities)} activities\\n\\n"
         for activity in activities:
-            global_str = " (Global)" if getattr(activity, "global", False) else ""
-            status = "Active" if activity.visible else "Inactive"
-            result += f"ID: {activity.id} - {activity.name}{global_str}\\n"
-            result += f"  Status: {status}\\n"
-            if activity.comment:
-                result += f"  Comment: {activity.comment}\\n"
-            result += "\\n"
+            result += self.serialize_activity(activity)
 
         return [TextContent(type="text", text=result)]
 
     async def get(self, id: int) -> List[TextContent]:
         activity = await self.client.get_activity(id)
 
-        result = f"Activity: {activity.name} (ID: {activity.id})\\n"
-        result += f"Status: {'Active' if activity.visible else 'Inactive'}\\n"
-        result += f"Billable: {'Yes' if activity.billable else 'No'}\\n"
-        if hasattr(activity, "global"):
-            result += f"Global: {'Yes' if getattr(activity, 'global', False) else 'No'}\\n"
-        if activity.comment:
-            result += f"Comment: {activity.comment}\\n"
+        result = self.serialize_activity(activity)
 
         return [TextContent(type="text", text=result)]
 
@@ -436,7 +430,7 @@ class ActivityEntityHandler(BaseEntityHandler):
         activity = await self.client.create_activity(form)
         return [TextContent(
             type="text",
-            text=f"Created activity '{activity.name}' with ID {activity.id}"
+            text="Created " + self.serialize_activity(activity)
         )]
 
     async def update(self, id: int, data: Dict) -> List[TextContent]:
@@ -444,7 +438,7 @@ class ActivityEntityHandler(BaseEntityHandler):
         activity = await self.client.update_activity(id, form)
         return [TextContent(
             type="text",
-            text=f"Updated activity '{activity.name}' (ID: {activity.id})"
+            text="Updated " + self.serialize_activity(activity)
         )]
 
     async def delete(self, id: int) -> List[TextContent]:
@@ -454,6 +448,21 @@ class ActivityEntityHandler(BaseEntityHandler):
 
 class CustomerEntityHandler(BaseEntityHandler):
     """Handler for customer operations."""
+
+    def serialize_customer(self, customer: Customer) -> str:
+        result = f"Customer: {customer.name} (ID: {customer.id})\\n"
+        result += f"Status: {'Active' if customer.visible else 'Inactive'}\\n"
+        result += f"Billable: {'Yes' if customer.billable else 'No'}\\n"
+
+        if customer.number:
+            result += f"Number: {customer.number}\\n"
+        if customer.color:
+            result += f"Color: {customer.color}\\n"
+        if customer.comment:
+            result += f"Comment: {customer.comment}\\n"
+        result += "\\n"
+
+        return result
 
     async def list(self, filters: Dict) -> List[TextContent]:
         customer_filter = CustomerFilter(
@@ -466,33 +475,14 @@ class CustomerEntityHandler(BaseEntityHandler):
 
         result = f"Found {len(customers)} customers\\n\\n"
         for customer in customers:
-            status = "Active" if customer.visible else "Inactive"
-            result += f"ID: {customer.id} - {customer.name}\\n"
-            result += f"  Status: {status}\\n"
-            result += f"  Billable: {'Yes' if customer.billable else 'No'}\\n"
-            if customer.number:
-                result += f"  Number: {customer.number}\\n"
-            if customer.color:
-                result += f"  Color: {customer.color}\\n"
-            if customer.comment:
-                result += f"  Comment: {customer.comment}\\n"
-            result += "\\n"
+            result += self.serialize_customer(customer)
 
         return [TextContent(type="text", text=result)]
 
     async def get(self, id: int) -> List[TextContent]:
         customer = await self.client.get_customer(id)
 
-        result = f"Customer: {customer.name} (ID: {customer.id})\\n"
-        result += f"Status: {'Active' if customer.visible else 'Inactive'}\\n"
-        result += f"Billable: {'Yes' if customer.billable else 'No'}\\n"
-
-        if customer.number:
-            result += f"Number: {customer.number}\\n"
-        if customer.color:
-            result += f"Color: {customer.color}\\n"
-        if customer.comment:
-            result += f"Comment: {customer.comment}\\n"
+        result = self.serialize_customer(customer)
 
         return [TextContent(type="text", text=result)]
 
@@ -501,7 +491,7 @@ class CustomerEntityHandler(BaseEntityHandler):
         customer = await self.client.create_customer(form)
         return [TextContent(
             type="text",
-            text=f"Created customer '{customer.name}' with ID {customer.id}"
+            text=f"Created " + self.serialize_customer(customer)
         )]
 
     async def update(self, id: int, data: Dict) -> List[TextContent]:
@@ -509,7 +499,7 @@ class CustomerEntityHandler(BaseEntityHandler):
         customer = await self.client.update_customer(id, form)
         return [TextContent(
             type="text",
-            text=f"Updated customer '{customer.name}' (ID: {customer.id})"
+            text=f"Updated " + self.serialize_customer(customer)
         )]
 
     async def delete(self, id: int) -> List[TextContent]:
@@ -520,6 +510,16 @@ class CustomerEntityHandler(BaseEntityHandler):
 class UserEntityHandler(BaseEntityHandler):
     """Handler for user operations."""
 
+    def serialize_user(self, user) -> str:
+        result = f"User: {user.username} (ID: {user.id})\n"
+        result += f"Name: {user.alias or 'Not set'}\n"
+        result += f"Title: {user.title or 'Not set'}\n"
+        result += f"Status: {'Active' if user.enabled else 'Inactive'}\n"
+        if getattr(user, 'color', None):
+            result += f"Color: {user.color}\n"
+        result += "\n"
+        return result
+
     async def list(self, filters: Dict) -> List[TextContent]:
         users = await self.client.get_users(
             visible=filters.get("visible", 1),
@@ -528,27 +528,14 @@ class UserEntityHandler(BaseEntityHandler):
 
         result = f"Found {len(users)} users\\n\\n"
         for user in users:
-            status = "Active" if user.enabled else "Inactive"
-            result += f"ID: {user.id} - {user.username}\\n"
-            result += f"  Name: {user.alias or 'Not set'}\\n"
-            result += f"  Title: {user.title or 'Not set'}\\n"
-            result += f"  Status: {status}\\n"
-            if user.color:
-                result += f"  Color: {user.color}\\n"
-            result += "\\n"
+            result += self.serialize_user(user)
 
         return [TextContent(type="text", text=result)]
 
     async def get(self, id: int) -> List[TextContent]:
         user = await self.client.get_user_extended(id)
 
-        result = f"User: {user.username} (ID: {user.id})\\n"
-        result += f"Name: {user.alias or 'Not set'}\\n"
-        result += f"Title: {user.title or 'Not set'}\\n"
-        result += f"Status: {'Active' if user.enabled else 'Inactive'}\\n"
-
-        if user.color:
-            result += f"Color: {user.color}\\n"
+        result = self.serialize_user(user)
 
         return [TextContent(type="text", text=result)]
 
@@ -557,7 +544,7 @@ class UserEntityHandler(BaseEntityHandler):
         user = await self.client.create_user(form)
         return [TextContent(
             type="text",
-            text=f"Created user '{user.username}' with ID {user.id}"
+            text="Created " + self.serialize_user(user)
         )]
 
     async def update(self, id: int, data: Dict) -> List[TextContent]:
@@ -565,7 +552,7 @@ class UserEntityHandler(BaseEntityHandler):
         user = await self.client.update_user(id, form)
         return [TextContent(
             type="text",
-            text=f"Updated user '{user.username}' (ID: {user.id})"
+            text="Updated " + self.serialize_user(user)
         )]
 
     async def delete(self, id: int) -> List[TextContent]:
@@ -586,32 +573,33 @@ class UserEntityHandler(BaseEntityHandler):
 class TeamEntityHandler(BaseEntityHandler):
     """Handler for team operations."""
 
+    def serialize_team(self, team) -> str:
+        result = f"Team: {team.name} (ID: {team.id})\n"
+        if hasattr(team, 'color') and team.color:
+            result += f"Color: {team.color}\n"
+        if hasattr(team, 'members') and team.members:
+            result += f"\nMembers ({len(team.members)}):\n"
+            for member in team.members:
+                teamlead = " (Team Lead)" if getattr(member, 'teamlead', False) else ""
+                username = getattr(getattr(member, 'user', None), 'username', None) or getattr(member, 'username',
+                                                                                               'Unknown')
+                result += f"  - {username}{teamlead}\n"
+        result += "\n"
+        return result
+
     async def list(self, filters: Dict) -> List[TextContent]:
         teams = await self.client.get_teams()
 
         result = f"Found {len(teams)} teams\\n\\n"
         for team in teams:
-            result += f"ID: {team.id} - {team.name}\\n"
-            if hasattr(team, "color") and team.color:
-                result += f"  Color: {team.color}\\n"
-            if hasattr(team, "members") and team.members:
-                result += f"  Members: {len(team.members)}\\n"
-            result += "\\n"
+            result += self.serialize_team(team)
 
         return [TextContent(type="text", text=result)]
 
     async def get(self, id: int) -> List[TextContent]:
         team = await self.client.get_team(id)
 
-        result = f"Team: {team.name} (ID: {team.id})\\n"
-        if hasattr(team, "color") and team.color:
-            result += f"Color: {team.color}\\n"
-
-        if hasattr(team, "members") and team.members:
-            result += f"\\nMembers ({len(team.members)}):\\n"
-            for member in team.members:
-                teamlead = " (Team Lead)" if member.teamlead else ""
-                result += f"  - {member.user.username}{teamlead}\\n"
+        result = self.serialize_team(team)
 
         return [TextContent(type="text", text=result)]
 
@@ -620,7 +608,7 @@ class TeamEntityHandler(BaseEntityHandler):
         team = await self.client.create_team(form)
         return [TextContent(
             type="text",
-            text=f"Created team '{team.name}' with ID {team.id}"
+            text="Created " + self.serialize_team(team)
         )]
 
     async def update(self, id: int, data: Dict) -> List[TextContent]:
@@ -628,7 +616,7 @@ class TeamEntityHandler(BaseEntityHandler):
         team = await self.client.update_team(id, form)
         return [TextContent(
             type="text",
-            text=f"Updated team '{team.name}' (ID: {team.id})"
+            text="Updated " + self.serialize_team(team)
         )]
 
     async def delete(self, id: int) -> List[TextContent]:
@@ -638,6 +626,15 @@ class TeamEntityHandler(BaseEntityHandler):
 
 class TagEntityHandler(BaseEntityHandler):
     """Handler for tag operations."""
+
+    def serialize_tag(self, tag) -> str:
+        result = f"Tag: {tag.name} (ID: {tag.id})\n"
+        visible_str = "Visible" if getattr(tag, 'visible', True) else "Hidden"
+        result += f"Status: {visible_str}\n"
+        if hasattr(tag, 'color') and tag.color:
+            result += f"Color: {tag.color}\n"
+        result += "\n"
+        return result
 
     async def list(self, filters: Dict) -> List[TextContent]:
         # Get all tags and filter locally since API doesn't support name filter
@@ -649,12 +646,7 @@ class TagEntityHandler(BaseEntityHandler):
 
         result = f"Found {len(tags)} tags\\n\\n"
         for tag in tags:
-            visible_str = "Visible" if tag.visible else "Hidden"
-            result += f"ID: {tag.id} - {tag.name}\\n"
-            result += f"  Status: {visible_str}\\n"
-            if hasattr(tag, "color") and tag.color:
-                result += f"  Color: {tag.color}\\n"
-            result += "\\n"
+            result += self.serialize_tag(tag)
 
         return [TextContent(type="text", text=result)]
 
@@ -669,7 +661,7 @@ class TagEntityHandler(BaseEntityHandler):
         tag = await self.client.create_tag(form)
         return [TextContent(
             type="text",
-            text=f"Created tag '{tag.name}' with ID {tag.id}"
+            text="Created " + self.serialize_tag(tag)
         )]
 
     async def update(self, id: int, data: Dict) -> List[TextContent]:
