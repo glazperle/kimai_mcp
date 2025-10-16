@@ -2,6 +2,7 @@
 
 import os
 from typing import Dict, List, Optional, Any, Union, Tuple
+import logging
 from datetime import datetime
 import httpx
 from pydantic import ValidationError
@@ -21,6 +22,8 @@ from .models import (
     Plugin, CalendarEvent,
     Rate, RateForm, MetaField, MetaFieldForm
 )
+
+logger = logging.getLogger(__name__)
 
 
 class KimaiAPIError(Exception):
@@ -98,9 +101,16 @@ class KimaiClient:
                 message = error_data.get('message', str(e))
             except:
                 message = str(e)
-            
+
+            logging.error(
+                f"API error: {message} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
+            )
+
             raise KimaiAPIError(message, e.response.status_code)
         except httpx.RequestError as e:
+            logging.error(
+                f"API error: {str(e)} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
+            )
             raise KimaiAPIError(f"Request failed: {str(e)}")
     
     # Version and status endpoints
