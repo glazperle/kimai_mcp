@@ -97,18 +97,12 @@ def entity_tool() -> Tool:
                             "data": {
                                 "type": "object",
                                 "description": "Schema for creating/editing customer entities.",
-                                "required": [
-                                    "name",
-                                    "country",
-                                    "currency",
-                                    "timezone"
-                                ],
                                 "properties": {
                                     "name": {
                                         "type": "string",
                                         "minLength": 2,
                                         "maxLength": 150,
-                                        "description": "Customer name"
+                                        "description": "Customer name, required for create action."
                                     },
                                     "number": {
                                         "type": "string",
@@ -151,14 +145,14 @@ def entity_tool() -> Tool:
                                     "country": {
                                         "type": "string",
                                         "maxLength": 2,
-                                        "description": "Two-letter ISO country code (e.g., 'US', 'DE')",
+                                        "description": "Two-letter ISO country code (e.g., 'US', 'DE'), required for create action.",
                                         "pattern": "^[A-Z]{2}$"
                                     },
                                     "currency": {
                                         "type": "string",
                                         "maxLength": 3,
                                         "default": "EUR",
-                                        "description": "Three-letter ISO currency code (e.g., 'EUR', 'USD')",
+                                        "description": "Three-letter ISO currency code (e.g., 'EUR', 'USD'), required for create action. Default: 'EUR'.",
                                         "pattern": "^[A-Z]{3}$"
                                     },
                                     "phone": {
@@ -191,7 +185,7 @@ def entity_tool() -> Tool:
                                     "timezone": {
                                         "type": "string",
                                         "maxLength": 64,
-                                        "description": "Timezone identifier (e.g., 'Europe/Berlin', 'America/New_York')"
+                                        "description": "Timezone identifier (e.g., 'Europe/Berlin', 'America/New_York'), required for create action."
                                     },
                                     "invoiceText": {
                                         "type": "string",
@@ -220,15 +214,11 @@ def entity_tool() -> Tool:
                         "properties": {
                             "data": {
                                 "type": "object",
-                                "description": "Data structure required for creating or updating a 'project' entity. This mirrors the ProjectEditForm API definition.",
-                                "required": [
-                                    "name",
-                                    "customer"
-                                ],
+                                "description": "Data structure required for creating or updating a 'project' entity.",
                                 "properties": {
                                     "name": {
                                         "type": "string",
-                                        "description": "The official or internal name of the project.",
+                                        "description": "The official or internal name of the project, required for create action.",
                                         "minLength": 2,
                                         "maxLength": 150
                                     },
@@ -266,7 +256,7 @@ def entity_tool() -> Tool:
                                         "description": "The projected or actual end date of the project (YYYY-MM-DD). Timesheets cannot be recorded after this date."
                                     },
                                     "customer": {
-                                        "description": "The unique ID of the customer to whom this project belongs.",
+                                        "description": "The unique ID of the customer to whom this project belongs, required for create action.",
                                         "type": "integer"
                                     },
                                     "color": {
@@ -428,19 +418,19 @@ class ProjectEntityHandler(BaseEntityHandler):
     """Handler for project operations."""
 
     def serialize_project(self, project) -> str:
-        result = f"Project: {project.name} (ID: {project.id})\n"
-        result += f"Customer ID: {project.customer if project.customer else 'None'}\n"
-        result += f"Status: {'Active' if project.visible else 'Inactive'}\n"
-        result += f"Billable: {'Yes' if project.billable else 'No'}\n"
+        result = f"Project: {project.name} (ID: {project.id})\\n"
+        result += f"Customer ID: {project.customer if project.customer else 'None'}\\n"
+        result += f"Status: {'Active' if project.visible else 'Inactive'}\\n"
+        result += f"Billable: {'Yes' if project.billable else 'No'}\\n"
         if hasattr(project, 'global_activities'):
-            result += f"Global Activities: {'Yes' if project.global_activities else 'No'}\n"
+            result += f"Global Activities: {'Yes' if project.global_activities else 'No'}\\n"
         if getattr(project, 'number', None):
-            result += f"Number: {project.number}\n"
+            result += f"Number: {project.number}\\n"
         if getattr(project, 'color', None):
-            result += f"Color: {project.color}\n"
+            result += f"Color: {project.color}\\n"
         if getattr(project, 'comment', None):
-            result += f"Comment: {project.comment}\n"
-        result += "\n"
+            result += f"Comment: {project.comment}\\n"
+        result += "\\n"
         return result
 
     async def list(self, filters: Dict) -> List[TextContent]:
@@ -452,7 +442,7 @@ class ProjectEntityHandler(BaseEntityHandler):
         )
         projects = await self.client.get_projects(project_filter)
 
-        result = f"Found {len(projects)} projects\\n\\n"
+        result = f"Found {len(projects)} projects\\n\\\n"
         for project in projects:
             result += self.serialize_project(project)
 
@@ -466,6 +456,14 @@ class ProjectEntityHandler(BaseEntityHandler):
         return [TextContent(type="text", text=result)]
 
     async def create(self, data: Dict) -> List[TextContent]:
+        # Validate required fields explicitly to provide a clear error before calling the API
+        required_fields = ["name", "customer"]
+        missing = [field for field in required_fields if not data.get(field)]
+        if missing:
+            return [TextContent(
+                type="text",
+                text=f"Error: Missing required project fields: {', '.join(missing)}"
+            )]
         form = ProjectEditForm(**data)
         project = await self.client.create_project(form)
         return [TextContent(
@@ -490,14 +488,14 @@ class ActivityEntityHandler(BaseEntityHandler):
     """Handler for activity operations."""
 
     def serialize_activity(self, activity) -> str:
-        result = f"Activity: {activity.name} (ID: {activity.id})\n"
-        result += f"Status: {'Active' if activity.visible else 'Inactive'}\n"
-        result += f"Billable: {'Yes' if activity.billable else 'No'}\n"
+        result = f"Activity: {activity.name} (ID: {activity.id})\\n"
+        result += f"Status: {'Active' if activity.visible else 'Inactive'}\\n"
+        result += f"Billable: {'Yes' if activity.billable else 'No'}\\n"
         if hasattr(activity, 'global'):
-            result += f"Global: {'Yes' if getattr(activity, 'global', False) else 'No'}\n"
+            result += f"Global: {'Yes' if getattr(activity, 'global', False) else 'No'}\\n"
         if getattr(activity, 'comment', None):
-            result += f"Comment: {activity.comment}\n"
-        result += "\n"
+            result += f"Comment: {activity.comment}\\n"
+        result += "\\n"
         return result
 
     async def list(self, filters: Dict) -> List[TextContent]:
@@ -511,7 +509,7 @@ class ActivityEntityHandler(BaseEntityHandler):
         )
         activities = await self.client.get_activities(activity_filter)
 
-        result = f"Found {len(activities)} activities\\n\\n"
+        result = f"Found {len(activities)} activities\\n\\\n"
         for activity in activities:
             result += self.serialize_activity(activity)
 
@@ -553,11 +551,33 @@ class CustomerEntityHandler(BaseEntityHandler):
         result += f"Status: {'Active' if customer.visible else 'Inactive'}\\n"
         result += f"Billable: {'Yes' if customer.billable else 'No'}\\n"
 
-        if customer.number:
+        # Optional core fields
+        if getattr(customer, 'country', None):
+            result += f"Country: {customer.country}\\n"
+        if getattr(customer, 'currency', None):
+            result += f"Currency: {customer.currency}\\n"
+        if getattr(customer, 'timezone', None):
+            result += f"Timezone: {customer.timezone}\\n"
+
+        # Optional identifiers and visuals
+        if getattr(customer, 'number', None):
             result += f"Number: {customer.number}\\n"
-        if customer.color:
+        if getattr(customer, 'color', None):
             result += f"Color: {customer.color}\\n"
-        if customer.comment:
+
+        # Optional contact/company details
+        if getattr(customer, 'phone', None):
+            result += f"Phone: {customer.phone}\\n"
+        if getattr(customer, 'fax', None):
+            result += f"Fax: {customer.fax}\\n"
+        if getattr(customer, 'mobile', None):
+            result += f"Mobile: {customer.mobile}\\n"
+        if getattr(customer, 'homepage', None):
+            result += f"Homepage: {customer.homepage}\\n"
+        if getattr(customer, 'company', None):
+            result += f"Company: {customer.company}\\n"
+
+        if getattr(customer, 'comment', None):
             result += f"Comment: {customer.comment}\\n"
         result += "\\n"
 
@@ -572,7 +592,7 @@ class CustomerEntityHandler(BaseEntityHandler):
         )
         customers = await self.client.get_customers(customer_filter)
 
-        result = f"Found {len(customers)} customers\\n\\n"
+        result = f"Found {len(customers)} customers\\n\\\n"
         for customer in customers:
             result += self.serialize_customer(customer)
 
@@ -586,6 +606,15 @@ class CustomerEntityHandler(BaseEntityHandler):
         return [TextContent(type="text", text=result)]
 
     async def create(self, data: Dict) -> List[TextContent]:
+        # Validate required fields explicitly to provide a clear error before calling the API
+        required_fields = ["name", "country", "currency", "timezone"]
+        missing = [field for field in required_fields if not data.get(field)]
+        if missing:
+            return [TextContent(
+                type="text",
+                text=f"Error: Missing required customer fields: {', '.join(missing)}"
+            )]
+
         form = CustomerEditForm(**data)
         customer = await self.client.create_customer(form)
         return [TextContent(
@@ -610,13 +639,13 @@ class UserEntityHandler(BaseEntityHandler):
     """Handler for user operations."""
 
     def serialize_user(self, user) -> str:
-        result = f"User: {user.username} (ID: {user.id})\n"
-        result += f"Name: {user.alias or 'Not set'}\n"
-        result += f"Title: {user.title or 'Not set'}\n"
-        result += f"Status: {'Active' if user.enabled else 'Inactive'}\n"
+        result = f"User: {user.username} (ID: {user.id})\\n"
+        result += f"Name: {user.alias or 'Not set'}\\n"
+        result += f"Title: {user.title or 'Not set'}\\n"
+        result += f"Status: {'Active' if user.enabled else 'Inactive'}\\n"
         if getattr(user, 'color', None):
-            result += f"Color: {user.color}\n"
-        result += "\n"
+            result += f"Color: {user.color}\\n"
+        result += "\\n"
         return result
 
     async def list(self, filters: Dict) -> List[TextContent]:
@@ -625,7 +654,7 @@ class UserEntityHandler(BaseEntityHandler):
             term=filters.get("term")
         )
 
-        result = f"Found {len(users)} users\\n\\n"
+        result = f"Found {len(users)} users\\n\\\n"
         for user in users:
             result += self.serialize_user(user)
 
@@ -673,23 +702,23 @@ class TeamEntityHandler(BaseEntityHandler):
     """Handler for team operations."""
 
     def serialize_team(self, team) -> str:
-        result = f"Team: {team.name} (ID: {team.id})\n"
+        result = f"Team: {team.name} (ID: {team.id})\\n"
         if hasattr(team, 'color') and team.color:
-            result += f"Color: {team.color}\n"
+            result += f"Color: {team.color}\\n"
         if hasattr(team, 'members') and team.members:
-            result += f"\nMembers ({len(team.members)}):\n"
+            result += f"\nMembers ({len(team.members)}):\\n"
             for member in team.members:
                 teamlead = " (Team Lead)" if getattr(member, 'teamlead', False) else ""
                 username = getattr(getattr(member, 'user', None), 'username', None) or getattr(member, 'username',
                                                                                                'Unknown')
-                result += f"  - {username}{teamlead}\n"
-        result += "\n"
+                result += f"  - {username}{teamlead}\\n"
+        result += "\\n"
         return result
 
     async def list(self, filters: Dict) -> List[TextContent]:
         teams = await self.client.get_teams()
 
-        result = f"Found {len(teams)} teams\\n\\n"
+        result = f"Found {len(teams)} teams\\n\\\n"
         for team in teams:
             result += self.serialize_team(team)
 
@@ -727,12 +756,12 @@ class TagEntityHandler(BaseEntityHandler):
     """Handler for tag operations."""
 
     def serialize_tag(self, tag) -> str:
-        result = f"Tag: {tag.name} (ID: {tag.id})\n"
+        result = f"Tag: {tag.name} (ID: {tag.id})\\n"
         visible_str = "Visible" if getattr(tag, 'visible', True) else "Hidden"
-        result += f"Status: {visible_str}\n"
+        result += f"Status: {visible_str}\\n"
         if hasattr(tag, 'color') and tag.color:
-            result += f"Color: {tag.color}\n"
-        result += "\n"
+            result += f"Color: {tag.color}\\n"
+        result += "\\n"
         return result
 
     async def list(self, filters: Dict) -> List[TextContent]:
@@ -743,7 +772,7 @@ class TagEntityHandler(BaseEntityHandler):
         else:
             tags = all_tags
 
-        result = f"Found {len(tags)} tags\\n\\n"
+        result = f"Found {len(tags)} tags\\n\\\n"
         for tag in tags:
             result += self.serialize_tag(tag)
 
@@ -787,32 +816,32 @@ class InvoiceEntityHandler(BaseEntityHandler):
             size=filters.get("size", 50)
         )
 
-        result = f"Found {len(invoices)} invoices\\n\\n"
+        result = f"Found {len(invoices)} invoices\\n\\\n"
         for invoice in invoices:
-            result += f"ID: {invoice.id} - {invoice.invoiceNumber}\\n"
-            result += f"  Customer: {invoice.customer.name if invoice.customer else 'Unknown'}\\n"
-            result += f"  Status: {invoice.status}\\n"
-            result += f"  Total: {invoice.total}\\n"
-            result += f"  Date: {invoice.createdAt}\\n"
-            result += "\\n"
+            result += f"ID: {invoice.id} - {invoice.invoiceNumber}\\\n"
+            result += f"  Customer: {invoice.customer.name if invoice.customer else 'Unknown'}\\\n"
+            result += f"  Status: {invoice.status}\\\n"
+            result += f"  Total: {invoice.total}\\\n"
+            result += f"  Date: {invoice.createdAt}\\\n"
+            result += "\\\n"
 
         return [TextContent(type="text", text=result)]
 
     async def get(self, id: int) -> List[TextContent]:
         invoice = await self.client.get_invoice(id)
 
-        result = f"Invoice: {invoice.invoiceNumber} (ID: {invoice.id})\\n"
-        result += f"Customer: {invoice.customer.name if invoice.customer else 'Unknown'}\\n"
-        result += f"Status: {invoice.status}\\n"
-        result += f"Total: {invoice.total}\\n"
-        result += f"Subtotal: {invoice.subtotal}\\n"
-        result += f"Tax: {invoice.tax}\\n"
-        result += f"Created: {invoice.createdAt}\\n"
+        result = f"Invoice: {invoice.invoiceNumber} (ID: {invoice.id})\\\n"
+        result += f"Customer: {invoice.customer.name if invoice.customer else 'Unknown'}\\\n"
+        result += f"Status: {invoice.status}\\\n"
+        result += f"Total: {invoice.total}\\\n"
+        result += f"Subtotal: {invoice.subtotal}\\\n"
+        result += f"Tax: {invoice.tax}\\\n"
+        result += f"Created: {invoice.createdAt}\\\n"
 
         if hasattr(invoice, "dueDate") and invoice.dueDate:
-            result += f"Due Date: {invoice.dueDate}\\n"
+            result += f"Due Date: {invoice.dueDate}\\\n"
         if hasattr(invoice, "comment") and invoice.comment:
-            result += f"Comment: {invoice.comment}\\n"
+            result += f"Comment: {invoice.comment}\\\n"
 
         return [TextContent(type="text", text=result)]
 
@@ -844,13 +873,13 @@ class HolidayEntityHandler(BaseEntityHandler):
             month=filters.get("month")
         )
 
-        result = f"Found {len(holidays)} holidays\\n\\n"
+        result = f"Found {len(holidays)} holidays\\n\\\n"
         for holiday in holidays:
-            result += f"ID: {holiday.id} - {holiday.name}\\n"
-            result += f"  Date: {holiday.date}\\n"
+            result += f"ID: {holiday.id} - {holiday.name}\\\n"
+            result += f"  Date: {holiday.date}\\\n"
             if hasattr(holiday, "type") and holiday.type:
-                result += f"  Type: {holiday.type}\\n"
-            result += "\\n"
+                result += f"  Type: {holiday.type}\\\n"
+            result += "\\\n"
 
         return [TextContent(type="text", text=result)]
 
