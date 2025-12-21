@@ -189,26 +189,23 @@ When adding new MCP tools:
 kimai_mcp/
 ├── src/kimai_mcp/
 │   ├── __init__.py
-│   ├── __main__.py      # Entry point for python -m kimai_mcp
-│   ├── server.py        # Main MCP server implementation
-│   ├── client.py        # Kimai API client wrapper
-│   ├── models.py        # Pydantic data models
-│   └── tools/           # MCP tool implementations
+│   ├── __main__.py              # Entry point for python -m kimai_mcp
+│   ├── server.py                # Main MCP server implementation
+│   ├── client.py                # Kimai API client wrapper
+│   ├── models.py                # Pydantic data models
+│   └── tools/                   # MCP tool implementations
 │       ├── __init__.py
-│       ├── timesheet.py # Timesheet management tools
-│       ├── project.py   # Project management tools
-│       ├── activity.py  # Activity management tools
-│       ├── customer.py  # Customer management tools
-│       ├── user.py      # User management tools
-│       ├── team.py      # Team management tools
-│       ├── absence.py   # Absence management tools
-│       ├── tag.py       # Tag management tools
-│       ├── invoice.py   # Invoice query tools
-│       ├── calendar.py  # Calendar integration tools
-│       └── holiday.py   # Public holiday tools
-├── tests/               # Test suite
-├── examples/            # Usage examples
-└── docs/               # Documentation
+│       ├── entity_manager.py    # Universal CRUD for all entity types
+│       ├── timesheet_consolidated.py  # Timesheet management
+│       ├── rate_manager.py      # Rate management across entities
+│       ├── team_access_manager.py     # Team member/permission management
+│       ├── absence_manager.py   # Absence workflow management
+│       ├── calendar_meta.py     # Calendar and meta field tools
+│       ├── project_analysis.py  # Project analytics
+│       └── config_info.py       # Server configuration tools
+├── tests/                       # Test suite
+├── examples/                    # Usage examples
+└── pyproject.toml              # Project configuration
 ```
 
 ### Key Components
