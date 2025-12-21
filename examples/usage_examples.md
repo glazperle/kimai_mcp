@@ -486,6 +486,61 @@ Parameters: {
 }
 ```
 
+## Server Configuration
+
+### Get All Configuration
+
+```
+Tool: config
+Parameters: {
+  "type": "all"
+}
+```
+
+### Get Timesheet Configuration
+
+```
+Tool: config
+Parameters: {
+  "type": "timesheet"
+}
+```
+
+Returns tracking mode, default begin time, active entries limit, and overlap settings.
+
+### Get Available Colors
+
+```
+Tool: config
+Parameters: {
+  "type": "colors"
+}
+```
+
+Returns configured color codes for UI elements.
+
+### Get Installed Plugins
+
+```
+Tool: config
+Parameters: {
+  "type": "plugins"
+}
+```
+
+Returns list of installed Kimai plugins with their versions.
+
+### Get Kimai Version
+
+```
+Tool: config
+Parameters: {
+  "type": "version"
+}
+```
+
+Returns the Kimai instance version information.
+
 ## Tips for AI Assistant Interactions
 
 1. **Be specific with dates**: Always use ISO format (YYYY-MM-DDTHH:MM:SS) for date/time parameters

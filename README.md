@@ -29,6 +29,7 @@ python -m kimai_mcp.server --kimai-url=https://your-kimai.com --kimai-token=your
 8. **Meta Tool** - Custom field management across entities
 9. **User Current Tool** - Current user information
 10. **Project Analysis Tool** - Advanced project analytics
+11. **Config Tool** - Server configuration (timesheet settings, color codes, plugins, version info)
 
 ### Complete Kimai Integration
 - **Timesheet Management** - Create, update, delete, start/stop timers, view active timers
@@ -440,7 +441,8 @@ kimai_mcp/
 │   │       ├── team_access_manager.py
 │   │       ├── absence_manager.py
 │   │       ├── calendar_meta.py
-│   │       └── project_analysis.py
+│   │       ├── project_analysis.py
+│   │       └── config_info.py
 ├── tests/
 ├── README.md
 ├── pyproject.toml
