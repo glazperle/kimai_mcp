@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -19,11 +20,20 @@ class Customer(BaseModel):
     """Customer model."""
     id: int
     name: str
+    country: Optional[str] = None
+    currency: Optional[str] = None
+    timezone: Optional[str] = None
     number: Optional[str] = None
     comment: Optional[str] = None
     visible: bool = True
     billable: bool = True
     color: Optional[str] = None
+
+    phone: Optional[str] = None
+    fax: Optional[str] = None
+    mobile: Optional[str] = None
+    homepage: Optional[str] = None
+    company: Optional[str] = None
 
 
 class Project(BaseModel):
@@ -75,8 +85,8 @@ class TimesheetEditForm(BaseModel):
     """Timesheet edit form for creating/updating timesheets."""
     begin: Optional[datetime] = None
     end: Optional[datetime] = None
-    project: int
-    activity: int
+    project: Optional[int] = None # Required for creation
+    activity: Optional[int] = None  # Required for creation
     description: Optional[str] = None
     fixed_rate: Optional[float] = Field(None, alias="fixedRate")
     hourly_rate: Optional[float] = Field(None, alias="hourlyRate")
@@ -101,14 +111,14 @@ class TimesheetFilter(BaseModel):
     tags: Optional[List[str]] = None
     order_by: Optional[str] = Field(None, alias="orderBy")  # id, begin, end, rate
     order: Optional[str] = None  # ASC, DESC
-    begin: Optional[str] = None  # HTML5 date format (YYYY-MM-DD)
-    end: Optional[str] = None    # HTML5 date format (YYYY-MM-DD)
+    begin: Optional[str | datetime] = None  # HTML5 date format (YYYY-MM-DD)
+    end: Optional[str | datetime] = None  # HTML5 date format (YYYY-MM-DD)
     exported: Optional[int] = None  # 0=not exported, 1=exported
     active: Optional[int] = None  # 0=stopped, 1=active
     billable: Optional[int] = None  # 0=non-billable, 1=billable
     full: Optional[str] = None  # 0|1|false|true
     term: Optional[str] = None
-    modified_after: Optional[str] = Field(None, alias="modified_after")  # HTML5 date format
+    modified_after: Optional[str | datetime] = Field(None, alias="modified_after")  # HTML5 date format
 
 
 class ProjectFilter(BaseModel):
@@ -117,7 +127,7 @@ class ProjectFilter(BaseModel):
     customers: Optional[List[int]] = None
     visible: Optional[int] = 1  # 1=visible, 2=hidden, 3=both
     start: Optional[str] = None  # HTML5 date format (YYYY-MM-DD)
-    end: Optional[str] = None    # HTML5 date format (YYYY-MM-DD)
+    end: Optional[str] = None  # HTML5 date format (YYYY-MM-DD)
     ignore_dates: Optional[str] = Field(None, alias="ignoreDates")
     global_activities: Optional[str] = Field(None, alias="globalActivities")  # 0|1
     order: Optional[str] = None  # ASC, DESC
@@ -167,7 +177,8 @@ class AbsenceForm(BaseModel):
     user: int
     date: str  # Date format YYYY-MM-DD
     end: Optional[str] = None  # End date for multi-day absences
-    type: Literal["holiday", "time_off", "sickness", "sickness_child", "other", "parental", "unpaid_vacation"] = "other"  # Absence types from API
+    type: Literal[
+        "holiday", "time_off", "sickness", "sickness_child", "other", "parental", "unpaid_vacation"] = "other"  # Absence types from API
 
 
 class Absence(BaseModel):
@@ -188,7 +199,7 @@ class AbsenceFilter(BaseModel):
     """Filters for absence queries."""
     user: Optional[str] = None
     begin: Optional[str] = None  # HTML5 date format (YYYY-MM-DD)
-    end: Optional[str] = None    # HTML5 date format (YYYY-MM-DD)
+    end: Optional[str] = None  # HTML5 date format (YYYY-MM-DD)
     status: Optional[str] = None  # approved, open, all
 
 
@@ -442,7 +453,10 @@ class ActivityExtended(Activity):
 
 class CustomerEditForm(BaseModel):
     """Form for creating/editing customers."""
-    name: str
+    name: Optional[str] = None  # Required for creation
+    country: Optional[str] = None  # Required for creation
+    currency: Optional[str] = None  # Required for creation
+    timezone: Optional[str] = None  # Required for creation
     number: Optional[str] = None
     comment: Optional[str] = None
     visible: Optional[bool] = None
@@ -450,8 +464,6 @@ class CustomerEditForm(BaseModel):
     budget: Optional[float] = None
     time_budget: Optional[int] = Field(None, alias="timeBudget")
     color: Optional[str] = None
-    country: Optional[str] = None
-    currency: Optional[str] = None
     phone: Optional[str] = None
     fax: Optional[str] = None
     mobile: Optional[str] = None
@@ -465,8 +477,8 @@ class CustomerEditForm(BaseModel):
 
 class ProjectEditForm(BaseModel):
     """Form for creating/editing projects."""
-    name: str
-    customer: int
+    name: Optional[str] = None  # Required for creation
+    customer: Optional[int] = None  # Required for creation
     comment: Optional[str] = None
     visible: Optional[bool] = None
     billable: Optional[bool] = None

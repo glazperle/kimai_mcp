@@ -1,7 +1,8 @@
 """Kimai API client wrapper."""
 
 import os
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
+import logging
 from datetime import datetime
 import httpx
 from pydantic import ValidationError
@@ -22,12 +23,16 @@ from .models import (
     Rate, RateForm, MetaField, MetaFieldForm
 )
 
+logger = logging.getLogger(__name__)
+
 
 class KimaiAPIError(Exception):
     """Kimai API error."""
-    def __init__(self, message: str, status_code: Optional[int] = None):
+
+    def __init__(self, message: str, status_code: Optional[int] = None, details: Optional[Any] = None):
         self.message = message
         self.status_code = status_code
+        self.details = details
         super().__init__(self.message)
 
 
@@ -93,14 +98,47 @@ class KimaiClient:
             
         except httpx.HTTPStatusError as e:
             # Try to parse error response
+            error_details: Optional[Any] = None
             try:
                 error_data = e.response.json()
+                # Extract message
                 message = error_data.get('message', str(e))
-            except:
+
+                # Helper to prune empty dicts recursively
+                def _prune_empty_dicts(obj: Any) -> Any:
+                    if isinstance(obj, dict):
+                        # First prune children
+                        pruned = {k: _prune_empty_dicts(v) for k, v in obj.items()}
+                        # Then drop keys where value is an empty dict
+                        return {k: v for k, v in pruned.items() if not (isinstance(v, dict) and len(v) == 0)}
+                    elif isinstance(obj, list):
+                        return [_prune_empty_dicts(v) for v in obj]
+                    else:
+                        return obj
+
+                # Extract errors if present and prune empty dicts
+                if isinstance(error_data, dict):
+                    if 'errors' in error_data:
+                        error_details = _prune_empty_dicts(error_data['errors'])
+                    else:
+                        # Fallback to full payload (pruned) for context
+                        error_details = _prune_empty_dicts(error_data)
+                else:
+                    error_details = None
+            except Exception:
                 message = str(e)
-            
-            raise KimaiAPIError(message, e.response.status_code)
+                error_details = None
+
+            logging.error(
+                f"API error: {message} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
+                + (f" | details: {error_details}" if error_details else "")
+            )
+
+            raise KimaiAPIError(message, e.response.status_code, details=error_details)
         except httpx.RequestError as e:
+            logging.error(
+                f"API error: {str(e)} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
+            )
             raise KimaiAPIError(f"Request failed: {str(e)}")
     
     # Version and status endpoints
@@ -138,11 +176,16 @@ class KimaiClient:
     
     # Timesheet endpoints
     
-    async def get_timesheets(self, filters: Optional[TimesheetFilter] = None) -> List[TimesheetEntity]:
+    async def get_timesheets(self, filters: Optional[TimesheetFilter] = None) -> Tuple[List[TimesheetEntity], bool, Optional[int]]:
         """Get list of timesheets.
         
         Args:
             filters: Timesheet filters
+
+        Returns:
+            * List of timesheets and a flag indicating if there are more results to fetch
+            * Did we fetched all timesheets?
+            * The last page fetched
         """
         params = {}
         should_paginate_all = False
@@ -175,17 +218,20 @@ class KimaiClient:
             
             # Convert datetime to string format or use string as-is
             if filters.begin:
-                if hasattr(filters.begin, 'isoformat'):
-                    params['begin'] = filters.begin.isoformat()
+                if isinstance(filters.begin, datetime):
+                    params['begin'] = filters.begin.replace(microsecond=0).isoformat()
                 else:
                     params['begin'] = filters.begin
             if filters.end:
-                if hasattr(filters.end, 'isoformat'):
-                    params['end'] = filters.end.isoformat()
+                if isinstance(filters.end, datetime):
+                    params['end'] = filters.end.replace(microsecond=0).isoformat()
                 else:
                     params['end'] = filters.end
             if filters.modified_after:
-                params['modified_after'] = filters.modified_after.isoformat()
+                if isinstance(filters.modified_after, datetime):
+                    params['modified_after'] = filters.modified_after.replace(microsecond=0).isoformat()
+                else:
+                    params['modified_after'] = filters.modified_after
             
             # Handle array parameters
             if filters.users:
@@ -207,12 +253,22 @@ class KimaiClient:
         # If not auto-paginating, just return single page
         if not should_paginate_all:
             data = await self._request("GET", "/timesheets", params=params)
-            return [TimesheetEntity(**item) for item in data]
+            if filters and filters.size:
+                if filters.size > len(data):
+                    fetched_all = True
+                else:
+                    fetched_all = False
+            elif len(data) < 50:
+                fetched_all = True
+            else:
+                fetched_all = False
+            return [TimesheetEntity(**item) for item in data], fetched_all, filters.page if filters and filters.page else 1
         
         # Auto-pagination logic
         all_timesheets = []
         page = 1
         page_size = filters.size if filters and filters.size else 50
+        fetched_all = True
         
         while True:
             # Set pagination params
@@ -238,9 +294,10 @@ class KimaiClient:
             # Safety limit to prevent infinite loops
             if page > 100:
                 # Log warning or raise exception
+                fetched_all = False
                 break
         
-        return all_timesheets
+        return all_timesheets, fetched_all, page
     
     async def get_active_timesheets(self) -> List[TimesheetEntity]:
         """Get active timesheets for current user."""
@@ -276,9 +333,9 @@ class KimaiClient:
         
         # Convert datetime to ISO format
         if timesheet.begin:
-            payload['begin'] = timesheet.begin.isoformat()
+            payload['begin'] = timesheet.begin.replace(microsecond=0).isoformat()
         if timesheet.end:
-            payload['end'] = timesheet.end.isoformat()
+            payload['end'] = timesheet.end.replace(microsecond=0).isoformat()
         
         data = await self._request("POST", "/timesheets", json=payload)
         return TimesheetEntity(**data)
@@ -294,9 +351,9 @@ class KimaiClient:
         
         # Convert datetime to ISO format
         if timesheet.begin:
-            payload['begin'] = timesheet.begin.isoformat()
+            payload['begin'] = timesheet.begin.replace(microsecond=0).isoformat()
         if timesheet.end:
-            payload['end'] = timesheet.end.isoformat()
+            payload['end'] = timesheet.end.replace(microsecond=0).isoformat()
         
         data = await self._request("PATCH", f"/timesheets/{timesheet_id}", json=payload)
         return TimesheetEntity(**data)
@@ -322,7 +379,7 @@ class KimaiClient:
         if copy_all:
             payload['copy'] = 'all'
         if begin:
-            payload['begin'] = begin.isoformat()
+            payload['begin'] = begin.replace(microsecond=0).isoformat()
         
         data = await self._request("PATCH", f"/timesheets/{timesheet_id}/restart", json=payload)
         return TimesheetEntity(**data)
@@ -355,7 +412,7 @@ class KimaiClient:
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
             
-            # Convert datetime to string format
+            # Convert date to string format
             if filters.start:
                 params['start'] = filters.start.isoformat()
             if filters.end:
@@ -391,7 +448,7 @@ class KimaiClient:
         """Update an existing project."""
         payload = project.model_dump(exclude_none=True, by_alias=True)
         
-        # Convert datetime to ISO format
+        # Convert date to ISO format
         if project.start:
             payload['start'] = project.start.isoformat()
         if project.end:
@@ -816,9 +873,9 @@ class KimaiClient:
             
             # Convert datetime to string format
             if filters.begin:
-                params['begin'] = filters.begin.isoformat()
+                params['begin'] = filters.begin.replace(microsecond=0).isoformat()
             if filters.end:
-                params['end'] = filters.end.isoformat()
+                params['end'] = filters.end.replace(microsecond=0).isoformat()
             
             # Handle array parameters
             if filters.customers:

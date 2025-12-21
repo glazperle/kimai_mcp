@@ -1,7 +1,7 @@
 """Consolidated Timesheet tools for all timesheet operations."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
@@ -13,7 +13,7 @@ def timesheet_tool() -> Tool:
     """Define the consolidated timesheet management tool."""
     return Tool(
         name="timesheet",
-        description="Consolidated timesheet management tool for list, get, create, update, delete, duplicate, and export operations. Replaces 9 individual timesheet tools.",
+        description="Consolidated timesheet management tool for list, get, create, update, delete, duplicate, and export operations.",
         inputSchema={
             "type": "object",
             "required": ["action"],
@@ -21,7 +21,17 @@ def timesheet_tool() -> Tool:
                 "action": {
                     "type": "string",
                     "enum": ["list", "get", "create", "update", "delete", "duplicate", "export_toggle", "meta_update", "user_guide"],
-                    "description": "The action to perform"
+                    "description": """The action to perform:
+                    - list: List timesheets
+                    - create: Create a new timesheet
+                    - get: Get a timesheet by ID
+                    - update: Update a timesheet by ID
+                    - delete: Delete a timesheet by ID
+                    - duplicate: Duplicate a timesheet by ID
+                    - export_toggle: Toggle export status (bool) for a timesheet by ID
+                    - meta_update: Update meta fields for a timesheet by ID
+                    - user_guide: Gives information about how to limit users when listing timesheets and lists available users.
+                    """
                 },
                 "id": {
                     "type": "integer",
@@ -43,13 +53,21 @@ def timesheet_tool() -> Tool:
                         "project": {"type": "integer"},
                         "activity": {"type": "integer"},
                         "customer": {"type": "integer"},
-                        "begin": {"type": "string", "format": "date-time"},
-                        "end": {"type": "string", "format": "date-time"},
+                        "begin": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00)."
+                        },
+                        "end": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00)."
+                        },
                         "exported": {"type": "integer", "enum": [0, 1]},
                         "active": {"type": "integer", "enum": [0, 1]},
                         "billable": {"type": "integer", "enum": [0, 1]},
-                        "page": {"type": "integer"},
-                        "size": {"type": "integer"},
+                        "page": {"type": "integer", "default": 1, "description": "Page number for pagination. Default is 1."},
+                        "size": {"type": "integer", "default": 50, "description": "Number of records per page. Default is 50."},
                         "term": {"type": "string"},
                         "include_user_list": {"type": "boolean", "default": False},
                         "calculate_stats": {"type": "boolean", "default": False, "description": "Calculate statistics from the results"},
@@ -98,7 +116,7 @@ def timer_tool() -> Tool:
     """Define the timer management tool."""
     return Tool(
         name="timer",
-        description="Timer management tool for start, stop, restart, and active timer operations. Replaces 4 individual timer tools.",
+        description="Timer management tool for start, stop, restart, and active timer operations.",
         inputSchema={
             "type": "object",
             "required": ["action"],
@@ -190,6 +208,8 @@ async def handle_timer(client: KimaiClient, **params) -> List[TextContent]:
 # Timesheet action handlers
 async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[TextContent]:
     """Handle timesheet list action."""
+    from datetime import datetime
+
     # Handle user scope
     user_scope = filters.get("user_scope", "self")
     user_filter = None
@@ -202,6 +222,27 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         if not user_filter:
             return [TextContent(type="text", text="Error: 'user' parameter required when user_scope is 'specific'")]
     # user_scope == "all" means no user filter
+
+    begin_datetime = None
+    if "begin" in filters:
+        try:
+            begin_datetime = datetime.fromisoformat(filters["begin"])
+        except ValueError:
+            return [TextContent(type="text",
+                                text=f"Error: Invalid date time format for field begin '{filters['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+
+    end_datetime = None
+    if "end" in filters:
+        try:
+            end_datetime = datetime.fromisoformat(filters["end"])
+        except ValueError:
+            return [TextContent(type="text",
+                                text=f"Error: Invalid date time format for field end '{filters['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+
+
+    if begin_datetime == end_datetime and begin_datetime.time() == datetime.min.time():
+        # AI Probably just specified a single day
+        end_datetime = begin_datetime + timedelta(days=1)
     
     # Build filter
     timesheet_filter = TimesheetFilter(
@@ -209,8 +250,8 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         project=filters.get("project"),
         activity=filters.get("activity"),
         customer=filters.get("customer"),
-        begin=filters.get("begin"),
-        end=filters.get("end"),
+        begin=begin_datetime,
+        end=end_datetime,
         exported=filters.get("exported"),
         active=filters.get("active"),
         billable=filters.get("billable"),
@@ -220,7 +261,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
     )
     
     # Fetch timesheets - with pagination if needed
-    timesheets = await client.get_timesheets(timesheet_filter)
+    timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
     
     # Auto-fetch all pages if calculate_stats is enabled
     if filters.get("calculate_stats") and len(timesheets) == timesheet_filter.size:
@@ -229,7 +270,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         page = 2
         while True:
             timesheet_filter.page = page
-            batch = await client.get_timesheets(timesheet_filter)
+            batch, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
             if not batch:
                 break
             all_timesheets.extend(batch)
@@ -245,6 +286,9 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         result = f"Found {len(timesheets)} timesheets for user {user_filter}\\n\\n"
     else:
         result = f"Found {len(timesheets)} timesheets for current user\\n\\n"
+
+    if not fetched_all:
+        result += f"Not all records were returned obtained records up to page f{last_page}\\n\\n"
     
     # Include user list if requested
     if filters.get("include_user_list"):
@@ -347,27 +391,46 @@ async def _handle_timesheet_get(client: KimaiClient, id: Optional[int]) -> List[
         result += f"Tags: {', '.join(ts.tags)}\\n"
     if ts.rate:
         result += f"Rate: {ts.rate}\\n"
-    if ts.fixedRate:
-        result += f"Fixed Rate: {ts.fixedRate}\\n"
-    if ts.hourlyRate:
-        result += f"Hourly Rate: {ts.hourlyRate}\\n"
+    if ts.fixed_rate:
+        result += f"Fixed Rate: {ts.fixed_rate}\\n"
+    if ts.hourly_rate:
+        result += f"Hourly Rate: {ts.hourly_rate}\\n"
     
     return [TextContent(type="text", text=result)]
 
 
 async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[TextContent]:
     """Handle timesheet create action."""
+    from datetime import datetime
+
     if not data.get("project") or not data.get("activity"):
         return [TextContent(type="text", text="Error: 'project' and 'activity' are required for create action")]
     
     # Keep tags as string - model expects comma-separated string
     tags_str = data.get("tags", "")
+
+    if "begin" in data:
+        try:
+            begin_datetime = datetime.fromisoformat(data["begin"])
+        except ValueError:
+            return [TextContent(type="text",
+                                text=f"Error: Invalid date format for field begin '{data['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+    else:
+        begin_datetime = datetime.now(timezone.utc).replace(microsecond=0)
+
+    end_datetime = None
+    if "end" in data:
+        try:
+            end_datetime = datetime.fromisoformat(data["end"])
+        except ValueError:
+            return [TextContent(type="text",
+                                text=f"Error: Invalid date format for field end '{data['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
     
     form = TimesheetEditForm(
         project=data["project"],
         activity=data["activity"],
-        begin=data.get("begin", datetime.now(timezone.utc).isoformat()),
-        end=data.get("end"),
+        begin=begin_datetime,
+        end=end_datetime,
         description=data.get("description"),
         tags=tags_str,
         user=data.get("user"),
@@ -629,7 +692,7 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: Optional[s
         begin=begin_datetime,
         page=1
     )
-    timesheets = await client.get_timesheets(filter_params)
+    timesheets, fetched_all, last_page = await client.get_timesheets(filter_params)
     
     result = f"Recent {len(timesheets)} timesheet(s):\\n\\n"
     

@@ -29,7 +29,7 @@ dev = [
 ]
 
 [project.scripts]
-kimai-mcp = "kimai_mcp.server:main"
+kimai-mcp = "kimai_mcp.server:entrypoint"
 
 [tool.hatch.build]
 packages = ["src/kimai_mcp"]
