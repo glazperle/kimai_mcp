@@ -28,6 +28,7 @@ from .tools.absence_manager import absence_tool, handle_absence
 from .tools.calendar_meta import calendar_tool, meta_tool, user_current_tool, handle_calendar, handle_meta, \
     handle_user_current
 from .tools.project_analysis import analyze_project_team_tool, handle_analyze_project_team
+from .tools.config_info import config_tool, handle_config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -103,6 +104,9 @@ class KimaiMCPServer:
 
             # Project Analysis (specialized tool, kept as-is)
             analyze_project_team_tool(),
+
+            # Configuration Info (server config, plugins, version)
+            config_tool(),
         ]
 
     async def _call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
@@ -135,10 +139,12 @@ class KimaiMCPServer:
                 return await handle_user_current(self.client, **arguments)
             elif name == "analyze_project_team":
                 return await handle_analyze_project_team(self.client, arguments)
+            elif name == "config":
+                return await handle_config(self.client, **arguments)
             else:
                 return [TextContent(
                     type="text",
-                    text=f"Unknown tool: {name}. Available tools: entity, timesheet, timer, rate, team_access, absence, calendar, meta, user_current, analyze_project_team"
+                    text=f"Unknown tool: {name}. Available tools: entity, timesheet, timer, rate, team_access, absence, calendar, meta, user_current, analyze_project_team, config"
                 )]
 
         except KimaiAPIError as e:

@@ -19,7 +19,7 @@ from .models import (
     TagEntity, TagEditForm, TagFilter,
     Invoice, InvoiceFilter,
     PublicHoliday, PublicHolidayFilter,
-    Plugin, CalendarEvent,
+    Plugin, CalendarEvent, TimesheetConfig,
     Rate, RateForm, MetaField, MetaFieldForm
 )
 
@@ -151,7 +151,29 @@ class KimaiClient:
     async def ping(self) -> Dict[str, str]:
         """Ping the API to test connectivity."""
         return await self._request("GET", "/ping")
-    
+
+    # Configuration endpoints
+
+    async def get_timesheet_config(self) -> TimesheetConfig:
+        """Get timesheet configuration.
+
+        Returns tracking mode, limits, and rules for timesheets.
+        """
+        data = await self._request("GET", "/config/timesheet")
+        return TimesheetConfig(**data)
+
+    async def get_color_config(self) -> Dict[str, str]:
+        """Get configured color codes.
+
+        Returns a mapping of color names to hex codes.
+        """
+        return await self._request("GET", "/config/colors")
+
+    async def get_plugins(self) -> List[Plugin]:
+        """Get list of installed plugins."""
+        data = await self._request("GET", "/plugins")
+        return [Plugin(**item) for item in data]
+
     # User endpoints
     
     async def get_current_user(self) -> User:

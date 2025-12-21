@@ -172,13 +172,13 @@ class Version(BaseModel):
 class AbsenceForm(BaseModel):
     """Form for creating absences."""
     half_day: Optional[bool] = Field(None, alias="halfDay")
-    duration: Optional[str] = None  # Duration string format
+    duration: Optional[str] = None  # Duration string format (e.g., "01:30")
     comment: str
-    user: int
+    user: Optional[int] = None  # User ID (requires permission, defaults to current user)
     date: str  # Date format YYYY-MM-DD
     end: Optional[str] = None  # End date for multi-day absences
     type: Literal[
-        "holiday", "time_off", "sickness", "sickness_child", "other", "parental", "unpaid_vacation"] = "other"  # Absence types from API
+        "holiday", "time_off", "sickness", "sickness_child", "other", "parental", "unpaid_vacation"] = "other"
 
 
 class Absence(BaseModel):
@@ -387,6 +387,17 @@ class Plugin(BaseModel):
     version: str
 
 
+# Configuration models
+
+class TimesheetConfig(BaseModel):
+    """Timesheet configuration from the Kimai instance."""
+    tracking_mode: str = Field("default", alias="trackingMode")
+    default_begin_time: str = Field("now", alias="defaultBeginTime")
+    active_entries_hard_limit: int = Field(1, alias="activeEntriesHardLimit")
+    is_allow_future_times: bool = Field(True, alias="isAllowFutureTimes")
+    is_allow_overlapping: bool = Field(True, alias="isAllowOverlapping")
+
+
 # Calendar event model
 
 class CalendarEvent(BaseModel):
@@ -454,55 +465,73 @@ class ActivityExtended(Activity):
 class CustomerEditForm(BaseModel):
     """Form for creating/editing customers."""
     name: Optional[str] = None  # Required for creation
-    country: Optional[str] = None  # Required for creation
-    currency: Optional[str] = None  # Required for creation
-    timezone: Optional[str] = None  # Required for creation
+    country: Optional[str] = None  # Required for creation (2-letter ISO code)
+    currency: Optional[str] = None  # Required for creation (3-letter ISO code)
+    timezone: Optional[str] = None  # Required for creation (e.g., "Europe/Berlin")
     number: Optional[str] = None
     comment: Optional[str] = None
     visible: Optional[bool] = None
     billable: Optional[bool] = None
     budget: Optional[float] = None
-    time_budget: Optional[int] = Field(None, alias="timeBudget")
+    time_budget: Optional[str] = Field(None, alias="timeBudget")  # Duration format
+    budget_type: Optional[Literal["month"]] = Field(None, alias="budgetType")
     color: Optional[str] = None
     phone: Optional[str] = None
     fax: Optional[str] = None
     mobile: Optional[str] = None
     email: Optional[str] = None
     homepage: Optional[str] = None
-    address: Optional[str] = None
+    # Structured address fields (preferred over 'address')
+    address_line1: Optional[str] = Field(None, alias="addressLine1")
+    address_line2: Optional[str] = Field(None, alias="addressLine2")
+    address_line3: Optional[str] = Field(None, alias="addressLine3")
+    post_code: Optional[str] = Field(None, alias="postCode")
+    city: Optional[str] = None
+    address: Optional[str] = None  # Unstructured address (legacy)
     contact: Optional[str] = None
     company: Optional[str] = None
     vat_id: Optional[str] = Field(None, alias="vatId")
+    buyer_reference: Optional[str] = Field(None, alias="buyerReference")
+    invoice_text: Optional[str] = Field(None, alias="invoiceText")
+    invoice_template: Optional[str] = Field(None, alias="invoiceTemplate")
+    teams: Optional[int] = None  # Team ID
 
 
 class ProjectEditForm(BaseModel):
     """Form for creating/editing projects."""
     name: Optional[str] = None  # Required for creation
-    customer: Optional[int] = None  # Required for creation
+    customer: Optional[int] = None  # Required for creation (Customer ID)
     comment: Optional[str] = None
     visible: Optional[bool] = None
     billable: Optional[bool] = None
     budget: Optional[float] = None
-    time_budget: Optional[int] = Field(None, alias="timeBudget")
+    time_budget: Optional[str] = Field(None, alias="timeBudget")  # Duration format
+    budget_type: Optional[Literal["month"]] = Field(None, alias="budgetType")
     color: Optional[str] = None
     global_activities: Optional[bool] = Field(None, alias="globalActivities")
     number: Optional[str] = None
     order_number: Optional[str] = Field(None, alias="orderNumber")
-    start: Optional[datetime] = None
-    end: Optional[datetime] = None
+    order_date: Optional[str] = Field(None, alias="orderDate")  # Format: YYYY-MM-DD
+    start: Optional[str] = None  # Format: YYYY-MM-DD
+    end: Optional[str] = None  # Format: YYYY-MM-DD
+    invoice_text: Optional[str] = Field(None, alias="invoiceText")
+    teams: Optional[int] = None  # Team ID
 
 
 class ActivityEditForm(BaseModel):
     """Form for creating/editing activities."""
-    name: str
-    project: Optional[int] = None
+    name: str  # Required
+    project: Optional[int] = None  # Project ID (None = global activity)
     comment: Optional[str] = None
     visible: Optional[bool] = None
     billable: Optional[bool] = None
     budget: Optional[float] = None
-    time_budget: Optional[int] = Field(None, alias="timeBudget")
+    time_budget: Optional[str] = Field(None, alias="timeBudget")  # Duration format
+    budget_type: Optional[Literal["month"]] = Field(None, alias="budgetType")
     color: Optional[str] = None
     number: Optional[str] = None
+    invoice_text: Optional[str] = Field(None, alias="invoiceText")
+    teams: Optional[int] = None  # Team ID
 
 
 # Calendar models
