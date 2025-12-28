@@ -1,10 +1,17 @@
 """Kimai MCP Server implementation with consolidated tools."""
 
+import argparse
 import asyncio
+import json
 import logging
 import os
-import sys
+import platform
+import shutil
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+__version__ = "2.3.8"
 
 # Load environment variables from .env file if it exists
 try:
@@ -220,38 +227,196 @@ class KimaiMCPServer:
             await self.client.close()
 
 
+def create_parser() -> argparse.ArgumentParser:
+    """Create argument parser for CLI."""
+    parser = argparse.ArgumentParser(
+        prog="kimai-mcp",
+        description="Kimai MCP Server - Time-tracking API integration for Claude Desktop and other MCP clients",
+        epilog="Documentation: https://github.com/glazperle/kimai_mcp",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--kimai-url",
+        metavar="URL",
+        help="Kimai server URL (e.g., https://kimai.example.com)"
+    )
+    parser.add_argument(
+        "--kimai-token",
+        metavar="TOKEN",
+        help="API authentication token from your Kimai user profile"
+    )
+    parser.add_argument(
+        "--kimai-user",
+        metavar="USER_ID",
+        help="Default user ID for operations (optional)"
+    )
+    parser.add_argument(
+        "--ssl-verify",
+        metavar="VALUE",
+        default="true",
+        help="SSL verification: 'true' (default), 'false', or path to CA certificate"
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Interactive setup wizard for Claude Desktop configuration"
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}"
+    )
+    return parser
+
+
+def get_claude_config_path() -> Path:
+    """Get Claude Desktop config path based on OS."""
+    system = platform.system()
+    if system == "Darwin":  # macOS
+        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    elif system == "Windows":
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            return Path(appdata) / "Claude" / "claude_desktop_config.json"
+        return Path.home() / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json"
+    else:  # Linux and others
+        return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
+
+
+def write_config_to_file(config_path: Path, new_config: dict) -> bool:
+    """Write config to file, merging with existing and creating backup.
+
+    Returns True on success, False on failure.
+    """
+    try:
+        # Create directory if needed
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Load existing config or start fresh
+        existing = {}
+        if config_path.exists():
+            # Create backup
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_path = config_path.with_suffix(f".backup-{timestamp}.json")
+            shutil.copy(config_path, backup_path)
+            print(f"  Backup created: {backup_path}")
+
+            with open(config_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+
+        # Merge mcpServers
+        if "mcpServers" not in existing:
+            existing["mcpServers"] = {}
+        existing["mcpServers"]["kimai"] = new_config["mcpServers"]["kimai"]
+
+        # Write merged config
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2)
+
+        print(f"  Configuration written to: {config_path}")
+        return True
+    except Exception as e:
+        print(f"  Error writing config: {e}")
+        return False
+
+
+def interactive_setup():
+    """Interactive setup wizard for Claude Desktop configuration."""
+    print()
+    print("=" * 50)
+    print("   Kimai MCP Server - Setup Wizard")
+    print("=" * 50)
+    print()
+
+    # Collect configuration
+    print("Enter your Kimai configuration:")
+    print()
+
+    kimai_url = input("  Kimai Server URL: ").strip()
+    if not kimai_url:
+        print("\n  Error: Kimai URL is required.")
+        return
+
+    api_token = input("  API Token: ").strip()
+    if not api_token:
+        print("\n  Error: API Token is required.")
+        return
+
+    user_id = input("  Default User ID (optional, press Enter to skip): ").strip() or None
+    ssl_verify = input("  SSL Verify (true/false/path, default: true): ").strip() or "true"
+
+    # Build config
+    args = [f"--kimai-url={kimai_url}", f"--kimai-token={api_token}"]
+    if user_id:
+        args.append(f"--kimai-user={user_id}")
+    if ssl_verify.lower() != "true":
+        args.append(f"--ssl-verify={ssl_verify}")
+
+    config = {
+        "mcpServers": {
+            "kimai": {
+                "command": "kimai-mcp",
+                "args": args
+            }
+        }
+    }
+
+    # Show config
+    config_path = get_claude_config_path()
+    print()
+    print("-" * 50)
+    print("  Claude Desktop config location:")
+    print(f"  {config_path}")
+    print("-" * 50)
+    print()
+    print("  Configuration to add:")
+    print()
+    print(json.dumps(config, indent=2))
+    print()
+
+    # Offer to write config
+    write = input("  Write to config file? (y/N): ").strip().lower()
+    if write == "y":
+        print()
+        if write_config_to_file(config_path, config):
+            print()
+            print("  Restart Claude Desktop to apply changes.")
+        else:
+            print()
+            print("  Please add the configuration manually.")
+    else:
+        print()
+        print("  Configuration not written. Add it manually to your config file.")
+
+    print()
+
+
 async def main():
     """Main entry point for consolidated server."""
-    # Get configuration from command line arguments if provided
-    # This allows configuration to be passed from MCP client (like Claude Desktop)
-    base_url = None
-    api_token = None
-    default_user_id = None
-    ssl_verify = None
+    parser = create_parser()
+    args = parser.parse_args()
 
-    # Parse command line arguments for configuration
-    if len(sys.argv) > 1:
-        for arg in sys.argv[1:]:
-            if arg.startswith("--kimai-url="):
-                base_url = arg.split("=", 1)[1]
-            elif arg.startswith("--kimai-token="):
-                api_token = arg.split("=", 1)[1]
-            elif arg.startswith("--kimai-user="):
-                default_user_id = arg.split("=", 1)[1]
-            elif arg.startswith("--ssl-verify="):
-                ssl_value = arg.split("=", 1)[1].lower()
-                if ssl_value == "true":
-                    ssl_verify = True
-                elif ssl_value == "false":
-                    ssl_verify = False
-                else:
-                    # Treat as path to certificate file/directory
-                    ssl_verify = arg.split("=", 1)[1]
+    # Handle setup wizard
+    if args.setup:
+        interactive_setup()
+        return
+
+    # Parse SSL verify value
+    ssl_verify: Optional[Union[bool, str]] = None
+    if args.ssl_verify:
+        ssl_value = args.ssl_verify.lower()
+        if ssl_value == "true":
+            ssl_verify = True
+        elif ssl_value == "false":
+            ssl_verify = False
+        else:
+            # Treat as path to certificate file/directory
+            ssl_verify = args.ssl_verify
 
     server = KimaiMCPServer(
-        base_url=base_url,
-        api_token=api_token,
-        default_user_id=default_user_id,
+        base_url=args.kimai_url,
+        api_token=args.kimai_token,
+        default_user_id=args.kimai_user,
         ssl_verify=ssl_verify
     )
     try:

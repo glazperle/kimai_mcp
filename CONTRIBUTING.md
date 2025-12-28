@@ -25,7 +25,7 @@ Thank you for your interest in contributing to the Kimai MCP Server! This docume
 
 #### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.10 or higher
 - Access to a Kimai instance for testing
 - Familiarity with async/await Python programming
 - Understanding of the Model Context Protocol (MCP)

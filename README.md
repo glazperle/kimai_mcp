@@ -15,7 +15,22 @@ pip install kimai-mcp
 
 # Run with your Kimai credentials
 kimai-mcp --kimai-url=https://your-kimai.com --kimai-token=your-token
+
+# Or use the interactive setup wizard
+kimai-mcp --setup
 ```
+
+## Command Line Options
+
+| Option | Description |
+| ------ | ----------- |
+| `--kimai-url URL` | Kimai server URL (e.g., `https://kimai.example.com`) |
+| `--kimai-token TOKEN` | API authentication token from your Kimai user profile |
+| `--kimai-user USER_ID` | Default user ID for operations (optional) |
+| `--ssl-verify VALUE` | SSL verification: `true` (default), `false`, or path to CA certificate |
+| `--setup` | Interactive setup wizard for Claude Desktop configuration |
+| `--help` | Show help message and exit |
+| `--version` | Show version number and exit |
 
 ## 🛠️ Available Tools
 
@@ -149,6 +164,7 @@ If you prefer using a .env file for configuration, create a `.env` file in your 
 KIMAI_URL=https://your-kimai-instance.com
 KIMAI_API_TOKEN=your-api-token-here
 KIMAI_DEFAULT_USER=1
+KIMAI_SSL_VERIFY=true  # or path to CA certificate
 ```
 
 Then use this Claude Desktop configuration:
