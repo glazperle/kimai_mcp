@@ -1,6 +1,6 @@
 """Consolidated Absence Manager tool for all absence operations."""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 from datetime import datetime
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
@@ -204,7 +204,7 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
                     )
                     user_absences = await client.get_absences(user_filter)
                     all_absences.extend(user_absences)
-                except Exception as e:
+                except Exception:
                     # Skip users we don't have permission to view
                     # This can happen if user doesn't have 'contract_other_profile' permission
                     continue
@@ -238,7 +238,7 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
         result += f"  Status: {getattr(absence, 'status', 'Unknown')}\\n"
         
         if hasattr(absence, "halfDay") and absence.halfDay:
-            result += f"  Half Day: Yes\\n"
+            result += "  Half Day: Yes\\n"
         
         if hasattr(absence, "comment") and absence.comment:
             result += f"  Comment: {absence.comment}\\n"

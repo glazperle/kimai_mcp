@@ -703,7 +703,7 @@ class CustomerEntityHandler(BaseEntityHandler):
         customer = await self.client.create_customer(form)
         return [TextContent(
             type="text",
-            text=f"Created " + self.serialize_customer(customer)
+            text="Created " + self.serialize_customer(customer)
         )]
 
     async def update(self, id: int, data: Dict) -> List[TextContent]:
@@ -711,7 +711,7 @@ class CustomerEntityHandler(BaseEntityHandler):
         customer = await self.client.update_customer(id, form)
         return [TextContent(
             type="text",
-            text=f"Updated " + self.serialize_customer(customer)
+            text="Updated " + self.serialize_customer(customer)
         )]
 
     async def delete(self, id: int) -> List[TextContent]:

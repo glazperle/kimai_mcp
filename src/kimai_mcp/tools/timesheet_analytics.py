@@ -1,7 +1,6 @@
 """Analytics extension for timesheet calculations."""
 
 from typing import Dict, List, Any
-from datetime import datetime
 from collections import defaultdict
 
 
@@ -234,12 +233,12 @@ class TimesheetAnalytics:
                 report += f"- Project {proj['project_id']}: {proj['hours']}h ({proj['percentage']}%)\n"
         
         if stats.get('peak_hour'):
-            report += f"\n## Peak Productivity\n"
+            report += "\n## Peak Productivity\n"
             report += f"- Most entries start at: {stats['peak_hour']['hour']}:00 ({stats['peak_hour']['entries']} entries)\n"
         
         # Add yearly breakdown if available
         if stats.get('breakdown_by_year') and stats.get('years'):
-            report += f"\n## Yearly Breakdown\n"
+            report += "\n## Yearly Breakdown\n"
             
             years_sorted = sorted(stats['years'].items())
             for year, year_data in years_sorted:
@@ -260,7 +259,7 @@ class TimesheetAnalytics:
             
             # Year comparison if multiple years
             if len(years_sorted) > 1:
-                report += f"\n### Year-over-Year Comparison\n"
+                report += "\n### Year-over-Year Comparison\n"
                 for i in range(1, len(years_sorted)):
                     prev_year, prev_data = years_sorted[i-1]
                     curr_year, curr_data = years_sorted[i]
@@ -276,7 +275,7 @@ class TimesheetAnalytics:
         
         # Add weekly summary if available and no yearly breakdown
         elif stats.get('weekly_hours'):
-            report += f"\n## Recent Weekly Hours\n"
+            report += "\n## Recent Weekly Hours\n"
             recent_weeks = sorted(stats['weekly_hours'].items())[-4:]
             for week, hours in recent_weeks:
                 report += f"- {week}: {round(hours, 2)} hours\n"

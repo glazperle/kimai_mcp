@@ -537,14 +537,3 @@ class ActivityEditForm(BaseModel):
     invoice_text: Optional[str] = Field(None, alias="invoiceText")
     teams: Optional[int] = None  # Team ID
     meta_fields: Optional[List[Dict[str, Any]]] = Field(None, alias="metaFields")
-
-
-# Calendar models
-class CalendarEvent(BaseModel):
-    """Calendar event model for calendar integration."""
-    title: str
-    color: Optional[str] = None
-    text_color: Optional[str] = Field(None, alias="textColor")
-    all_day: bool = Field(False, alias="allDay")
-    start: datetime
-    end: Optional[datetime] = None

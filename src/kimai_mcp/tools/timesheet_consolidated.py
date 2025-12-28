@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import TimesheetEditForm, TimesheetFilter, MetaFieldForm
@@ -313,7 +313,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
                 time_span = end_date - begin_date
                 if time_span.days > 365:  # More than 1 year
                     breakdown_by_year = True
-            except:
+            except Exception:
                 pass
         
         stats = TimesheetAnalytics.calculate_statistics(
@@ -326,7 +326,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
             projects = await client.get_projects()
             project_map = {p.id: p.name for p in projects}
             stats["project_names"] = project_map
-        except:
+        except Exception:
             project_map = {}
         
         if filters.get("stats_format") == "json":

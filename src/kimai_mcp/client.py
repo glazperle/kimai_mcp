@@ -1,11 +1,9 @@
 """Kimai API client wrapper."""
 
-import os
 from typing import Dict, List, Optional, Any, Union, Tuple
 import logging
 from datetime import datetime
 import httpx
-from pydantic import ValidationError
 
 from .models import (
     TimesheetEntity, TimesheetEditForm, TimesheetFilter,
@@ -13,14 +11,12 @@ from .models import (
     Activity, ActivityFilter, ActivityEditForm, ActivityExtended,
     Customer, CustomerFilter, CustomerEditForm, CustomerExtended,
     User, UserEntity, UserFilter, UserEditForm, UserCreateForm,
-    Version, ApiError,
-    Absence, AbsenceForm, AbsenceFilter,
-    Team, TeamEditForm, TeamFilter,
-    TagEntity, TagEditForm, TagFilter,
+    Version, Absence, AbsenceForm, AbsenceFilter,
+    Team, TeamEditForm, TagEntity, TagEditForm, TagFilter,
     Invoice, InvoiceFilter,
     PublicHoliday, PublicHolidayFilter,
     Plugin, CalendarEvent, TimesheetConfig,
-    Rate, RateForm, MetaField, MetaFieldForm
+    Rate, RateForm, MetaFieldForm
 )
 
 logger = logging.getLogger(__name__)
@@ -925,20 +921,3 @@ class KimaiClient:
         """Get a specific invoice by ID."""
         data = await self._request("GET", f"/invoices/{invoice_id}")
         return Invoice(**data)
-    
-    # Plugin endpoints
-    
-    async def get_plugins(self) -> List[Plugin]:
-        """Get list of installed plugins."""
-        data = await self._request("GET", "/plugins")
-        return [Plugin(**item) for item in data]
-    
-    # Configuration endpoints
-    
-    async def get_timesheet_config(self) -> Dict[str, Any]:
-        """Get timesheet configuration."""
-        return await self._request("GET", "/config/timesheet")
-    
-    async def get_color_config(self) -> Dict[str, str]:
-        """Get configured color codes."""
-        return await self._request("GET", "/config/colors")

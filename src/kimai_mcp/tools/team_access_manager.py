@@ -1,6 +1,6 @@
 """Consolidated Team Access Manager tool for all team operations."""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 

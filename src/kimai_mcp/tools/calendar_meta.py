@@ -1,6 +1,6 @@
 """Calendar and Meta tools for additional functionality."""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import MetaFieldForm
@@ -237,7 +237,7 @@ async def _handle_calendar_absences(client: KimaiClient, filters: Dict) -> List[
                 result += f"  End: {event.end}\\n"
             
             if event.all_day:
-                result += f"  All Day: Yes\\n"
+                result += "  All Day: Yes\\n"
             
             if event.color:
                 result += f"  Color: {event.color}\\n"
@@ -274,7 +274,7 @@ async def _handle_calendar_holidays(client: KimaiClient, filters: Dict) -> List[
                 result += f"  End: {event.end}\\n"
             
             if event.all_day:
-                result += f"  All Day: Yes\\n"
+                result += "  All Day: Yes\\n"
             
             if event.color:
                 result += f"  Color: {event.color}\\n"

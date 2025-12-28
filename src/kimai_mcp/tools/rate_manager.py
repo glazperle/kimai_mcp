@@ -1,6 +1,6 @@
 """Consolidated Rate Manager tool for all rate operations."""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import RateForm
@@ -123,7 +123,7 @@ class BaseRateHandler:
             if hasattr(rate, "user") and rate.user:
                 result += f"  User: {rate.user.username} (ID: {rate.user.id})\\n"
             else:
-                result += f"  User: All users (default rate)\\n"
+                result += "  User: All users (default rate)\\n"
             
             result += f"  Rate: {rate.rate}\\n"
             
