@@ -401,6 +401,68 @@ Then use this Claude Desktop configuration:
 2. **Path Issues**: Ensure Python can find the `kimai_mcp` module
 3. **Arguments**: Check that command-line arguments are properly formatted
 
+#### SSL Certificate Errors (Self-Hosted Instances)
+
+If you're running a self-hosted Kimai instance with a custom CA certificate (e.g., self-signed certificates), you may encounter this error:
+
+```
+[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate in certificate chain
+```
+
+**Solution 1: Use the `--ssl-verify` CLI option**
+
+```bash
+# Point to your CA certificate file
+python -m kimai_mcp.server --kimai-url=https://kimai.example.com --kimai-token=your-token --ssl-verify=/path/to/ca-bundle.crt
+
+# Or disable verification (not recommended for production)
+python -m kimai_mcp.server --kimai-url=https://kimai.example.com --kimai-token=your-token --ssl-verify=false
+```
+
+**Solution 2: Use environment variables**
+
+```bash
+# Using httpx's built-in SSL environment variables
+SSL_CERT_DIR=/etc/ssl/certs python -m kimai_mcp.server --kimai-url=... --kimai-token=...
+
+# Or using the KIMAI_SSL_VERIFY environment variable
+KIMAI_SSL_VERIFY=/path/to/ca-bundle.crt python -m kimai_mcp.server --kimai-url=... --kimai-token=...
+```
+
+**Claude Desktop configuration with custom certificates:**
+
+```json
+{
+  "mcpServers": {
+    "kimai": {
+      "command": "python",
+      "args": [
+        "-m", "kimai_mcp.server",
+        "--kimai-url=https://kimai.example.com",
+        "--kimai-token=your-token",
+        "--ssl-verify=/path/to/ca-bundle.crt"
+      ]
+    }
+  }
+}
+```
+
+Or using the environment variable:
+
+```json
+{
+  "mcpServers": {
+    "kimai": {
+      "command": "python",
+      "args": ["-m", "kimai_mcp.server", "--kimai-url=...", "--kimai-token=..."],
+      "env": {
+        "KIMAI_SSL_VERIFY": "/path/to/ca-bundle.crt"
+      }
+    }
+  }
+}
+```
+
 ### Debug Mode
 For debugging, you can run the server directly:
 

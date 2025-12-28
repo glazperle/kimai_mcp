@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 # Load environment variables from .env file if it exists
 try:
@@ -39,13 +39,18 @@ class KimaiMCPServer:
     """Kimai MCP Server with consolidated tools (73 → 10 tools)."""
 
     def __init__(self, base_url: Optional[str] = None, api_token: Optional[str] = None,
-                 default_user_id: Optional[str] = None):
+                 default_user_id: Optional[str] = None,
+                 ssl_verify: Optional[Union[bool, str]] = None):
         """Initialize the consolidated Kimai MCP server.
-        
+
         Args:
             base_url: Kimai server URL (can also be set via KIMAI_URL env var)
             api_token: API authentication token (can also be set via KIMAI_API_TOKEN env var)
             default_user_id: Default user ID for operations (can also be set via KIMAI_DEFAULT_USER env var)
+            ssl_verify: SSL verification setting (can also be set via KIMAI_SSL_VERIFY env var):
+                - True: Use default CA bundle (default)
+                - False: Disable SSL verification (not recommended)
+                - str: Path to CA certificate file or directory
         """
         self.server = Server("kimai-mcp-consolidated")
         self.client: Optional[KimaiClient] = None
@@ -59,6 +64,20 @@ class KimaiMCPServer:
         self.api_token = api_token or os.getenv("KIMAI_API_TOKEN", "")
         self.default_user_id = default_user_id or os.getenv("KIMAI_DEFAULT_USER")
 
+        # SSL verification - prefer argument, fallback to environment variable
+        if ssl_verify is not None:
+            self.ssl_verify = ssl_verify
+        else:
+            ssl_env = os.getenv("KIMAI_SSL_VERIFY", "true").lower()
+            if ssl_env == "true":
+                self.ssl_verify = True
+            elif ssl_env == "false":
+                self.ssl_verify = False
+                logger.warning("SSL verification is disabled. This is not recommended for production use.")
+            else:
+                # Treat as path to certificate
+                self.ssl_verify = ssl_env
+
         # Validate configuration
         if not self.base_url:
             raise ValueError(
@@ -70,7 +89,7 @@ class KimaiMCPServer:
     async def _ensure_client(self):
         """Ensure the Kimai client is initialized."""
         if not self.client:
-            self.client = KimaiClient(self.base_url, self.api_token)
+            self.client = KimaiClient(self.base_url, self.api_token, ssl_verify=self.ssl_verify)
 
     async def _list_tools(self) -> List[Tool]:
         """List consolidated MCP tools (10 tools instead of 73)."""
@@ -208,6 +227,7 @@ async def main():
     base_url = None
     api_token = None
     default_user_id = None
+    ssl_verify = None
 
     # Parse command line arguments for configuration
     if len(sys.argv) > 1:
@@ -218,11 +238,21 @@ async def main():
                 api_token = arg.split("=", 1)[1]
             elif arg.startswith("--kimai-user="):
                 default_user_id = arg.split("=", 1)[1]
+            elif arg.startswith("--ssl-verify="):
+                ssl_value = arg.split("=", 1)[1].lower()
+                if ssl_value == "true":
+                    ssl_verify = True
+                elif ssl_value == "false":
+                    ssl_verify = False
+                else:
+                    # Treat as path to certificate file/directory
+                    ssl_verify = arg.split("=", 1)[1]
 
     server = KimaiMCPServer(
         base_url=base_url,
         api_token=api_token,
-        default_user_id=default_user_id
+        default_user_id=default_user_id,
+        ssl_verify=ssl_verify
     )
     try:
         await server.run()

@@ -34,18 +34,24 @@ class KimaiAPIError(Exception):
 
 class KimaiClient:
     """Kimai API client."""
-    
-    def __init__(self, base_url: str, api_token: str, timeout: float = 30.0):
+
+    def __init__(self, base_url: str, api_token: str, timeout: float = 30.0,
+                 ssl_verify: Union[bool, str] = True):
         """Initialize Kimai client.
-        
+
         Args:
             base_url: Base URL of Kimai instance (e.g., https://kimai.example.com)
             api_token: API authentication token
             timeout: Request timeout in seconds
+            ssl_verify: SSL verification setting:
+                - True: Use default CA bundle (default)
+                - False: Disable SSL verification (not recommended)
+                - str: Path to CA certificate file or directory
         """
         self.base_url = base_url.rstrip('/')
         self.api_token = api_token
         self.timeout = timeout
+        self.ssl_verify = ssl_verify
         self._client = httpx.AsyncClient(
             base_url=f"{self.base_url}/api",
             headers={
@@ -53,7 +59,8 @@ class KimaiClient:
                 "Content-Type": "application/json",
                 "Accept": "application/json"
             },
-            timeout=timeout
+            timeout=timeout,
+            verify=ssl_verify
         )
     
     async def __aenter__(self):
