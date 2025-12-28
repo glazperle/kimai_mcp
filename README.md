@@ -119,6 +119,22 @@ Add the following to your Claude Desktop configuration:
 - Optionally add `--kimai-user=USER_ID` for a default user ID
 - The `kimai-mcp` command is available after `pip install kimai-mcp`
 
+**Alternative:** If `kimai-mcp` is not in your PATH, use `python -m kimai_mcp.server` instead:
+```json
+{
+  "mcpServers": {
+    "kimai": {
+      "command": "python",
+      "args": [
+        "-m", "kimai_mcp.server",
+        "--kimai-url=https://your-kimai-instance.com",
+        "--kimai-token=your-api-token-here"
+      ]
+    }
+  }
+}
+```
+
 ### Step 3: Restart Claude Desktop
 
 After saving the configuration file, restart Claude Desktop for the changes to take effect.
