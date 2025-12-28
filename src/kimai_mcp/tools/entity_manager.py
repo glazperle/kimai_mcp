@@ -30,13 +30,15 @@ def entity_tool() -> Tool:
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["list", "get", "create", "update", "delete", "unlock_month"],
+                    "enum": ["list", "get", "create", "update", "delete", "lock_month", "unlock_month"],
                     "description": """The action to perform:
                     - list: List entities matching the given filters
                     - create: Create a new entity
                     - get: Get a single entity by ID
                     - update: Update an existing entity by ID
                     - delete: Delete an existing entity by ID
+                    - lock_month: Lock working time months for a user (type=user only)
+                    - unlock_month: Unlock working time months for a user (type=user only)
                     """
                 },
                 "id": {
@@ -80,7 +82,7 @@ def entity_tool() -> Tool:
                 },
                 "month": {
                     "type": "string",
-                    "description": "Month to unlock (YYYY-MM-DD format, for unlock_month action on user entities)",
+                    "description": "Month for lock_month/unlock_month actions (YYYY-MM-DD format). For lock: all months before and including this one will be locked. For unlock: all months from this one to end of year will be unlocked.",
                     "pattern": "[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])"
                 }
             },
@@ -386,6 +388,16 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
             if not entity_id:
                 return [TextContent(type="text", text="Error: 'id' parameter is required for delete action")]
             return await handler.delete(entity_id)
+        elif action == "lock_month":
+            if entity_type != "user":
+                return [
+                    TextContent(type="text", text="Error: 'lock_month' action is only available for user entities")]
+            if not entity_id:
+                return [TextContent(type="text", text="Error: 'id' parameter is required for lock_month action")]
+            month = params.get("month")
+            if not month:
+                return [TextContent(type="text", text="Error: 'month' parameter is required for lock_month action")]
+            return await handler.lock_month(entity_id, month)
         elif action == "unlock_month":
             if entity_type != "user":
                 return [
@@ -399,7 +411,7 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
         else:
             return [TextContent(
                 type="text",
-                text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, unlock_month"
+                text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, lock_month, unlock_month"
             )]
     except KimaiAPIError as e:
         logger.error(f"Kimai API Error in tool entity: {e.message} (Status: {e.status_code})")
@@ -729,6 +741,14 @@ class UserEntityHandler(BaseEntityHandler):
         return [TextContent(
             type="text",
             text="Error: Users cannot be deleted. Use update with enabled=false to deactivate."
+        )]
+
+    async def lock_month(self, user_id: int, month: str) -> List[TextContent]:
+        """Lock working time months for a user."""
+        await self.client.lock_work_contract_month(user_id, month)
+        return [TextContent(
+            type="text",
+            text=f"Locked working time months up to and including {month} for user ID {user_id}"
         )]
 
     async def unlock_month(self, user_id: int, month: str) -> List[TextContent]:

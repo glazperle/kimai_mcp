@@ -701,13 +701,24 @@ class KimaiClient:
     
     async def unlock_work_contract_month(self, user_id: int, month: str) -> None:
         """Unlock working time months for a user.
-        
+
         Args:
             user_id: User ID whose months to unlock
             month: Month in YYYY-MM-DD format (all months from this one to end of year will be unlocked)
         """
-        await self._request("DELETE", f"/work-contract/approval/{user_id}/{month}")
-    
+        await self._request("DELETE", f"/work-contract/unlock/{user_id}/{month}")
+
+    async def lock_work_contract_month(self, user_id: int, month: str) -> None:
+        """Lock working time months for a user.
+
+        Locks all open months from the specified month back to the start of the given year.
+
+        Args:
+            user_id: User ID whose months to lock
+            month: Month in YYYY-MM-DD format (all months before and including this one will be locked)
+        """
+        await self._request("DELETE", f"/work-contract/lock/{user_id}/{month}")
+
     # Public Holiday endpoints
     
     async def get_public_holidays(self, filters: Optional[PublicHolidayFilter] = None) -> List[PublicHoliday]:
