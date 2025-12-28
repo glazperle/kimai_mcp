@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kimai-mcp"
-version = "2.3.4"
+version = "2.3.5"
 description = "MCP server for Kimai time-tracking API integration"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -49,5 +49,5 @@ Repository = "https://github.com/glazperle/kimai_mcp"
 [project.scripts]
 kimai-mcp = "kimai_mcp.server:entrypoint"
 
-[tool.hatch.build]
+[tool.hatch.build.targets.wheel]
 packages = ["src/kimai_mcp"]
