@@ -79,6 +79,7 @@ class TimesheetEntity(BaseModel):
     exported: bool = False
     billable: bool = True
     meta_fields: Optional[List[Dict[str, Any]]] = Field(None, alias="metaFields")
+    break_duration: Optional[int] = Field(None, alias="break")  # Break duration in seconds
 
 
 class TimesheetEditForm(BaseModel):
@@ -94,6 +95,7 @@ class TimesheetEditForm(BaseModel):
     tags: Optional[str] = None  # Comma separated
     exported: Optional[bool] = None
     billable: Optional[bool] = None
+    break_duration: Optional[int] = Field(None, alias="break")  # Break duration in seconds
 
 
 class TimesheetFilter(BaseModel):
@@ -242,7 +244,6 @@ class TagEntity(BaseModel):
     name: str
     visible: bool = True
     color: Optional[str] = None
-    color_safe: Optional[str] = Field(None, alias="color-safe")
 
 
 class TagEditForm(BaseModel):
@@ -275,6 +276,7 @@ class Invoice(BaseModel):
     status: str = "new"
     payment_date: Optional[datetime] = Field(None, alias="paymentDate")
     meta_fields: Optional[List[Dict[str, Any]]] = Field(None, alias="metaFields")
+    overdue: Optional[bool] = None  # Whether the invoice is overdue
 
 
 class InvoiceFilter(BaseModel):
@@ -495,6 +497,7 @@ class CustomerEditForm(BaseModel):
     invoice_text: Optional[str] = Field(None, alias="invoiceText")
     invoice_template: Optional[str] = Field(None, alias="invoiceTemplate")
     teams: Optional[int] = None  # Team ID
+    meta_fields: Optional[List[Dict[str, Any]]] = Field(None, alias="metaFields")
 
 
 class ProjectEditForm(BaseModel):
@@ -516,6 +519,7 @@ class ProjectEditForm(BaseModel):
     end: Optional[str] = None  # Format: YYYY-MM-DD
     invoice_text: Optional[str] = Field(None, alias="invoiceText")
     teams: Optional[int] = None  # Team ID
+    meta_fields: Optional[List[Dict[str, Any]]] = Field(None, alias="metaFields")
 
 
 class ActivityEditForm(BaseModel):
@@ -532,6 +536,7 @@ class ActivityEditForm(BaseModel):
     number: Optional[str] = None
     invoice_text: Optional[str] = Field(None, alias="invoiceText")
     teams: Optional[int] = None  # Team ID
+    meta_fields: Optional[List[Dict[str, Any]]] = Field(None, alias="metaFields")
 
 
 # Calendar models

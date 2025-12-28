@@ -195,6 +195,18 @@ def entity_tool() -> Tool:
                                         "type": "string",
                                         "format": "App\\Entity\\InvoiceTemplate id",
                                         "description": "ID of the invoice template to use for this customer"
+                                    },
+                                    "metaFields": {
+                                        "type": "array",
+                                        "description": "Custom meta fields for this customer",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": {"type": "string"},
+                                                "value": {"type": "string"}
+                                            },
+                                            "required": ["name", "value"]
+                                        }
                                     }
                                 },
                                 "additionalProperties": False
@@ -278,6 +290,18 @@ def entity_tool() -> Tool:
                                         "default": True,
                                         "description": "Determines if time and expenses recorded against this project are considered billable to the customer."
                                     },
+                                    "metaFields": {
+                                        "type": "array",
+                                        "description": "Custom meta fields for this project",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": {"type": "string"},
+                                                "value": {"type": "string"}
+                                            },
+                                            "required": ["name", "value"]
+                                        }
+                                    }
                                 },
                                 "additionalProperties": False
                             }
@@ -430,6 +454,12 @@ class ProjectEntityHandler(BaseEntityHandler):
             result += f"Color: {project.color}\\n"
         if getattr(project, 'comment', None):
             result += f"Comment: {project.comment}\\n"
+        if getattr(project, 'meta_fields', None):
+            result += "Meta Fields:\\n"
+            for mf in project.meta_fields:
+                name = mf.get('name', mf.name) if hasattr(mf, 'name') else mf.get('name', 'Unknown')
+                value = mf.get('value', mf.value) if hasattr(mf, 'value') else mf.get('value', '')
+                result += f"  - {name}: {value}\\n"
         result += "\\n"
         return result
 
@@ -495,6 +525,12 @@ class ActivityEntityHandler(BaseEntityHandler):
             result += f"Global: {'Yes' if getattr(activity, 'global', False) else 'No'}\\n"
         if getattr(activity, 'comment', None):
             result += f"Comment: {activity.comment}\\n"
+        if getattr(activity, 'meta_fields', None):
+            result += "Meta Fields:\\n"
+            for mf in activity.meta_fields:
+                name = mf.get('name', mf.name) if hasattr(mf, 'name') else mf.get('name', 'Unknown')
+                value = mf.get('value', mf.value) if hasattr(mf, 'value') else mf.get('value', '')
+                result += f"  - {name}: {value}\\n"
         result += "\\n"
         return result
 
@@ -579,6 +615,12 @@ class CustomerEntityHandler(BaseEntityHandler):
 
         if getattr(customer, 'comment', None):
             result += f"Comment: {customer.comment}\\n"
+        if getattr(customer, 'meta_fields', None):
+            result += "Meta Fields:\\n"
+            for mf in customer.meta_fields:
+                name = mf.get('name', mf.name) if hasattr(mf, 'name') else mf.get('name', 'Unknown')
+                value = mf.get('value', mf.value) if hasattr(mf, 'value') else mf.get('value', '')
+                result += f"  - {name}: {value}\\n"
         result += "\\n"
 
         return result
@@ -818,11 +860,13 @@ class InvoiceEntityHandler(BaseEntityHandler):
 
         result = f"Found {len(invoices)} invoices\\n\\\n"
         for invoice in invoices:
-            result += f"ID: {invoice.id} - {invoice.invoiceNumber}\\\n"
+            result += f"ID: {invoice.id} - {invoice.invoice_number}\\\n"
             result += f"  Customer: {invoice.customer.name if invoice.customer else 'Unknown'}\\\n"
             result += f"  Status: {invoice.status}\\\n"
+            if getattr(invoice, 'overdue', None) is not None:
+                result += f"  Overdue: {'Yes' if invoice.overdue else 'No'}\\\n"
             result += f"  Total: {invoice.total}\\\n"
-            result += f"  Date: {invoice.createdAt}\\\n"
+            result += f"  Date: {invoice.created_at}\\\n"
             result += "\\\n"
 
         return [TextContent(type="text", text=result)]
@@ -830,17 +874,20 @@ class InvoiceEntityHandler(BaseEntityHandler):
     async def get(self, id: int) -> List[TextContent]:
         invoice = await self.client.get_invoice(id)
 
-        result = f"Invoice: {invoice.invoiceNumber} (ID: {invoice.id})\\\n"
+        result = f"Invoice: {invoice.invoice_number} (ID: {invoice.id})\\\n"
         result += f"Customer: {invoice.customer.name if invoice.customer else 'Unknown'}\\\n"
         result += f"Status: {invoice.status}\\\n"
+        if getattr(invoice, 'overdue', None) is not None:
+            result += f"Overdue: {'Yes' if invoice.overdue else 'No'}\\\n"
         result += f"Total: {invoice.total}\\\n"
-        result += f"Subtotal: {invoice.subtotal}\\\n"
         result += f"Tax: {invoice.tax}\\\n"
-        result += f"Created: {invoice.createdAt}\\\n"
+        result += f"Created: {invoice.created_at}\\\n"
 
-        if hasattr(invoice, "dueDate") and invoice.dueDate:
-            result += f"Due Date: {invoice.dueDate}\\\n"
-        if hasattr(invoice, "comment") and invoice.comment:
+        if getattr(invoice, 'due_days', None):
+            result += f"Due Days: {invoice.due_days}\\\n"
+        if getattr(invoice, 'payment_date', None):
+            result += f"Payment Date: {invoice.payment_date}\\\n"
+        if getattr(invoice, 'comment', None):
             result += f"Comment: {invoice.comment}\\\n"
 
         return [TextContent(type="text", text=result)]

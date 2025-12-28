@@ -88,7 +88,8 @@ def timesheet_tool() -> Tool:
                         "user": {"type": "integer"},
                         "billable": {"type": "boolean"},
                         "fixedRate": {"type": "number"},
-                        "hourlyRate": {"type": "number"}
+                        "hourlyRate": {"type": "number"},
+                        "break": {"type": "integer", "description": "Break duration in seconds"}
                     }
                 },
                 "meta": {
@@ -395,7 +396,9 @@ async def _handle_timesheet_get(client: KimaiClient, id: Optional[int]) -> List[
         result += f"Fixed Rate: {ts.fixed_rate}\\n"
     if ts.hourly_rate:
         result += f"Hourly Rate: {ts.hourly_rate}\\n"
-    
+    if ts.break_duration:
+        result += f"Break: {ts.break_duration // 60} minutes\\n"
+
     return [TextContent(type="text", text=result)]
 
 
@@ -436,9 +439,10 @@ async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[Text
         user=data.get("user"),
         billable=data.get("billable", True),
         fixedRate=data.get("fixedRate"),
-        hourlyRate=data.get("hourlyRate")
+        hourlyRate=data.get("hourlyRate"),
+        break_duration=data.get("break")
     )
-    
+
     ts = await client.create_timesheet(form)
     
     status = "Started (running)" if not ts.end else "Created"
