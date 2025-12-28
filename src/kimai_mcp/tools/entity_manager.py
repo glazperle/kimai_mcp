@@ -84,6 +84,16 @@ def entity_tool() -> Tool:
                     "type": "string",
                     "description": "Month for lock_month/unlock_month actions (YYYY-MM-DD format). For lock: all months before and including this one will be locked. For unlock: all months from this one to end of year will be unlocked.",
                     "pattern": "[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])"
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "List of user IDs for bulk lock_month/unlock_month operations. Use instead of 'id' for multiple users."
+                },
+                "user_scope": {
+                    "type": "string",
+                    "enum": ["all"],
+                    "description": "Set to 'all' to apply lock_month/unlock_month to all active users. Use instead of 'id' or 'ids'."
                 }
             },
             "allOff": [
@@ -392,22 +402,42 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
             if entity_type != "user":
                 return [
                     TextContent(type="text", text="Error: 'lock_month' action is only available for user entities")]
-            if not entity_id:
-                return [TextContent(type="text", text="Error: 'id' parameter is required for lock_month action")]
             month = params.get("month")
             if not month:
                 return [TextContent(type="text", text="Error: 'month' parameter is required for lock_month action")]
-            return await handler.lock_month(entity_id, month)
+
+            # Determine user IDs to process
+            user_ids = params.get("ids", [])
+            user_scope = params.get("user_scope")
+
+            if user_scope == "all":
+                return await handler.lock_month_bulk(None, month, all_users=True)
+            elif user_ids:
+                return await handler.lock_month_bulk(user_ids, month)
+            elif entity_id:
+                return await handler.lock_month(entity_id, month)
+            else:
+                return [TextContent(type="text", text="Error: 'id', 'ids', or 'user_scope=all' is required for lock_month action")]
         elif action == "unlock_month":
             if entity_type != "user":
                 return [
                     TextContent(type="text", text="Error: 'unlock_month' action is only available for user entities")]
-            if not entity_id:
-                return [TextContent(type="text", text="Error: 'id' parameter is required for unlock_month action")]
             month = params.get("month")
             if not month:
                 return [TextContent(type="text", text="Error: 'month' parameter is required for unlock_month action")]
-            return await handler.unlock_month(entity_id, month)
+
+            # Determine user IDs to process
+            user_ids = params.get("ids", [])
+            user_scope = params.get("user_scope")
+
+            if user_scope == "all":
+                return await handler.unlock_month_bulk(None, month, all_users=True)
+            elif user_ids:
+                return await handler.unlock_month_bulk(user_ids, month)
+            elif entity_id:
+                return await handler.unlock_month(entity_id, month)
+            else:
+                return [TextContent(type="text", text="Error: 'id', 'ids', or 'user_scope=all' is required for unlock_month action")]
         else:
             return [TextContent(
                 type="text",
@@ -751,6 +781,30 @@ class UserEntityHandler(BaseEntityHandler):
             text=f"Locked working time months up to and including {month} for user ID {user_id}"
         )]
 
+    async def lock_month_bulk(self, user_ids: List[int], month: str, all_users: bool = False) -> List[TextContent]:
+        """Lock working time months for multiple users."""
+        if all_users:
+            users = await self.client.get_users(visible=1)
+            user_ids = [u.id for u in users if u.enabled]
+
+        success = []
+        failed = []
+
+        for uid in user_ids:
+            try:
+                await self.client.lock_work_contract_month(uid, month)
+                success.append(uid)
+            except Exception as e:
+                failed.append((uid, str(e)))
+
+        result = f"Locked month {month} for {len(success)} users"
+        if failed:
+            result += f", {len(failed)} failed:\n"
+            for uid, error in failed:
+                result += f"  - User {uid}: {error}\n"
+
+        return [TextContent(type="text", text=result)]
+
     async def unlock_month(self, user_id: int, month: str) -> List[TextContent]:
         """Unlock working time months for a user."""
         await self.client.unlock_work_contract_month(user_id, month)
@@ -758,6 +812,30 @@ class UserEntityHandler(BaseEntityHandler):
             type="text",
             text=f"Unlocked working time months from {month} onwards for user ID {user_id}"
         )]
+
+    async def unlock_month_bulk(self, user_ids: List[int], month: str, all_users: bool = False) -> List[TextContent]:
+        """Unlock working time months for multiple users."""
+        if all_users:
+            users = await self.client.get_users(visible=1)
+            user_ids = [u.id for u in users if u.enabled]
+
+        success = []
+        failed = []
+
+        for uid in user_ids:
+            try:
+                await self.client.unlock_work_contract_month(uid, month)
+                success.append(uid)
+            except Exception as e:
+                failed.append((uid, str(e)))
+
+        result = f"Unlocked month {month} for {len(success)} users"
+        if failed:
+            result += f", {len(failed)} failed:\n"
+            for uid, error in failed:
+                result += f"  - User {uid}: {error}\n"
+
+        return [TextContent(type="text", text=result)]
 
 
 class TeamEntityHandler(BaseEntityHandler):
