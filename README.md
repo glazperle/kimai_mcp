@@ -103,9 +103,8 @@ Add the following to your Claude Desktop configuration:
 {
   "mcpServers": {
     "kimai": {
-      "command": "python",
+      "command": "kimai-mcp",
       "args": [
-        "-m", "kimai_mcp.server",
         "--kimai-url=https://your-kimai-instance.com",
         "--kimai-token=your-api-token-here"
       ]
@@ -118,6 +117,7 @@ Add the following to your Claude Desktop configuration:
 - Replace `https://your-kimai-instance.com` with your actual Kimai URL
 - Replace `your-api-token-here` with your API token from Kimai
 - Optionally add `--kimai-user=USER_ID` for a default user ID
+- The `kimai-mcp` command is available after `pip install kimai-mcp`
 
 ### Step 3: Restart Claude Desktop
 
@@ -140,8 +140,7 @@ Then use this Claude Desktop configuration:
 {
   "mcpServers": {
     "kimai": {
-      "command": "python",
-      "args": ["-m", "kimai_mcp.server"],
+      "command": "kimai-mcp",
       "cwd": "/path/to/your/kimai_mcp/directory"
     }
   }
@@ -159,8 +158,7 @@ Then use this Claude Desktop configuration:
 {
   "mcpServers": {
     "kimai": {
-      "command": "python",
-      "args": ["-m", "kimai_mcp.server"],
+      "command": "kimai-mcp",
       "cwd": "C:/Users/YourName/Projects/kimai_mcp"
     }
   }
@@ -180,8 +178,7 @@ Then use this Claude Desktop configuration:
 {
   "mcpServers": {
     "kimai": {
-      "command": "python",
-      "args": ["-m", "kimai_mcp.server"]
+      "command": "kimai-mcp"
     }
   }
 }
@@ -413,20 +410,20 @@ If you're running a self-hosted Kimai instance with a custom CA certificate (e.g
 
 ```bash
 # Point to your CA certificate file
-python -m kimai_mcp.server --kimai-url=https://kimai.example.com --kimai-token=your-token --ssl-verify=/path/to/ca-bundle.crt
+kimai-mcp --kimai-url=https://kimai.example.com --kimai-token=your-token --ssl-verify=/path/to/ca-bundle.crt
 
 # Or disable verification (not recommended for production)
-python -m kimai_mcp.server --kimai-url=https://kimai.example.com --kimai-token=your-token --ssl-verify=false
+kimai-mcp --kimai-url=https://kimai.example.com --kimai-token=your-token --ssl-verify=false
 ```
 
 **Solution 2: Use environment variables**
 
 ```bash
 # Using httpx's built-in SSL environment variables
-SSL_CERT_DIR=/etc/ssl/certs python -m kimai_mcp.server --kimai-url=... --kimai-token=...
+SSL_CERT_DIR=/etc/ssl/certs kimai-mcp --kimai-url=... --kimai-token=...
 
 # Or using the KIMAI_SSL_VERIFY environment variable
-KIMAI_SSL_VERIFY=/path/to/ca-bundle.crt python -m kimai_mcp.server --kimai-url=... --kimai-token=...
+KIMAI_SSL_VERIFY=/path/to/ca-bundle.crt kimai-mcp --kimai-url=... --kimai-token=...
 ```
 
 **Claude Desktop configuration with custom certificates:**
@@ -435,9 +432,8 @@ KIMAI_SSL_VERIFY=/path/to/ca-bundle.crt python -m kimai_mcp.server --kimai-url=.
 {
   "mcpServers": {
     "kimai": {
-      "command": "python",
+      "command": "kimai-mcp",
       "args": [
-        "-m", "kimai_mcp.server",
         "--kimai-url=https://kimai.example.com",
         "--kimai-token=your-token",
         "--ssl-verify=/path/to/ca-bundle.crt"
@@ -453,8 +449,8 @@ Or using the environment variable:
 {
   "mcpServers": {
     "kimai": {
-      "command": "python",
-      "args": ["-m", "kimai_mcp.server", "--kimai-url=...", "--kimai-token=..."],
+      "command": "kimai-mcp",
+      "args": ["--kimai-url=...", "--kimai-token=..."],
       "env": {
         "KIMAI_SSL_VERIFY": "/path/to/ca-bundle.crt"
       }
@@ -468,13 +464,13 @@ For debugging, you can run the server directly:
 
 ```bash
 # Using command line arguments
-python -m kimai_mcp.server --kimai-url=https://your-kimai.com --kimai-token=your-token
+kimai-mcp --kimai-url=https://your-kimai.com --kimai-token=your-token
 
 # Using .env file (make sure you're in the directory with the .env file)
-python -m kimai_mcp.server
+kimai-mcp
 
-# Test the package module execution
-python -m kimai_mcp.server --help
+# Alternative: using Python module execution
+python -m kimai_mcp.server --kimai-url=https://your-kimai.com --kimai-token=your-token
 ```
 
 ### Logging
