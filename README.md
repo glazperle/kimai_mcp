@@ -1,7 +1,8 @@
 # Kimai MCP Server
 
+[![PyPI version](https://badge.fury.io/py/kimai-mcp.svg)](https://pypi.org/project/kimai-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
 A comprehensive Model Context Protocol (MCP) server for integrating with the Kimai time-tracking API. This server allows AI assistants like Claude to efficiently interact with Kimai instances to manage time tracking, projects, activities, customers, users, teams, absences, and more.
@@ -9,11 +10,11 @@ A comprehensive Model Context Protocol (MCP) server for integrating with the Kim
 ## 🚀 Quick Start
 
 ```bash
-# Install the package
-pip install -e .
+# Install from PyPI
+pip install kimai-mcp
 
 # Run with your Kimai credentials
-python -m kimai_mcp.server --kimai-url=https://your-kimai.com --kimai-token=your-token
+kimai-mcp --kimai-url=https://your-kimai.com --kimai-token=your-token
 ```
 
 ## 🛠️ Available Tools
@@ -51,24 +52,25 @@ python -m kimai_mcp.server --kimai-url=https://your-kimai.com --kimai-token=your
 ## Installation
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.10+
 - A Kimai instance with API access enabled
 - API token from your Kimai user profile
 
-### Install the Package
+### Install from PyPI (Recommended)
+
+```bash
+pip install kimai-mcp
+```
+
+### Install from Source (Development)
 
 ```bash
 # Clone the repository
 git clone https://github.com/glazperle/kimai_mcp.git
 cd kimai_mcp
 
-# Install the package
-pip install -e .
-```
-
-### Alternative: Install Dependencies Only
-```bash
-pip install mcp httpx pydantic python-dotenv
+# Install in development mode
+pip install -e ".[dev]"
 ```
 
 ## Configuration
