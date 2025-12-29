@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  kimai-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kimai-mcp-server
+    restart: unless-stopped
+
+    # Environment variables
+    environment:
+      # Kimai connection settings (REQUIRED)
+      - KIMAI_URL=${KIMAI_URL}
+      - KIMAI_API_TOKEN=${KIMAI_API_TOKEN}
+
+      # Optional settings
+      - KIMAI_DEFAULT_USER=${KIMAI_DEFAULT_USER:-}
+      - KIMAI_SSL_VERIFY=${KIMAI_SSL_VERIFY:-true}
+
+      # MCP Server settings
+      - MCP_SERVER_TOKEN=${MCP_SERVER_TOKEN:-}  # Auto-generated if not set
+
+    # Ports
+    ports:
+      - "${SERVER_PORT:-8000}:8000"
+
+    # Optional: Mount CA certificates for custom SSL
+    # volumes:
+    #   - ./certs/ca-bundle.crt:/app/certs/ca-bundle.crt:ro
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+# Optional: Add reverse proxy with SSL termination
+# Example with Traefik (uncomment if using)
+#
+# networks:
+#   default:
+#     name: traefik
+#     external: true
+#
+# labels:
+#   - "traefik.enable=true"
+#   - "traefik.http.routers.kimai-mcp.rule=Host(`mcp.example.com`)"
+#   - "traefik.http.routers.kimai-mcp.entrypoints=websecure"
+#   - "traefik.http.routers.kimai-mcp.tls.certresolver=letsencrypt"
+#   - "traefik.http.services.kimai-mcp.loadbalancer.server.port=8000"

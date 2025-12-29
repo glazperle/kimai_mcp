@@ -1,0 +1,19 @@
+{
+  "description": "Claude Desktop configuration for remote Kimai MCP server",
+  "mcpServers": {
+    "kimai": {
+      "url": "http://your-server-address:8000/sse",
+      "headers": {
+        "Authorization": "Bearer your-mcp-server-token-here"
+      }
+    }
+  },
+  "notes": [
+    "Replace 'your-server-address' with your actual server IP or domain",
+    "Replace 'your-mcp-server-token-here' with the token from server logs",
+    "For production use HTTPS: https://mcp.your-domain.com/sse",
+    "For internal network use private IP: http://192.168.1.100:8000/sse",
+    "The server token is shown in docker logs when auto-generated",
+    "Keep the token secure - it's like a password!"
+  ]
+}
