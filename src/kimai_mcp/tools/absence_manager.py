@@ -5,20 +5,21 @@ from datetime import datetime
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import AbsenceForm, AbsenceFilter
+from .absence_analytics import AbsenceAnalytics
 
 
 def absence_tool() -> Tool:
     """Define the consolidated absence management tool."""
     return Tool(
         name="absence",
-        description="Universal absence management tool for complete absence workflow. Supports list, create, delete, approve, reject, and request approval actions.",
+        description="Universal absence management tool for complete absence workflow. Supports list, statistics, create, delete, approve, reject, and request approval actions.",
         inputSchema={
             "type": "object",
             "required": ["action"],
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "types", "create", "delete", "approve", "reject", "request"],
+                    "enum": ["list", "statistics", "types", "create", "delete", "approve", "reject", "request"],
                     "description": "The action to perform"
                 },
                 "id": {
@@ -99,6 +100,17 @@ def absence_tool() -> Tool:
                     "type": "string",
                     "description": "Language code for absence types (for types action)",
                     "default": "en"
+                },
+                "group_by": {
+                    "type": "string",
+                    "enum": ["type", "user", "month"],
+                    "description": "Grouping for statistics action",
+                    "default": "type"
+                },
+                "breakdown_by_month": {
+                    "type": "boolean",
+                    "description": "Include monthly breakdown in statistics",
+                    "default": False
                 }
             }
         }
@@ -112,6 +124,13 @@ async def handle_absence(client: KimaiClient, **params) -> List[TextContent]:
     try:
         if action == "list":
             return await _handle_absence_list(client, params.get("filters", {}))
+        elif action == "statistics":
+            return await _handle_absence_statistics(
+                client,
+                params.get("filters", {}),
+                params.get("group_by", "type"),
+                params.get("breakdown_by_month", False)
+            )
         elif action == "types":
             return await _handle_absence_types(client, params.get("language", "en"))
         elif action == "create":
@@ -282,6 +301,138 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
         result += "\\n"
     
     return [TextContent(type="text", text=result)]
+
+
+async def _handle_absence_statistics(
+    client: KimaiClient,
+    filters: Dict,
+    group_by: str,
+    breakdown_by_month: bool
+) -> List[TextContent]:
+    """Handle absence statistics action."""
+    # First, fetch absences using the same logic as list
+    user_scope = filters.get("user_scope", "all")  # Default to all for statistics
+
+    # Process date formats
+    begin_date = filters.get("begin")
+    end_date = filters.get("end")
+
+    if begin_date:
+        try:
+            parsed_date = datetime.strptime(begin_date, "%Y-%m-%d")
+            begin_date = parsed_date.strftime("%Y-%m-%dT00:00:00")
+        except ValueError:
+            return [TextContent(type="text", text=f"Error: Invalid begin date format. Expected YYYY-MM-DD, got '{begin_date}'")]
+
+    if end_date:
+        try:
+            parsed_date = datetime.strptime(end_date, "%Y-%m-%d")
+            end_date = parsed_date.strftime("%Y-%m-%dT23:59:59")
+        except ValueError:
+            return [TextContent(type="text", text=f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{end_date}'")]
+
+    # Fetch absences based on user scope
+    absences = []
+
+    if user_scope == "self":
+        current_user = await client.get_current_user()
+        absence_filter = AbsenceFilter(
+            user=str(current_user.id),
+            begin=begin_date,
+            end=end_date,
+            status=filters.get("status", "all")
+        )
+        absences = await client.get_absences(absence_filter)
+
+    elif user_scope == "specific":
+        user_filter = filters.get("user")
+        if not user_filter:
+            return [TextContent(type="text", text="Error: 'user' parameter required when user_scope is 'specific'")]
+
+        absence_filter = AbsenceFilter(
+            user=user_filter,
+            begin=begin_date,
+            end=end_date,
+            status=filters.get("status", "all")
+        )
+        absences = await client.get_absences(absence_filter)
+
+    else:  # user_scope == "all"
+        try:
+            all_absences = []
+            accessible_user_ids = set()
+
+            # First, try to get users from teams
+            try:
+                teams = await client.get_teams()
+                for team in teams:
+                    try:
+                        team_detail = await client.get_team(team.id)
+                        if team_detail.members:
+                            for member in team_detail.members:
+                                accessible_user_ids.add(member.user.id)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # Fallback to get_users
+            if not accessible_user_ids:
+                try:
+                    users = await client.get_users()
+                    accessible_user_ids = {user.id for user in users}
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "forbidden" in error_msg or "403" in error_msg:
+                        return [TextContent(
+                            type="text",
+                            text="Error: You don't have permission to view all users' absences.\n\n"
+                                 "This requires either:\n"
+                                 "- System Administrator role, or\n"
+                                 "- Being a team lead (to see team members' absences)\n\n"
+                                 "Use user_scope='self' to view your own absence statistics."
+                        )]
+                    raise
+
+            # Fetch absences for each accessible user
+            for user_id in accessible_user_ids:
+                try:
+                    user_filter = AbsenceFilter(
+                        user=str(user_id),
+                        begin=begin_date,
+                        end=end_date,
+                        status=filters.get("status", "all")
+                    )
+                    user_absences = await client.get_absences(user_filter)
+                    all_absences.extend(user_absences)
+                except Exception:
+                    continue
+
+            absences = all_absences
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error fetching absences for statistics: {str(e)}")]
+
+    # Calculate statistics
+    stats = AbsenceAnalytics.calculate_statistics(
+        absences,
+        group_by=group_by,
+        breakdown_by_month=breakdown_by_month
+    )
+
+    # Generate report title based on filters
+    title = "Absence Statistics Report"
+    if begin_date and end_date:
+        title += f" ({filters.get('begin')} to {filters.get('end')})"
+    elif begin_date:
+        title += f" (from {filters.get('begin')})"
+    elif end_date:
+        title += f" (until {filters.get('end')})"
+
+    # Format and return report
+    report = AbsenceAnalytics.format_statistics_report(stats, title)
+
+    return [TextContent(type="text", text=report)]
 
 
 async def _handle_absence_types(client: KimaiClient, language: str) -> List[TextContent]:

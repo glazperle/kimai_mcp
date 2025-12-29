@@ -784,8 +784,40 @@ class UserEntityHandler(BaseEntityHandler):
     async def lock_month_bulk(self, user_ids: List[int], month: str, all_users: bool = False) -> List[TextContent]:
         """Lock working time months for multiple users."""
         if all_users:
-            users = await self.client.get_users(visible=1)
-            user_ids = [u.id for u in users if u.enabled]
+            # Try to get users from teams first (works for team leads and admins)
+            accessible_user_ids = set()
+            try:
+                teams = await self.client.get_teams()
+                for team in teams:
+                    try:
+                        team_detail = await self.client.get_team(team.id)
+                        if team_detail.members:
+                            for member in team_detail.members:
+                                accessible_user_ids.add(member.user.id)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # Fallback to get_users (requires higher permissions)
+            if not accessible_user_ids:
+                try:
+                    users = await self.client.get_users(visible=1)
+                    accessible_user_ids = {u.id for u in users if u.enabled}
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "forbidden" in error_msg or "403" in error_msg:
+                        return [TextContent(
+                            type="text",
+                            text="Error: You don't have permission to access all users.\n\n"
+                                 "This requires either:\n"
+                                 "- System Administrator role, or\n"
+                                 "- Being a team lead (to access team members)\n\n"
+                                 "Use 'ids' parameter to specify specific user IDs instead."
+                        )]
+                    raise
+
+            user_ids = list(accessible_user_ids)
 
         success = []
         failed = []
@@ -816,8 +848,40 @@ class UserEntityHandler(BaseEntityHandler):
     async def unlock_month_bulk(self, user_ids: List[int], month: str, all_users: bool = False) -> List[TextContent]:
         """Unlock working time months for multiple users."""
         if all_users:
-            users = await self.client.get_users(visible=1)
-            user_ids = [u.id for u in users if u.enabled]
+            # Try to get users from teams first (works for team leads and admins)
+            accessible_user_ids = set()
+            try:
+                teams = await self.client.get_teams()
+                for team in teams:
+                    try:
+                        team_detail = await self.client.get_team(team.id)
+                        if team_detail.members:
+                            for member in team_detail.members:
+                                accessible_user_ids.add(member.user.id)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # Fallback to get_users (requires higher permissions)
+            if not accessible_user_ids:
+                try:
+                    users = await self.client.get_users(visible=1)
+                    accessible_user_ids = {u.id for u in users if u.enabled}
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "forbidden" in error_msg or "403" in error_msg:
+                        return [TextContent(
+                            type="text",
+                            text="Error: You don't have permission to access all users.\n\n"
+                                 "This requires either:\n"
+                                 "- System Administrator role, or\n"
+                                 "- Being a team lead (to access team members)\n\n"
+                                 "Use 'ids' parameter to specify specific user IDs instead."
+                        )]
+                    raise
+
+            user_ids = list(accessible_user_ids)
 
         success = []
         failed = []

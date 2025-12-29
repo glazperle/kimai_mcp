@@ -293,13 +293,40 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
     
     # Include user list if requested
     if filters.get("include_user_list"):
-        users = await client.get_users()
-        result += "Available users:\\n"
-        for user in users[:10]:  # Limit to 10 users
-            result += f"  - ID: {user.id}, Username: {user.username}, Name: {user.alias or 'N/A'}\\n"
-        if len(users) > 10:
-            result += f"  ... and {len(users) - 10} more users\\n"
-        result += "\\n"
+        try:
+            # Try to get users from teams first (works for team leads and admins)
+            users = []
+            try:
+                teams = await client.get_teams()
+                user_dict = {}
+                for team in teams:
+                    try:
+                        team_detail = await client.get_team(team.id)
+                        if team_detail.members:
+                            for member in team_detail.members:
+                                user_dict[member.user.id] = member.user
+                    except Exception:
+                        continue
+                users = list(user_dict.values())
+            except Exception:
+                pass
+
+            # Fallback to get_users if no team members found
+            if not users:
+                users = await client.get_users()
+
+            result += "Available users:\\n"
+            for user in users[:10]:  # Limit to 10 users
+                result += f"  - ID: {user.id}, Username: {user.username}, Name: {getattr(user, 'alias', None) or 'N/A'}\\n"
+            if len(users) > 10:
+                result += f"  ... and {len(users) - 10} more users\\n"
+            result += "\\n"
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "forbidden" in error_msg or "403" in error_msg:
+                result += "Note: Unable to list users (insufficient permissions). Use user_scope='self' or specify a user ID.\\n\\n"
+            else:
+                result += f"Note: Unable to list users: {str(e)}\\n\\n"
     
     # Calculate statistics if requested
     if filters.get("calculate_stats"):
@@ -588,17 +615,42 @@ When using the timesheet tool with action='list', you can control which users' t
     if show_users:
         guide += "\\n## Available Users:\\n\\n"
         try:
-            users = await client.get_users()
+            # Try to get users from teams first (works for team leads and admins)
+            users = []
+            try:
+                teams = await client.get_teams()
+                user_dict = {}
+                for team in teams:
+                    try:
+                        team_detail = await client.get_team(team.id)
+                        if team_detail.members:
+                            for member in team_detail.members:
+                                user_dict[member.user.id] = member.user
+                    except Exception:
+                        continue
+                users = list(user_dict.values())
+            except Exception:
+                pass
+
+            # Fallback to get_users if no team members found
+            if not users:
+                users = await client.get_users()
+
             for user in users[:20]:  # Limit to 20 users
-                status = "Active" if user.enabled else "Inactive"
+                status = "Active" if getattr(user, 'enabled', True) else "Inactive"
                 guide += f"- ID: {user.id} | Username: {user.username} | "
-                guide += f"Name: {user.alias or 'N/A'} | Status: {status}\\n"
-            
+                guide += f"Name: {getattr(user, 'alias', None) or 'N/A'} | Status: {status}\\n"
+
             if len(users) > 20:
                 guide += f"\\n... and {len(users) - 20} more users\\n"
         except Exception as e:
-            guide += f"Error fetching users: {str(e)}\\n"
-    
+            error_msg = str(e).lower()
+            if "forbidden" in error_msg or "403" in error_msg:
+                guide += "Unable to list users (insufficient permissions).\\n"
+                guide += "You may still use user_scope='specific' with a user ID if you have permission.\\n"
+            else:
+                guide += f"Error fetching users: {str(e)}\\n"
+
     return [TextContent(type="text", text=guide)]
 
 
