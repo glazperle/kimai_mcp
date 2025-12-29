@@ -79,7 +79,7 @@ class TimesheetEntity(BaseModel):
     exported: bool = False
     billable: bool = True
     meta_fields: Optional[List[Dict[str, Any]]] = Field(None, alias="metaFields")
-    break_duration: Optional[int] = Field(None, alias="break")  # Break duration in seconds
+    break_duration: Optional[int] = Field(None, alias="break")
 
 
 class TimesheetEditForm(BaseModel):
@@ -92,10 +92,10 @@ class TimesheetEditForm(BaseModel):
     fixed_rate: Optional[float] = Field(None, alias="fixedRate")
     hourly_rate: Optional[float] = Field(None, alias="hourlyRate")
     user: Optional[int] = None
-    tags: Optional[str] = None  # Comma separated
+    tags: Optional[str] = None
     exported: Optional[bool] = None
     billable: Optional[bool] = None
-    break_duration: Optional[int] = Field(None, alias="break")  # Break duration in seconds
+    break_duration: Optional[int] = Field(None, alias="break")
 
 
 class TimesheetFilter(BaseModel):

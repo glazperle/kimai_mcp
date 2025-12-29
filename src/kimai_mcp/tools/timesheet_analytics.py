@@ -16,8 +16,7 @@ class TimesheetAnalytics:
                 "total_hours": 0,
                 "message": "No timesheets found for analysis"
             }
-        
-        # Initialize counters
+
         stats = {
             "total_entries": len(timesheets),
             "total_hours": 0.0,
@@ -48,50 +47,40 @@ class TimesheetAnalytics:
                 "projects": defaultdict(float),
                 "monthly_hours": defaultdict(float)
             })
-        
-        # Process each timesheet
+
         for ts in timesheets:
             if not ts.end:
                 stats["running_timers"] += 1
                 continue
                 
             stats["completed_entries"] += 1
-            
-            # Calculate duration
+
             duration_hours = (ts.end - ts.begin).total_seconds() / 3600
             stats["total_hours"] += duration_hours
-            
-            # Billable vs non-billable
+
             if ts.billable:
                 stats["billable_hours"] += duration_hours
             else:
                 stats["non_billable_hours"] += duration_hours
-            
-            # Track working days
+
             stats["working_days"].add(ts.begin.date())
-            
-            # Project distribution
+
             if ts.project:
                 stats["projects"][ts.project] += duration_hours
-            
-            # Activity distribution
+
             if ts.activity:
                 stats["activities"][ts.activity] += duration_hours
-            
-            # Daily aggregation
+
             date_key = ts.begin.date().isoformat()
             stats["daily_hours"][date_key] += duration_hours
-            
-            # Weekly aggregation
+
             year, week, _ = ts.begin.isocalendar()
             week_key = f"{year}-W{week:02d}"
             stats["weekly_hours"][week_key] += duration_hours
-            
-            # Monthly aggregation
+
             month_key = ts.begin.strftime("%Y-%m")
             stats["monthly_hours"][month_key] += duration_hours
-            
-            # Yearly aggregation
+
             year_key = ts.begin.year
             stats["yearly_hours"][year_key] += duration_hours
             
@@ -112,29 +101,24 @@ class TimesheetAnalytics:
                 
                 year_month_key = ts.begin.strftime("%m")
                 year_stats["monthly_hours"][year_month_key] += duration_hours
-            
-            # Hour of day distribution
+
             stats["hourly_distribution"][ts.begin.hour] += 1
-            
-            # Tag usage
+
             if ts.tags:
                 for tag in ts.tags:
                     stats["tags"][tag] += 1
-        
-        # Calculate derived metrics
+
         working_days_count = len(stats["working_days"])
         stats["working_days_count"] = working_days_count
         stats["avg_hours_per_day"] = (
             stats["total_hours"] / working_days_count 
             if working_days_count > 0 else 0
         )
-        
-        # Calculate overtime (assuming 8 hours per day standard)
+
         expected_hours = working_days_count * 8
         stats["overtime_hours"] = max(0, stats["total_hours"] - expected_hours)
         stats["expected_hours"] = expected_hours
-        
-        # Convert defaultdicts to regular dicts for JSON serialization
+
         stats["projects"] = dict(stats["projects"])
         stats["activities"] = dict(stats["activities"])
         stats["daily_hours"] = dict(stats["daily_hours"])
@@ -162,8 +146,7 @@ class TimesheetAnalytics:
                     "monthly_hours": dict(year_data["monthly_hours"])
                 }
             stats["years"] = processed_years
-        
-        # Remove the set (not JSON serializable)
+
         del stats["working_days"]
         
         # Add summary percentages
@@ -193,8 +176,7 @@ class TimesheetAnalytics:
                 "hour": peak_hour[0],
                 "entries": peak_hour[1]
             }
-        
-        # Round all float values
+
         stats["total_hours"] = round(stats["total_hours"], 2)
         stats["billable_hours"] = round(stats["billable_hours"], 2)
         stats["non_billable_hours"] = round(stats["non_billable_hours"], 2)
