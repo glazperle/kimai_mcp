@@ -92,11 +92,10 @@ class KimaiClient:
         try:
             response = await self._client.request(method, endpoint, **kwargs)
             response.raise_for_status()
-            
-            # Handle empty responses
+
             if response.status_code == 204:
                 return {}
-                
+
             return response.json()
             
         except httpx.HTTPStatusError as e:
@@ -104,7 +103,6 @@ class KimaiClient:
             error_details: Optional[Any] = None
             try:
                 error_data = e.response.json()
-                # Extract message
                 message = error_data.get('message', str(e))
 
                 # Helper to prune empty dicts recursively
@@ -241,7 +239,6 @@ class KimaiClient:
                 not large_size
             )
             
-            # Convert datetime to string format or use string as-is
             if filters.begin:
                 if isinstance(filters.begin, datetime):
                     params['begin'] = filters.begin.replace(microsecond=0).isoformat()
@@ -303,22 +300,18 @@ class KimaiClient:
             
             # Fetch page
             data = await self._request("GET", "/timesheets", params=paginated_params)
-            
+
             if not data:
-                # No more results
                 break
                 
             all_timesheets.extend([TimesheetEntity(**item) for item in data])
-            
-            # Check if we got less than page_size results (last page)
+
             if len(data) < page_size:
                 break
                 
             page += 1
             
-            # Safety limit to prevent infinite loops
             if page > 100:
-                # Log warning or raise exception
                 fetched_all = False
                 break
         
@@ -350,18 +343,17 @@ class KimaiClient:
     
     async def create_timesheet(self, timesheet: TimesheetEditForm) -> TimesheetEntity:
         """Create a new timesheet.
-        
+
         Args:
             timesheet: Timesheet data
         """
         payload = timesheet.model_dump(exclude_none=True, by_alias=True)
-        
-        # Convert datetime to ISO format
+
         if timesheet.begin:
             payload['begin'] = timesheet.begin.replace(microsecond=0).isoformat()
         if timesheet.end:
             payload['end'] = timesheet.end.replace(microsecond=0).isoformat()
-        
+
         data = await self._request("POST", "/timesheets", json=payload)
         return TimesheetEntity(**data)
     
@@ -373,13 +365,12 @@ class KimaiClient:
             timesheet: Updated timesheet data
         """
         payload = timesheet.model_dump(exclude_none=True, by_alias=True)
-        
-        # Convert datetime to ISO format
+
         if timesheet.begin:
             payload['begin'] = timesheet.begin.replace(microsecond=0).isoformat()
         if timesheet.end:
             payload['end'] = timesheet.end.replace(microsecond=0).isoformat()
-        
+
         data = await self._request("PATCH", f"/timesheets/{timesheet_id}", json=payload)
         return TimesheetEntity(**data)
     
@@ -436,8 +427,7 @@ class KimaiClient:
         params = {}
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
-            
-            # Convert date to string format
+
             if filters.start:
                 params['start'] = filters.start.isoformat()
             if filters.end:
@@ -459,8 +449,7 @@ class KimaiClient:
     async def create_project(self, project: ProjectEditForm) -> ProjectExtended:
         """Create a new project."""
         payload = project.model_dump(exclude_none=True, by_alias=True)
-        
-        # Convert datetime to ISO format
+
         if project.start:
             payload['start'] = project.start.isoformat()
         if project.end:
@@ -472,13 +461,12 @@ class KimaiClient:
     async def update_project(self, project_id: int, project: ProjectEditForm) -> ProjectExtended:
         """Update an existing project."""
         payload = project.model_dump(exclude_none=True, by_alias=True)
-        
-        # Convert date to ISO format
+
         if project.start:
             payload['start'] = project.start.isoformat()
         if project.end:
             payload['end'] = project.end.isoformat()
-        
+
         data = await self._request("PATCH", f"/projects/{project_id}", json=payload)
         return ProjectExtended(**data)
     
@@ -630,14 +618,14 @@ class KimaiClient:
     
     async def get_absences(self, filters: Optional[AbsenceFilter] = None) -> List[Absence]:
         """Get list of absences.
-        
+
         Args:
             filters: Absence filters
         """
         params = {}
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
-        
+
         data = await self._request("GET", "/absences", params=params)
         return [Absence(**item) for item in data]
     
@@ -726,20 +714,19 @@ class KimaiClient:
     
     async def get_public_holidays(self, filters: Optional[PublicHolidayFilter] = None) -> List[PublicHoliday]:
         """Get list of public holidays.
-        
+
         Args:
             filters: Public holiday filters
         """
         params = {}
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
-            
-            # Convert datetime to string format
+
             if filters.begin:
                 params['begin'] = filters.begin.date().isoformat()
             if filters.end:
                 params['end'] = filters.end.date().isoformat()
-        
+
         data = await self._request("GET", "/public-holidays", params=params)
         return [PublicHoliday(**item) for item in data]
     
@@ -752,13 +739,12 @@ class KimaiClient:
         params = {}
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
-            
-            # Convert datetime to string format
+
             if filters.begin:
                 params['begin'] = filters.begin.date().isoformat()
             if filters.end:
                 params['end'] = filters.end.date().isoformat()
-        
+
         data = await self._request("GET", "/public-holidays/calendar", params=params)
         return [CalendarEvent(**item) for item in data]
     
@@ -906,8 +892,7 @@ class KimaiClient:
         params = {}
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
-            
-            # Convert datetime to string format
+
             if filters.begin:
                 params['begin'] = filters.begin.replace(microsecond=0).isoformat()
             if filters.end:

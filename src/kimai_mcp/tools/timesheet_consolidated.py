@@ -242,7 +242,6 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
 
 
     if begin_datetime == end_datetime and begin_datetime.time() == datetime.min.time():
-        # AI Probably just specified a single day
         end_datetime = begin_datetime + timedelta(days=1)
     
     # Build filter
