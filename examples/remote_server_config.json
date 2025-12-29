@@ -1,0 +1,49 @@
+{
+  "description": "Claude Desktop configuration for remote Kimai MCP server with per-client authentication",
+  "mcpServers": {
+    "kimai": {
+      "url": "http://your-server-address:8000/sse",
+      "headers": {
+        "Authorization": "Bearer your-mcp-server-token-here",
+        "X-Kimai-Token": "your-personal-kimai-api-token"
+      }
+    }
+  },
+  "notes": [
+    "SERVER SETUP:",
+    "- Replace 'your-server-address' with your actual server IP or domain",
+    "- Replace 'your-mcp-server-token-here' with the MCP server token from logs",
+    "",
+    "YOUR CREDENTIALS:",
+    "- Replace 'your-personal-kimai-api-token' with YOUR Kimai API token",
+    "- Each user uses their OWN Kimai API token (not shared!)",
+    "- Get your token from your Kimai user profile > API section",
+    "",
+    "OPTIONAL HEADERS:",
+    "- X-Kimai-URL: Override default Kimai server URL (if needed)",
+    "- X-Kimai-User: Default user ID for operations",
+    "",
+    "SECURITY:",
+    "- Your Kimai token is sent securely to the server",
+    "- Server creates isolated session with YOUR permissions",
+    "- All actions are auditable under your Kimai user account",
+    "- No shared credentials = better security and compliance",
+    "",
+    "PRODUCTION:",
+    "- Use HTTPS: https://mcp.your-domain.com/sse",
+    "- For internal network: http://192.168.1.100:8000/sse"
+  ],
+  "example_with_all_headers": {
+    "mcpServers": {
+      "kimai": {
+        "url": "http://your-server-address:8000/sse",
+        "headers": {
+          "Authorization": "Bearer your-mcp-server-token-here",
+          "X-Kimai-Token": "your-personal-kimai-api-token",
+          "X-Kimai-URL": "https://your-kimai-instance.com",
+          "X-Kimai-User": "42"
+        }
+      }
+    }
+  }
+}
