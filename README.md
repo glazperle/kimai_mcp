@@ -40,7 +40,7 @@ kimai-mcp --setup
 3. **Timer Tool** - Active timer operations (start, stop, restart, view active/recent)
 4. **Rate Tool** - Rate management across all entity types
 5. **Team Access Tool** - Team member and permission management
-6. **Absence Tool** - Complete absence workflow (create, approve, reject, list, batch operations)
+6. **Absence Tool** - Complete absence workflow (create, approve, reject, list, attendance, batch operations, auto-split)
 7. **Calendar Tool** - Unified calendar data access
 8. **Meta Tool** - Custom field management across entities
 9. **User Current Tool** - Current user information
@@ -387,6 +387,20 @@ Then use this Claude Desktop configuration:
 }
 ```
 
+#### Check Attendance (Who is Present Today)
+
+```json
+{
+  "tool": "absence",
+  "parameters": {
+    "action": "attendance",
+    "date": "2024-12-29"
+  }
+}
+```
+
+Returns a report showing present and absent employees with absence reasons.
+
 ### Batch Operations
 
 Batch operations allow executing multiple API calls in parallel for efficient bulk processing.
@@ -464,10 +478,65 @@ Batch operations allow executing multiple API calls in parallel for efficient bu
 ### Current User Information
 
 #### Get Current User
+
 ```json
 {
   "tool": "user_current"
 }
+```
+
+### Smart Features
+
+#### Automatic Absence Splitting
+
+The MCP automatically handles Kimai's limitations when creating absences:
+
+**Year-Boundary Splitting**: Kimai doesn't allow absences spanning multiple years. The MCP automatically splits them.
+
+```json
+{
+  "tool": "absence",
+  "parameters": {
+    "action": "create",
+    "data": {
+      "date": "2025-09-01",
+      "end": "2026-03-31",
+      "type": "parental",
+      "comment": "Parental leave"
+    }
+  }
+}
+```
+
+This automatically becomes two entries:
+
+- `2025-09-01` to `2025-12-31`
+- `2026-01-01` to `2026-03-31`
+
+**30-Day Limit Splitting**: Kimai limits absences to 30 days maximum. Longer absences are automatically split into 30-day chunks.
+
+```json
+{
+  "tool": "absence",
+  "parameters": {
+    "action": "create",
+    "data": {
+      "date": "2025-09-01",
+      "end": "2025-11-29",
+      "type": "parental",
+      "comment": "Parental leave (90 days)"
+    }
+  }
+}
+```
+
+This automatically becomes three 30-day entries with output:
+
+```
+Created 3 absence(s) for parental
+Period: 2025-09-01 to 2025-11-29 (90 days)
+IDs: 123, 124, 125
+(Automatically split due to Kimai limitations)
 ```
 
 ## Troubleshooting

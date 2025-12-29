@@ -350,6 +350,84 @@ Parameters: {
 }
 ```
 
+### Check Attendance (Who is Present Today)
+
+```
+Tool: absence
+Parameters: {
+  "action": "attendance"
+}
+
+Output:
+# Attendance Report for Sonntag, 29.12.2024
+
+## Present (18 of 22)
+- ✓ anna.schmidt
+- ✓ hans.mueller
+...
+
+## Absent (4)
+- ✗ max.mustermann (Urlaub)
+- ✗ petra.bauer (Krankheit)
+```
+
+### Check Attendance for Specific Date
+
+```
+Tool: absence
+Parameters: {
+  "action": "attendance",
+  "date": "2025-01-15"
+}
+```
+
+## Smart Features
+
+### Automatic Year-Boundary Splitting
+
+Kimai doesn't allow absences spanning multiple years. The MCP automatically splits them.
+
+```
+Tool: absence
+Parameters: {
+  "action": "create",
+  "data": {
+    "date": "2025-09-01",
+    "end": "2026-03-31",
+    "type": "parental",
+    "comment": "Parental leave"
+  }
+}
+
+Output:
+Created 2 absence(s) for parental spanning 2025-2026
+IDs: 123, 124
+(Automatically split due to Kimai year-boundary limitation)
+```
+
+### Automatic 30-Day Splitting
+
+Kimai limits absences to 30 days maximum. Longer absences are automatically split.
+
+```
+Tool: absence
+Parameters: {
+  "action": "create",
+  "data": {
+    "date": "2025-09-01",
+    "end": "2025-11-29",
+    "type": "parental",
+    "comment": "90 days parental leave"
+  }
+}
+
+Output:
+Created 3 absence(s) for parental
+Period: 2025-09-01 to 2025-11-29 (90 days)
+IDs: 123, 124, 125
+(Automatically split due to Kimai limitations)
+```
+
 ## Batch Operations
 
 Batch operations allow executing multiple API calls in parallel for efficient bulk processing.
