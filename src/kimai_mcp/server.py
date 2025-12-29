@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-__version__ = "2.5.0"
+__version__ = "2.5.1"
 
 # Load environment variables from .env file if it exists
 try:

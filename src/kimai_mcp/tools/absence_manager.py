@@ -1,7 +1,7 @@
 """Consolidated Absence Manager tool for all absence operations."""
 
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, date
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import AbsenceForm, AbsenceFilter
@@ -465,34 +465,90 @@ async def _handle_absence_create(client: KimaiClient, data: Dict) -> List[TextCo
     """Handle absence create action."""
     required_fields = ["comment", "date", "type"]
     missing_fields = [field for field in required_fields if not data.get(field)]
-    
+
     if missing_fields:
         return [TextContent(
             type="text",
             text=f"Error: Missing required fields: {', '.join(missing_fields)}"
         )]
-    
-    # Create absence form
+
+    # Parse dates
+    start_date = datetime.strptime(data["date"], "%Y-%m-%d").date()
+    end_date = None
+    if data.get("end"):
+        end_date = datetime.strptime(data["end"], "%Y-%m-%d").date()
+
+    # Check for year-crossing absence (Kimai doesn't allow absences spanning year boundaries)
+    if end_date and start_date.year != end_date.year:
+        # Split into multiple absences per year
+        created_absences = []
+        current_start = start_date
+
+        while current_start <= end_date:
+            # End of current year or final end date
+            year_end = date(current_start.year, 12, 31)
+            current_end = min(year_end, end_date)
+
+            # Create absence for this period
+            form = AbsenceForm(
+                comment=data["comment"],
+                date=current_start.strftime("%Y-%m-%d"),
+                end=current_end.strftime("%Y-%m-%d") if current_start != current_end else None,
+                type=data["type"],
+                user=data.get("user"),
+                half_day=data.get("halfDay", False),
+                duration=data.get("duration")
+            )
+
+            try:
+                absence_list = await client.create_absence(form)
+                # create_absence returns a list
+                if isinstance(absence_list, list):
+                    created_absences.extend(absence_list)
+                else:
+                    created_absences.append(absence_list)
+            except Exception as e:
+                return [TextContent(
+                    type="text",
+                    text=f"Error creating absence for {current_start.year}: {str(e)}"
+                )]
+
+            # Move to next year
+            current_start = date(current_start.year + 1, 1, 1)
+
+        # Success message
+        years = f"{start_date.year}-{end_date.year}"
+        ids = ", ".join(str(a.id) for a in created_absences)
+        return [TextContent(
+            type="text",
+            text=f"Created {len(created_absences)} absence(s) for {data['type']} spanning {years}\n"
+                 f"IDs: {ids}\n"
+                 f"(Automatically split due to Kimai year-boundary limitation)"
+        )]
+
+    # Normal case: single absence (within same year)
     form = AbsenceForm(
         comment=data["comment"],
         date=data["date"],
         type=data["type"],
         user=data.get("user"),
         end=data.get("end"),
-        halfDay=data.get("halfDay", False),
+        half_day=data.get("halfDay", False),
         duration=data.get("duration")
     )
-    
-    absence = await client.create_absence(form)
-    
+
+    absence_list = await client.create_absence(form)
+    # create_absence returns a list
+    absence = absence_list[0] if isinstance(absence_list, list) else absence_list
+
     duration_text = ""
-    if hasattr(absence, "endDate") and absence.endDate:
-        duration_text = f" from {absence.date} to {absence.endDate}"
-    elif hasattr(absence, "halfDay") and absence.halfDay:
+    if hasattr(absence, "end_date") and absence.end_date:
+        duration_text = f" from {absence.date} to {absence.end_date}"
+    elif hasattr(absence, "half_day") and absence.half_day:
         duration_text = f" (half day) on {absence.date}"
     else:
         duration_text = f" on {absence.date}"
-    
+
     return [TextContent(
         type="text",
         text=f"Created absence ID {absence.id} for {absence.type}{duration_text}"
