@@ -1,7 +1,7 @@
 """Consolidated Absence Manager tool for all absence operations."""
 
-from typing import List, Dict, Optional
-from datetime import datetime, date
+from typing import List, Dict, Optional, Tuple
+from datetime import datetime, date, timedelta
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import AbsenceForm, AbsenceFilter
@@ -461,6 +461,36 @@ async def _handle_absence_types(client: KimaiClient, language: str) -> List[Text
     return [TextContent(type="text", text=result)]
 
 
+# Kimai limits absences to max 30 days per entry
+MAX_ABSENCE_DAYS = 30
+
+
+def _split_date_range(start: date, end: date) -> List[Tuple[date, date]]:
+    """Split a date range respecting year boundaries and 30-day limit.
+
+    Returns list of (start, end) tuples.
+    """
+    chunks = []
+    current_start = start
+
+    while current_start <= end:
+        # Constraint 1: Year boundary (Dec 31)
+        year_end = date(current_start.year, 12, 31)
+
+        # Constraint 2: 30-day limit
+        max_end_by_days = current_start + timedelta(days=MAX_ABSENCE_DAYS - 1)
+
+        # Take the most restrictive end date
+        current_end = min(year_end, max_end_by_days, end)
+
+        chunks.append((current_start, current_end))
+
+        # Move to next chunk
+        current_start = current_end + timedelta(days=1)
+
+    return chunks
+
+
 async def _handle_absence_create(client: KimaiClient, data: Dict) -> List[TextContent]:
     """Handle absence create action."""
     required_fields = ["comment", "date", "type"]
@@ -474,26 +504,25 @@ async def _handle_absence_create(client: KimaiClient, data: Dict) -> List[TextCo
 
     # Parse dates
     start_date = datetime.strptime(data["date"], "%Y-%m-%d").date()
-    end_date = None
+    end_date = start_date
     if data.get("end"):
         end_date = datetime.strptime(data["end"], "%Y-%m-%d").date()
 
-    # Check for year-crossing absence (Kimai doesn't allow absences spanning year boundaries)
-    if end_date and start_date.year != end_date.year:
-        # Split into multiple absences per year
+    # Calculate total days
+    total_days = (end_date - start_date).days + 1
+
+    # Check if splitting is needed (year boundary OR > 30 days)
+    needs_split = (start_date.year != end_date.year) or (total_days > MAX_ABSENCE_DAYS)
+
+    if needs_split:
+        chunks = _split_date_range(start_date, end_date)
         created_absences = []
-        current_start = start_date
 
-        while current_start <= end_date:
-            # End of current year or final end date
-            year_end = date(current_start.year, 12, 31)
-            current_end = min(year_end, end_date)
-
-            # Create absence for this period
+        for chunk_start, chunk_end in chunks:
             form = AbsenceForm(
                 comment=data["comment"],
-                date=current_start.strftime("%Y-%m-%d"),
-                end=current_end.strftime("%Y-%m-%d") if current_start != current_end else None,
+                date=chunk_start.strftime("%Y-%m-%d"),
+                end=chunk_end.strftime("%Y-%m-%d") if chunk_start != chunk_end else None,
                 type=data["type"],
                 user=data.get("user"),
                 half_day=data.get("halfDay", False),
@@ -502,7 +531,6 @@ async def _handle_absence_create(client: KimaiClient, data: Dict) -> List[TextCo
 
             try:
                 absence_list = await client.create_absence(form)
-                # create_absence returns a list
                 if isinstance(absence_list, list):
                     created_absences.extend(absence_list)
                 else:
@@ -510,23 +538,20 @@ async def _handle_absence_create(client: KimaiClient, data: Dict) -> List[TextCo
             except Exception as e:
                 return [TextContent(
                     type="text",
-                    text=f"Error creating absence for {current_start.year}: {str(e)}"
+                    text=f"Error creating absence chunk {chunk_start} - {chunk_end}: {str(e)}"
                 )]
 
-            # Move to next year
-            current_start = date(current_start.year + 1, 1, 1)
-
         # Success message
-        years = f"{start_date.year}-{end_date.year}"
         ids = ", ".join(str(a.id) for a in created_absences)
         return [TextContent(
             type="text",
-            text=f"Created {len(created_absences)} absence(s) for {data['type']} spanning {years}\n"
+            text=f"Created {len(created_absences)} absence(s) for {data['type']}\n"
+                 f"Period: {start_date} to {end_date} ({total_days} days)\n"
                  f"IDs: {ids}\n"
-                 f"(Automatically split due to Kimai year-boundary limitation)"
+                 f"(Automatically split due to Kimai limitations)"
         )]
 
-    # Normal case: single absence (within same year)
+    # Normal case: single absence (<=30 days, same year)
     form = AbsenceForm(
         comment=data["comment"],
         date=data["date"],
