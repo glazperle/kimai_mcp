@@ -7,6 +7,7 @@ from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import TimesheetEditForm, TimesheetFilter, MetaFieldForm
 from .timesheet_analytics import TimesheetAnalytics
+from .batch_utils import execute_batch, format_batch_result
 
 
 def timesheet_tool() -> Tool:
@@ -20,7 +21,7 @@ def timesheet_tool() -> Tool:
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "get", "create", "update", "delete", "duplicate", "export_toggle", "meta_update", "user_guide"],
+                    "enum": ["list", "get", "create", "update", "delete", "duplicate", "export_toggle", "meta_update", "user_guide", "batch_delete", "batch_export"],
                     "description": """The action to perform:
                     - list: List timesheets
                     - create: Create a new timesheet
@@ -31,11 +32,18 @@ def timesheet_tool() -> Tool:
                     - export_toggle: Toggle export status (bool) for a timesheet by ID
                     - meta_update: Update meta fields for a timesheet by ID
                     - user_guide: Gives information about how to limit users when listing timesheets and lists available users.
+                    - batch_delete: Delete multiple timesheets by IDs
+                    - batch_export: Mark multiple timesheets as exported by IDs
                     """
                 },
                 "id": {
                     "type": "integer",
                     "description": "Timesheet ID (required for get, update, delete, duplicate, export_toggle, meta_update)"
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "List of timesheet IDs for batch operations (batch_delete, batch_export)"
                 },
                 "filters": {
                     "type": "object",
@@ -178,10 +186,14 @@ async def handle_timesheet(client: KimaiClient, **params) -> List[TextContent]:
         return await _handle_timesheet_meta_update(client, params.get("id"), params.get("meta", []))
     elif action == "user_guide":
         return await _handle_timesheet_user_guide(client, params.get("show_users", True))
+    elif action == "batch_delete":
+        return await _handle_batch_delete(client, params.get("ids", []))
+    elif action == "batch_export":
+        return await _handle_batch_export(client, params.get("ids", []))
     else:
         return [TextContent(
             type="text",
-            text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, duplicate, export_toggle, meta_update, user_guide"
+            text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, duplicate, export_toggle, meta_update, user_guide, batch_delete, batch_export"
         )]
 
 
@@ -766,5 +778,35 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: Optional[s
         if ts.description:
             result += f"  Description: {ts.description}\\n"
         result += "\\n"
-    
+
+    return [TextContent(type="text", text=result)]
+
+
+# Batch operations
+
+async def _handle_batch_delete(client: KimaiClient, ids: List[int]) -> List[TextContent]:
+    """Batch delete multiple timesheets."""
+    if not ids:
+        return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_delete action")]
+
+    async def delete_one(id: int) -> int:
+        await client.delete_timesheet(id)
+        return id
+
+    success, failed = await execute_batch(ids, delete_one)
+    result = format_batch_result("Delete", success, failed, "timesheets")
+    return [TextContent(type="text", text=result)]
+
+
+async def _handle_batch_export(client: KimaiClient, ids: List[int]) -> List[TextContent]:
+    """Batch mark multiple timesheets as exported."""
+    if not ids:
+        return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_export action")]
+
+    async def export_one(id: int) -> int:
+        await client.mark_timesheet_exported(id)
+        return id
+
+    success, failed = await execute_batch(ids, export_one)
+    result = format_batch_result("Export", success, failed, "timesheets")
     return [TextContent(type="text", text=result)]

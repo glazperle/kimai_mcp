@@ -6,6 +6,7 @@ from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import AbsenceForm, AbsenceFilter
 from .absence_analytics import AbsenceAnalytics
+from .batch_utils import execute_batch, format_batch_result
 
 
 def absence_tool() -> Tool:
@@ -19,8 +20,13 @@ def absence_tool() -> Tool:
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "statistics", "types", "create", "delete", "approve", "reject", "request", "attendance"],
+                    "enum": ["list", "statistics", "types", "create", "delete", "approve", "reject", "request", "attendance", "batch_delete", "batch_approve", "batch_reject"],
                     "description": "The action to perform"
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "List of absence IDs for batch operations (batch_delete, batch_approve, batch_reject)"
                 },
                 "id": {
                     "type": "integer",
@@ -154,10 +160,16 @@ async def handle_absence(client: KimaiClient, **params) -> List[TextContent]:
                 params.get("filters", {}),
                 params.get("date")
             )
+        elif action == "batch_delete":
+            return await _handle_batch_delete(client, params.get("ids", []))
+        elif action == "batch_approve":
+            return await _handle_batch_approve(client, params.get("ids", []))
+        elif action == "batch_reject":
+            return await _handle_batch_reject(client, params.get("ids", []))
         else:
             return [TextContent(
                 type="text",
-                text=f"Error: Unknown action '{action}'. Valid actions: list, statistics, types, create, delete, approve, reject, request, attendance"
+                text=f"Error: Unknown action '{action}'. Valid actions: list, statistics, types, create, delete, approve, reject, request, attendance, batch_delete, batch_approve, batch_reject"
             )]
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {str(e)}")]
@@ -750,4 +762,48 @@ async def _handle_attendance(
             type_label = TYPE_LABELS.get(absence_type, absence_type)
             result += f"- ✗ {display_name} ({type_label})\n"
 
+    return [TextContent(type="text", text=result)]
+
+
+# Batch operations
+
+async def _handle_batch_delete(client: KimaiClient, ids: List[int]) -> List[TextContent]:
+    """Batch delete multiple absences."""
+    if not ids:
+        return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_delete action")]
+
+    async def delete_one(id: int) -> int:
+        await client.delete_absence(id)
+        return id
+
+    success, failed = await execute_batch(ids, delete_one)
+    result = format_batch_result("Delete", success, failed, "absences")
+    return [TextContent(type="text", text=result)]
+
+
+async def _handle_batch_approve(client: KimaiClient, ids: List[int]) -> List[TextContent]:
+    """Batch approve multiple absences."""
+    if not ids:
+        return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_approve action")]
+
+    async def approve_one(id: int) -> int:
+        await client.approve_absence_approval(id)
+        return id
+
+    success, failed = await execute_batch(ids, approve_one)
+    result = format_batch_result("Approve", success, failed, "absences")
+    return [TextContent(type="text", text=result)]
+
+
+async def _handle_batch_reject(client: KimaiClient, ids: List[int]) -> List[TextContent]:
+    """Batch reject multiple absences."""
+    if not ids:
+        return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_reject action")]
+
+    async def reject_one(id: int) -> int:
+        await client.reject_absence_approval(id)
+        return id
+
+    success, failed = await execute_batch(ids, reject_one)
+    result = format_batch_result("Reject", success, failed, "absences")
     return [TextContent(type="text", text=result)]

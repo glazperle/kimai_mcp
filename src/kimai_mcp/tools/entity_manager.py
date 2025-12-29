@@ -10,6 +10,7 @@ from ..models import (
     UserCreateForm, UserEditForm, TeamEditForm, TagEditForm,
     ProjectFilter, ActivityFilter, CustomerFilter, Customer
 )
+from .batch_utils import execute_batch, format_batch_result
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ def entity_tool() -> Tool:
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["list", "get", "create", "update", "delete", "lock_month", "unlock_month"],
+                    "enum": ["list", "get", "create", "update", "delete", "lock_month", "unlock_month", "batch_delete"],
                     "description": """The action to perform:
                     - list: List entities matching the given filters
                     - create: Create a new entity
@@ -39,6 +40,7 @@ def entity_tool() -> Tool:
                     - delete: Delete an existing entity by ID
                     - lock_month: Lock working time months for a user (type=user only)
                     - unlock_month: Unlock working time months for a user (type=user only)
+                    - batch_delete: Delete multiple entities by IDs (requires 'ids' parameter)
                     """
                 },
                 "id": {
@@ -88,7 +90,7 @@ def entity_tool() -> Tool:
                 "ids": {
                     "type": "array",
                     "items": {"type": "integer"},
-                    "description": "List of user IDs for bulk lock_month/unlock_month operations. Use instead of 'id' for multiple users."
+                    "description": "List of entity IDs for batch operations (batch_delete, bulk lock_month/unlock_month)."
                 },
                 "user_scope": {
                     "type": "string",
@@ -438,10 +440,15 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
                 return await handler.unlock_month(entity_id, month)
             else:
                 return [TextContent(type="text", text="Error: 'id', 'ids', or 'user_scope=all' is required for unlock_month action")]
+        elif action == "batch_delete":
+            ids = params.get("ids", [])
+            if not ids:
+                return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_delete action")]
+            return await _handle_batch_delete(handler, entity_type, ids)
         else:
             return [TextContent(
                 type="text",
-                text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, lock_month, unlock_month"
+                text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, lock_month, unlock_month, batch_delete"
             )]
     except KimaiAPIError as e:
         logger.error(f"Kimai API Error in tool entity: {e.message} (Status: {e.status_code})")
@@ -456,6 +463,42 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
         )]
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {str(e)}")]
+
+
+async def _handle_batch_delete(handler: 'BaseEntityHandler', entity_type: str, ids: List[int]) -> List[TextContent]:
+    """Batch delete multiple entities."""
+    # Check if entity type supports deletion
+    non_deletable = ["user", "invoice"]
+    if entity_type in non_deletable:
+        return [TextContent(
+            type="text",
+            text=f"Error: batch_delete is not supported for {entity_type} entities"
+        )]
+
+    # Map entity types to client delete methods
+    delete_methods = {
+        "project": handler.client.delete_project,
+        "activity": handler.client.delete_activity,
+        "customer": handler.client.delete_customer,
+        "team": handler.client.delete_team,
+        "tag": handler.client.delete_tag,
+        "holiday": handler.client.delete_public_holiday,
+    }
+
+    delete_method = delete_methods.get(entity_type)
+    if not delete_method:
+        return [TextContent(
+            type="text",
+            text=f"Error: batch_delete is not supported for {entity_type} entities"
+        )]
+
+    async def delete_one(id: int) -> int:
+        await delete_method(id)
+        return id
+
+    success, failed = await execute_batch(ids, delete_one)
+    result = format_batch_result("Delete", success, failed, f"{entity_type}s")
+    return [TextContent(type="text", text=result)]
 
 
 class BaseEntityHandler:
