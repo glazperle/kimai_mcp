@@ -614,7 +614,9 @@ async def _get_accessible_users(client: KimaiClient, user_scope: str) -> List:
                     for member in team_detail.members:
                         if member.user.id not in seen_user_ids:
                             seen_user_ids.add(member.user.id)
-                            accessible_users.append(member.user)
+                            # Only include active users
+                            if getattr(member.user, 'enabled', True):
+                                accessible_users.append(member.user)
             except Exception:
                 continue
     except Exception:
@@ -624,7 +626,8 @@ async def _get_accessible_users(client: KimaiClient, user_scope: str) -> List:
     if not accessible_users:
         try:
             users = await client.get_users()
-            accessible_users = list(users)
+            # Only include active users
+            accessible_users = [u for u in users if getattr(u, 'enabled', True)]
         except Exception:
             # If both fail, return empty list
             pass
