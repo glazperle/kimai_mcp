@@ -10,16 +10,14 @@ services:
 
     # Environment variables
     environment:
-      # Kimai connection settings (REQUIRED)
-      - KIMAI_URL=${KIMAI_URL}
-      - KIMAI_API_TOKEN=${KIMAI_API_TOKEN}
+      # MCP Server authentication (optional - auto-generated if not set)
+      - MCP_SERVER_TOKEN=${MCP_SERVER_TOKEN:-}
 
-      # Optional settings
-      - KIMAI_DEFAULT_USER=${KIMAI_DEFAULT_USER:-}
+      # Optional: Default Kimai URL (clients can override)
+      - DEFAULT_KIMAI_URL=${DEFAULT_KIMAI_URL:-}
+
+      # SSL verification for Kimai connections
       - KIMAI_SSL_VERIFY=${KIMAI_SSL_VERIFY:-true}
-
-      # MCP Server settings
-      - MCP_SERVER_TOKEN=${MCP_SERVER_TOKEN:-}  # Auto-generated if not set
 
     # Ports
     ports:
@@ -48,8 +46,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 512M
+          cpus: '2'
+          memory: 1G
         reservations:
           cpus: '0.25'
           memory: 128M

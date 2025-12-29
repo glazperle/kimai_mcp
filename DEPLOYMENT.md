@@ -2,19 +2,26 @@
 
 Dieses Dokument beschreibt, wie Sie den Kimai MCP Server zentral in Ihrem Unternehmen bereitstellen können, sodass Sie ihn nicht auf jedem Client lokal installieren müssen.
 
-## Überblick
+## 🔐 Per-Client Authentifizierung
 
-Anstatt den MCP Server auf jedem Client zu installieren, können Sie ihn einmal zentral als HTTP/SSE-Server bereitstellen. Alle Clients (Claude Desktop, etc.) verbinden sich dann über HTTP zu diesem zentralen Server.
+**WICHTIG:** Dieser Server verwendet **per-client Authentifizierung**. Jeder Benutzer verwendet seinen **eigenen Kimai API-Token**.
 
-### Vorteile
+### Warum per-client Authentication?
 
-- ✅ **Einmalige Installation**: Server nur einmal installieren und konfigurieren
-- ✅ **Zentrale Verwaltung**: Einfache Updates und Wartung an einem Ort
-- ✅ **Sicherheit**: Token-basierte Authentifizierung für Unternehmensnetzwerke
-- ✅ **Skalierbar**: Kann mehrere Clients gleichzeitig bedienen
-- ✅ **Docker-Support**: Einfaches Deployment mit Docker/Docker Compose
+- ✅ **Individuelle Berechtigungen**: Jeder Nutzer hat nur Zugriff auf seine eigenen Daten
+- ✅ **Auditing**: Alle Aktionen sind eindeutig einem Benutzer zuordenbar
+- ✅ **Compliance**: Keine gemeinsamen Credentials
+- ✅ **Sicherheit**: Keine zentral gespeicherten Kimai-Credentials
+- ✅ **Flexibilität**: Nutzer können verschiedene Kimai-Instanzen verwenden
 
-## Deployment-Optionen
+### Wie funktioniert es?
+
+1. **Server**: Stellt nur die MCP-Protokoll-Infrastruktur bereit
+2. **Clients**: Jeder Client sendet seinen eigenen Kimai API-Token
+3. **Sessions**: Server erstellt isolierte Sessions pro Client
+4. **Keine Speicherung**: Server speichert keine Kimai-Credentials
+
+## 🚀 Deployment-Optionen
 
 ### Option 1: Docker Compose (Empfohlen)
 
@@ -40,20 +47,20 @@ cp .env.server.example .env
 nano .env  # oder vim, code, etc.
 ```
 
-Erforderliche Einstellungen in `.env`:
+Minimale Konfiguration in `.env`:
 
 ```bash
-# ERFORDERLICH
-KIMAI_URL=https://ihre-kimai-instanz.de
-KIMAI_API_TOKEN=ihr-kimai-api-token
+# OPTIONAL: MCP Server Token (wird automatisch generiert wenn nicht gesetzt)
+# MCP_SERVER_TOKEN=ihr-sicherer-token
 
-# OPTIONAL (wird automatisch generiert wenn nicht gesetzt)
-MCP_SERVER_TOKEN=ihr-sicherer-token
+# OPTIONAL: Default Kimai URL (Clients können diese überschreiben)
+# DEFAULT_KIMAI_URL=https://ihre-kimai-instanz.de
 
-# OPTIONAL
-KIMAI_DEFAULT_USER=1
-SERVER_PORT=8000
+# OPTIONAL: SSL Verification
+# KIMAI_SSL_VERIFY=true
 ```
+
+**Hinweis:** Im Gegensatz zur Vorgängerversion benötigen Sie **KEINE** Kimai API-Credentials mehr in der Server-Konfiguration!
 
 #### 3. Server starten
 
@@ -64,8 +71,21 @@ docker-compose up -d
 # Logs ansehen
 docker-compose logs -f
 
-# Token finden (wenn automatisch generiert)
+# MCP Server Token finden (wenn automatisch generiert)
 docker-compose logs | grep "Generated new authentication token"
+```
+
+Beispiel-Output:
+```
+======================================================================
+Generated new authentication token for MCP server:
+  AbCdEf123456789_YourGeneratedToken_XyZ
+======================================================================
+IMPORTANT: Save this token securely!
+Clients will need this token to connect to the server.
+======================================================================
+Remote MCP server starting on http://0.0.0.0:8000
+Per-client Kimai authentication enabled
 ```
 
 #### 4. Server testen
@@ -78,7 +98,9 @@ curl http://localhost:8000/health
 # {
 #   "status": "healthy",
 #   "version": "2.6.0",
-#   "kimai_url": "https://ihre-kimai-instanz.de"
+#   "mode": "per-client-auth",
+#   "default_kimai_url": "https://ihre-kimai-instanz.de",
+#   "active_sessions": 0
 # }
 ```
 
@@ -88,13 +110,12 @@ curl http://localhost:8000/health
 # Image bauen
 docker build -t kimai-mcp-server .
 
-# Server starten
+# Server starten (nur mit Server-Token)
 docker run -d \
   --name kimai-mcp-server \
   -p 8000:8000 \
-  -e KIMAI_URL=https://ihre-kimai-instanz.de \
-  -e KIMAI_API_TOKEN=ihr-token \
   -e MCP_SERVER_TOKEN=ihr-server-token \
+  -e DEFAULT_KIMAI_URL=https://ihre-kimai-instanz.de \
   kimai-mcp-server
 
 # Token aus Logs holen (wenn automatisch generiert)
@@ -111,20 +132,25 @@ cd kimai_mcp
 # Mit Server-Dependencies installieren
 pip install -e ".[server]"
 
-# Umgebungsvariablen setzen
-export KIMAI_URL=https://ihre-kimai-instanz.de
-export KIMAI_API_TOKEN=ihr-token
-export MCP_SERVER_TOKEN=ihr-server-token  # optional
-
 # Server starten
-kimai-mcp-server --host 0.0.0.0 --port 8000
+kimai-mcp-server \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --default-kimai-url https://ihre-kimai-instanz.de
 ```
 
-## Client-Konfiguration
+## 👥 Client-Konfiguration
 
-Nachdem der Server läuft, konfigurieren Sie die Clients:
+**WICHTIG:** Jeder Benutzer benötigt seinen eigenen Kimai API-Token!
 
-### Claude Desktop Konfiguration
+### Schritt 1: Kimai API-Token holen
+
+1. In Kimai anmelden
+2. Benutzerprofil öffnen (eigener Username oben rechts)
+3. "API" oder "API-Zugriff" Sektion öffnen
+4. Neuen API-Token erstellen oder existierenden kopieren
+
+### Schritt 2: Claude Desktop konfigurieren
 
 **Datei:** `claude_desktop_config.json`
 
@@ -132,36 +158,178 @@ Nachdem der Server läuft, konfigurieren Sie die Clients:
 **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 **Linux:** `~/.config/Claude/claude_desktop_config.json`
 
+#### Minimale Konfiguration:
+
 ```json
 {
   "mcpServers": {
     "kimai": {
       "url": "http://ihre-server-adresse:8000/sse",
       "headers": {
-        "Authorization": "Bearer ihr-mcp-server-token"
+        "Authorization": "Bearer ihr-mcp-server-token",
+        "X-Kimai-Token": "ihr-persönlicher-kimai-api-token"
       }
     }
   }
 }
 ```
 
+#### Vollständige Konfiguration (mit allen Optionen):
+
+```json
+{
+  "mcpServers": {
+    "kimai": {
+      "url": "http://ihre-server-adresse:8000/sse",
+      "headers": {
+        "Authorization": "Bearer ihr-mcp-server-token",
+        "X-Kimai-Token": "ihr-persönlicher-kimai-api-token",
+        "X-Kimai-URL": "https://ihre-kimai-instanz.de",
+        "X-Kimai-User": "42"
+      }
+    }
+  }
+}
+```
+
+**Header-Erklärung:**
+
+| Header | Erforderlich | Beschreibung |
+|--------|--------------|--------------|
+| `Authorization` | ✅ Ja | MCP Server Token (vom Server-Administrator) |
+| `X-Kimai-Token` | ✅ Ja | **IHR** persönlicher Kimai API-Token |
+| `X-Kimai-URL` | ❌ Optional | Kimai Server URL (nutzt Server-Default wenn nicht angegeben) |
+| `X-Kimai-User` | ❌ Optional | Default User ID für Operationen |
+
 **Wichtig:**
-- Ersetzen Sie `ihre-server-adresse` mit der IP/Domain Ihres Servers
-- Ersetzen Sie `ihr-mcp-server-token` mit dem Token aus den Server-Logs
-- Für interne Netzwerke: verwenden Sie die interne IP (z.B. `http://192.168.1.100:8000/sse`)
-- Für Produktion: verwenden Sie HTTPS mit Reverse Proxy (siehe unten)
+- `Authorization`: Gleicher Token für alle Nutzer (Server-Zugang)
+- `X-Kimai-Token`: **Individueller** Token pro Nutzer (Ihre Kimai-Berechtigung)
 
-### Andere MCP-Clients
+### Schritt 3: Claude Desktop neustarten
 
-Die Konfiguration ist für andere MCP-Clients ähnlich. Sie benötigen:
-- **URL:** `http://ihre-server-adresse:8000/sse`
-- **Authentication Header:** `Authorization: Bearer ihr-mcp-server-token`
+Nach dem Speichern der Konfiguration Claude Desktop neu starten.
 
-## Produktions-Deployment mit HTTPS
+## 📊 Beispiel-Szenarien
 
-Für Produktionsumgebungen sollten Sie HTTPS verwenden.
+### Szenario 1: Kleine Firma (alle nutzen gleiche Kimai-Instanz)
 
-### Mit Reverse Proxy (Nginx)
+**Server-Konfiguration** (`.env`):
+```bash
+DEFAULT_KIMAI_URL=https://kimai.firma.de
+MCP_SERVER_TOKEN=FirmenToken123
+```
+
+**Client-Konfiguration** (jeder Nutzer):
+```json
+{
+  "mcpServers": {
+    "kimai": {
+      "url": "http://192.168.1.100:8000/sse",
+      "headers": {
+        "Authorization": "Bearer FirmenToken123",
+        "X-Kimai-Token": "mein-persönlicher-token"
+      }
+    }
+  }
+}
+```
+
+**Vorteile:**
+- Nutzer müssen keine Kimai-URL eingeben (nutzen Server-Default)
+- Jeder hat seinen eigenen API-Token
+- Zentrale Verwaltung der Kimai-URL
+
+### Szenario 2: Mehrere Kimai-Instanzen (Team A und Team B)
+
+**Server-Konfiguration** (keine Default-URL):
+```bash
+MCP_SERVER_TOKEN=FirmenToken123
+```
+
+**Team A Client-Konfiguration:**
+```json
+{
+  "mcpServers": {
+    "kimai": {
+      "url": "http://mcp-server.firma.de:8000/sse",
+      "headers": {
+        "Authorization": "Bearer FirmenToken123",
+        "X-Kimai-Token": "team-a-nutzer-token",
+        "X-Kimai-URL": "https://kimai-team-a.firma.de"
+      }
+    }
+  }
+}
+```
+
+**Team B Client-Konfiguration:**
+```json
+{
+  "mcpServers": {
+    "kimai": {
+      "url": "http://mcp-server.firma.de:8000/sse",
+      "headers": {
+        "Authorization": "Bearer FirmenToken123",
+        "X-Kimai-Token": "team-b-nutzer-token",
+        "X-Kimai-URL": "https://kimai-team-b.firma.de"
+      }
+    }
+  }
+}
+```
+
+**Vorteile:**
+- Ein MCP-Server für mehrere Kimai-Instanzen
+- Flexible Nutzung
+- Klare Trennung zwischen Teams
+
+## 🔒 Sicherheit
+
+### 1. Token-Sicherheit
+
+**MCP Server Token:**
+- Wird von allen Clients benötigt
+- Kontrolliert Zugang zum MCP-Server
+- Sollte firmenintern geteilt werden
+- Regelmäßig rotieren
+
+**Kimai API Token (per-client):**
+- ✅ Jeder Nutzer hat seinen eigenen
+- ✅ Nie mit anderen teilen
+- ✅ Server speichert diese NICHT
+- ✅ Nutzer ist verantwortlich für seinen Token
+
+```bash
+# Sicheren Server-Token generieren
+openssl rand -base64 32
+
+# Oder mit Python
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+### 2. Transport-Sicherheit
+
+**Entwicklung/Test:**
+```
+http://192.168.1.100:8000/sse  # OK für internes Netzwerk
+```
+
+**Produktion:**
+```
+https://mcp.ihre-domain.de/sse  # HTTPS erforderlich!
+```
+
+### 3. Netzwerk-Sicherheit
+
+- ✅ Server nur im internen Netzwerk betreiben
+- ✅ Firewall-Regeln: Nur Port 8000 (oder konfiguriert)
+- ✅ Reverse Proxy mit HTTPS in Produktion
+- ✅ Optional: IP-Whitelisting
+- ❌ Server nicht direkt im Internet exponieren
+
+## 🌐 Produktions-Deployment mit HTTPS
+
+### Mit Nginx Reverse Proxy
 
 ```nginx
 # /etc/nginx/sites-available/kimai-mcp
@@ -185,12 +353,19 @@ server {
         proxy_set_header Connection '';
         proxy_buffering off;
         proxy_cache off;
+        proxy_read_timeout 86400s;  # 24 hours for long-lived SSE connections
 
         # Standard Proxy Headers
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Forward client headers (important for per-client auth!)
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-Kimai-Token $http_x_kimai_token;
+        proxy_set_header X-Kimai-URL $http_x_kimai_url;
+        proxy_set_header X-Kimai-User $http_x_kimai_user;
     }
 }
 ```
@@ -203,90 +378,33 @@ Client-Konfiguration mit HTTPS:
     "kimai": {
       "url": "https://mcp.ihre-domain.de/sse",
       "headers": {
-        "Authorization": "Bearer ihr-mcp-server-token"
+        "Authorization": "Bearer ihr-mcp-server-token",
+        "X-Kimai-Token": "ihr-persönlicher-kimai-api-token"
       }
     }
   }
 }
 ```
 
-### Mit Traefik (Docker)
-
-```yaml
-# docker-compose.yml erweitern
-
-version: '3.8'
-
-services:
-  kimai-mcp-server:
-    # ... bestehende Konfiguration ...
-
-    networks:
-      - traefik
-
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.kimai-mcp.rule=Host(`mcp.ihre-domain.de`)"
-      - "traefik.http.routers.kimai-mcp.entrypoints=websecure"
-      - "traefik.http.routers.kimai-mcp.tls.certresolver=letsencrypt"
-      - "traefik.http.services.kimai-mcp.loadbalancer.server.port=8000"
-
-networks:
-  traefik:
-    external: true
-```
-
-## Sicherheit
-
-### 1. Token-Sicherheit
-
-**Wichtig:** Das `MCP_SERVER_TOKEN` ist wie ein Passwort zu behandeln!
-
-```bash
-# Sicheren Token generieren (Linux/macOS)
-openssl rand -base64 32
-
-# Oder mit Python
-python -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-- ✅ Token sicher speichern (z.B. in Secrets Management)
-- ✅ Token regelmäßig rotieren
-- ✅ Unterschiedliche Token für verschiedene Umgebungen (Dev/Staging/Prod)
-- ❌ Token niemals in Git committen
-
-### 2. Netzwerk-Sicherheit
-
-- ✅ Server nur im internen Netzwerk betreiben
-- ✅ Firewall-Regeln: Nur notwendige Ports öffnen
-- ✅ HTTPS in Produktion verwenden
-- ✅ Reverse Proxy mit Rate Limiting
-- ❌ Server nicht direkt im Internet exponieren (ohne zusätzliche Sicherheit)
-
-### 3. SSL/TLS für Kimai-Verbindung
-
-Wenn Ihre Kimai-Instanz selbst-signierte Zertifikate verwendet:
-
-```yaml
-# docker-compose.yml
-services:
-  kimai-mcp-server:
-    environment:
-      - KIMAI_SSL_VERIFY=/app/certs/ca-bundle.crt
-    volumes:
-      - ./certs/ca-bundle.crt:/app/certs/ca-bundle.crt:ro
-```
-
-## Monitoring & Wartung
+## 📊 Monitoring & Wartung
 
 ### Health Check
 
 ```bash
-# Health Check
+# Basic Health Check
 curl http://localhost:8000/health
 
-# Mit JSON formatierung
+# Mit JSON Formatierung
 curl -s http://localhost:8000/health | jq
+
+# Beispiel-Antwort:
+# {
+#   "status": "healthy",
+#   "version": "2.6.0",
+#   "mode": "per-client-auth",
+#   "default_kimai_url": "https://kimai.firma.de",
+#   "active_sessions": 5
+# }
 ```
 
 ### Logs ansehen
@@ -296,146 +414,197 @@ curl -s http://localhost:8000/health | jq
 docker-compose logs -f
 
 # Nur die letzten 100 Zeilen
-docker-compose logs --tail=100
+docker-compose logs --tail=100 -f
 
-# Docker (ohne Compose)
-docker logs -f kimai-mcp-server
+# Nach Client-Sessions filtern
+docker-compose logs | grep "Client session"
+
+# Beispiel-Logs:
+# Client session 1a2b3c4d connected to Kimai 2.0.0 at https://kimai.firma.de
+# Cleaned up client session 1a2b3c4d
 ```
 
-### Server neu starten
+### Server-Metriken
+
+Der Health-Endpoint zeigt aktive Sessions:
 
 ```bash
-# Docker Compose
-docker-compose restart
-
-# Docker
-docker restart kimai-mcp-server
+# Anzahl aktiver Sessions
+curl -s http://localhost:8000/health | jq '.active_sessions'
 ```
 
-### Updates durchführen
+## 🔧 Troubleshooting
 
-```bash
-# Repository aktualisieren
-git pull origin main
+### Problem: "Kimai API token is required"
 
-# Container neu bauen und starten
-docker-compose down
-docker-compose build
-docker-compose up -d
+**Ursache:** Client sendet keinen `X-Kimai-Token` Header
+
+**Lösung:**
+```json
+{
+  "mcpServers": {
+    "kimai": {
+      "url": "http://...",
+      "headers": {
+        "Authorization": "Bearer server-token",
+        "X-Kimai-Token": "IHR-KIMAI-TOKEN-HIER"
+      }
+    }
+  }
+}
 ```
 
-## Troubleshooting
+### Problem: "Invalid or missing MCP server authentication token"
 
-### Problem: "Connection refused"
+**Ursache:** `Authorization` Header fehlt oder ist falsch
 
+**Lösung:**
+1. Server-Token aus Logs holen: `docker-compose logs | grep "Generated new"`
+2. In Client-Config eintragen: `"Authorization": "Bearer IHR-SERVER-TOKEN"`
+
+### Problem: "Failed to connect to Kimai"
+
+**Mögliche Ursachen:**
+1. Kimai-URL falsch
+2. Kimai-API-Token ungültig
+3. Netzwerk-Problem
+
+**Debug:**
 ```bash
-# 1. Prüfen ob Container läuft
-docker-compose ps
+# Test Kimai-Verbindung direkt
+curl -H "X-AUTH-TOKEN: ihr-kimai-token" https://ihre-kimai-instanz.de/api/version
 
-# 2. Logs prüfen
-docker-compose logs
-
-# 3. Port-Binding prüfen
-docker-compose port kimai-mcp-server 8000
+# Erwartete Antwort: {"version": "2.0.0", ...}
 ```
 
-### Problem: "401 Unauthorized"
+### Problem: SSL-Zertifikatfehler
 
-- ✅ Token korrekt in Client-Konfiguration?
-- ✅ Token-Format: `Authorization: Bearer IHR_TOKEN`
-- ✅ Token aus Server-Logs kopieren (wenn automatisch generiert)
-
-### Problem: "SSL verification failed" (Kimai-Verbindung)
+**Für selbst-signierte Zertifikate:**
 
 ```bash
-# Option 1: CA-Zertifikat verwenden
-docker-compose exec kimai-mcp-server \
-  printenv KIMAI_SSL_VERIFY
-
-# Option 2: SSL-Verifikation deaktivieren (nur für Test!)
 # In .env:
-# KIMAI_SSL_VERIFY=false
+KIMAI_SSL_VERIFY=/app/certs/ca-bundle.crt
+
+# In docker-compose.yml volumes einkommentieren:
+volumes:
+  - ./certs/ca-bundle.crt:/app/certs/ca-bundle.crt:ro
 ```
 
-### Problem: Server startet nicht
+## 🎯 Best Practices
+
+### 1. Server-Token Management
 
 ```bash
-# Detaillierte Logs
-docker-compose logs --tail=200
+# Token in Umgebungsvariable speichern
+export MCP_SERVER_TOKEN="$(openssl rand -base64 32)"
 
-# Container-Status
-docker-compose ps
-
-# Umgebungsvariablen prüfen
-docker-compose config
-```
-
-## Beispiel-Szenarien
-
-### Szenario 1: Kleine Firma (5-10 Benutzer)
-
-```bash
-# Einfaches Setup auf einem internen Server
-cd /opt/kimai-mcp
+# Server starten
 docker-compose up -d
 
-# Clients verbinden sich über interne IP
-# http://192.168.1.100:8000/sse
+# Token an Team kommunizieren (sicher!)
 ```
 
-### Szenario 2: Mittleres Unternehmen (mit SSL)
+### 2. Default Kimai URL setzen
+
+Wenn alle Nutzer die gleiche Kimai-Instanz verwenden:
 
 ```bash
-# Setup mit Nginx Reverse Proxy und Let's Encrypt
-# Server: https://mcp.firma.de/sse
-# Automatische SSL-Zertifikate
-# Rate Limiting und Monitoring
+# In .env
+DEFAULT_KIMAI_URL=https://kimai.firma.de
 ```
 
-### Szenario 3: Multi-Tenant (mehrere Kimai-Instanzen)
+Vorteile:
+- Clients müssen keine URL angeben
+- Zentrale Konfiguration
+- Einfacher für Endnutzer
+
+### 3. Monitoring aktiver Sessions
 
 ```bash
-# Mehrere Server-Instanzen auf verschiedenen Ports
-docker-compose -f docker-compose.team-a.yml up -d  # Port 8001
-docker-compose -f docker-compose.team-b.yml up -d  # Port 8002
+# Cron-Job für Monitoring
+*/5 * * * * curl -s http://localhost:8000/health | jq '.active_sessions' > /var/log/mcp-sessions.log
 ```
 
-## Performance-Optimierung
+### 4. Automatische Token-Rotation
 
-### Resource Limits anpassen
+```bash
+#!/bin/bash
+# rotate-server-token.sh
+
+NEW_TOKEN=$(openssl rand -base64 32)
+echo "MCP_SERVER_TOKEN=$NEW_TOKEN" > .env.new
+
+echo "Neuer Server-Token: $NEW_TOKEN"
+echo "1. Update .env"
+echo "2. Restart Server: docker-compose restart"
+echo "3. Update alle Client-Konfigurationen"
+echo "4. Alten Token nach 24h deaktivieren"
+```
+
+## 📈 Performance & Skalierung
+
+### Resource Limits
+
+Standard-Konfiguration unterstützt ~10-20 gleichzeitige Nutzer.
+
+Für mehr Nutzer in `docker-compose.yml` anpassen:
 
 ```yaml
-# docker-compose.yml
-services:
-  kimai-mcp-server:
-    deploy:
-      resources:
-        limits:
-          cpus: '2'        # Mehr CPUs für mehr Clients
-          memory: 1024M    # Mehr RAM wenn nötig
-        reservations:
-          cpus: '0.5'
-          memory: 256M
+deploy:
+  resources:
+    limits:
+      cpus: '4'
+      memory: 2G
+    reservations:
+      cpus: '1'
+      memory: 512M
 ```
 
-### Connection Pooling
+### Load Balancing (für große Teams)
 
-Der Server verwendet automatisch Connection Pooling für Kimai-API-Anfragen.
+Für >50 Nutzer mehrere Server-Instanzen mit Load Balancer:
 
-## Support
+```nginx
+upstream kimai_mcp_cluster {
+    least_conn;
+    server mcp-server-1:8000;
+    server mcp-server-2:8000;
+    server mcp-server-3:8000;
+}
+
+server {
+    location / {
+        proxy_pass http://kimai_mcp_cluster;
+        # ... rest of config
+    }
+}
+```
+
+## 💡 Zusammenfassung
+
+**Server-Setup (einmalig):**
+1. ✅ `docker-compose up -d`
+2. ✅ MCP Server Token aus Logs kopieren
+3. ✅ Optional: Default Kimai URL setzen
+
+**Client-Setup (pro Nutzer):**
+1. ✅ Eigenen Kimai API-Token holen
+2. ✅ Claude Desktop Config anpassen
+3. ✅ MCP Server Token (vom Admin) + eigenen Kimai Token eintragen
+4. ✅ Claude Desktop neu starten
+
+**Vorteile:**
+- ✅ Installation nur einmal auf dem Server
+- ✅ Jeder Nutzer behält seine individuellen Berechtigungen
+- ✅ Audit-Trail pro Nutzer
+- ✅ Keine gemeinsamen Credentials
+- ✅ Compliance-konform
+- ✅ Zentrale Updates
+
+## 📞 Support
 
 - **Issues:** https://github.com/glazperle/kimai_mcp/issues
 - **Dokumentation:** https://github.com/glazperle/kimai_mcp
 - **Kimai-Spezifisch:** https://www.kimai.org/
-
-## Nächste Schritte
-
-1. ✅ Server deployen (Docker Compose empfohlen)
-2. ✅ Token sicher speichern
-3. ✅ Clients konfigurieren
-4. ✅ Health Check durchführen
-5. ✅ In Produktion: HTTPS konfigurieren
-6. ✅ Monitoring einrichten
-7. ✅ Backup-Strategie planen
 
 Viel Erfolg mit Ihrem zentralen Kimai MCP Server! 🚀

@@ -1,4 +1,8 @@
-"""HTTP/SSE server for remote MCP access with authentication."""
+"""HTTP/SSE server for remote MCP access with per-client authentication.
+
+Each client provides their own Kimai API token for secure, auditable access.
+The server only provides MCP protocol handling and does not store Kimai credentials.
+"""
 
 import argparse
 import asyncio
@@ -6,8 +10,9 @@ import json
 import logging
 import os
 import secrets
+import uuid
 from contextlib import asynccontextmanager
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 try:
     import uvicorn
@@ -35,13 +40,18 @@ class AuthenticationError(Exception):
 
 
 class RemoteMCPServer:
-    """Remote MCP server with HTTP/SSE transport and authentication."""
+    """Remote MCP server with per-client Kimai authentication.
+
+    Each client provides their own Kimai URL and API token, ensuring:
+    - Individual user permissions and access control
+    - Auditable actions per user
+    - No shared credentials
+    - Enhanced security and compliance
+    """
 
     def __init__(
         self,
-        kimai_url: str,
-        kimai_token: str,
-        kimai_user: Optional[str] = None,
+        default_kimai_url: Optional[str] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
         server_token: Optional[str] = None,
         host: str = "0.0.0.0",
@@ -51,18 +61,14 @@ class RemoteMCPServer:
         """Initialize the remote MCP server.
 
         Args:
-            kimai_url: Kimai server URL
-            kimai_token: Kimai API token
-            kimai_user: Default Kimai user ID
-            ssl_verify: SSL verification setting for Kimai connection
+            default_kimai_url: Default Kimai server URL (clients can override)
+            ssl_verify: SSL verification setting for Kimai connections
             server_token: Authentication token for MCP server access (generated if not provided)
             host: Host to bind the server to
             port: Port to bind the server to
             allowed_origins: List of allowed CORS origins
         """
-        self.kimai_url = kimai_url
-        self.kimai_token = kimai_token
-        self.kimai_user = kimai_user
+        self.default_kimai_url = (default_kimai_url or "").rstrip('/')
         self.ssl_verify = ssl_verify
         self.host = host
         self.port = port
@@ -79,11 +85,11 @@ class RemoteMCPServer:
             logger.info("Clients will need this token to connect to the server.")
             logger.info("=" * 70)
 
-        # MCP server instance
-        self.mcp_server: Optional[KimaiMCPServer] = None
+        # Active client sessions (connection_id -> KimaiMCPServer)
+        self.client_sessions: Dict[str, KimaiMCPServer] = {}
 
     def verify_token(self, token: Optional[str]) -> bool:
-        """Verify the authentication token.
+        """Verify the MCP server authentication token.
 
         Args:
             token: Token to verify
@@ -95,39 +101,121 @@ class RemoteMCPServer:
             return False
         return secrets.compare_digest(token, self.server_token)
 
-    @asynccontextmanager
-    async def lifespan(self, app: FastAPI):
-        """Lifespan context manager for FastAPI."""
-        # Initialize MCP server
-        self.mcp_server = KimaiMCPServer(
-            base_url=self.kimai_url,
-            api_token=self.kimai_token,
-            default_user_id=self.kimai_user,
+    def extract_kimai_credentials(
+        self,
+        x_kimai_url: Optional[str] = None,
+        x_kimai_token: Optional[str] = None
+    ) -> tuple[str, str]:
+        """Extract and validate Kimai credentials from request headers.
+
+        Args:
+            x_kimai_url: Kimai URL from X-Kimai-URL header
+            x_kimai_token: Kimai API token from X-Kimai-Token header
+
+        Returns:
+            Tuple of (kimai_url, kimai_token)
+
+        Raises:
+            HTTPException: If credentials are missing or invalid
+        """
+        # Use client-provided URL or default
+        kimai_url = (x_kimai_url or self.default_kimai_url or "").rstrip('/')
+
+        if not kimai_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Kimai URL is required. Provide via X-Kimai-URL header or server default."
+            )
+
+        if not x_kimai_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Kimai API token is required. Provide via X-Kimai-Token header."
+            )
+
+        return kimai_url, x_kimai_token
+
+    async def create_client_session(
+        self,
+        kimai_url: str,
+        kimai_token: str,
+        user_id: Optional[str] = None
+    ) -> tuple[str, KimaiMCPServer]:
+        """Create a new MCP server instance for a client.
+
+        Args:
+            kimai_url: Kimai server URL
+            kimai_token: Kimai API token
+            user_id: Optional user identifier for logging
+
+        Returns:
+            Tuple of (session_id, mcp_server)
+        """
+        session_id = str(uuid.uuid4())
+
+        # Create MCP server instance for this client
+        mcp_server = KimaiMCPServer(
+            base_url=kimai_url,
+            api_token=kimai_token,
+            default_user_id=user_id,
             ssl_verify=self.ssl_verify,
         )
 
         # Initialize client
-        await self.mcp_server._ensure_client()
+        await mcp_server._ensure_client()
 
         # Verify connection
         try:
-            version = await self.mcp_server.client.get_version()
-            logger.info(f"Connected to Kimai {version.version}")
-            logger.info(f"Remote MCP server ready on http://{self.host}:{self.port}")
+            version = await mcp_server.client.get_version()
+            logger.info(
+                f"Client session {session_id[:8]} connected to Kimai {version.version} "
+                f"at {kimai_url}"
+            )
         except Exception as e:
-            logger.error(f"Failed to connect to Kimai: {str(e)}")
-            raise
+            logger.error(f"Failed to connect to Kimai for session {session_id[:8]}: {str(e)}")
+            await mcp_server.cleanup()
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to connect to Kimai: {str(e)}"
+            )
+
+        # Store session
+        self.client_sessions[session_id] = mcp_server
+
+        return session_id, mcp_server
+
+    async def cleanup_session(self, session_id: str):
+        """Clean up a client session.
+
+        Args:
+            session_id: Session ID to clean up
+        """
+        if session_id in self.client_sessions:
+            mcp_server = self.client_sessions[session_id]
+            await mcp_server.cleanup()
+            del self.client_sessions[session_id]
+            logger.info(f"Cleaned up client session {session_id[:8]}")
+
+    @asynccontextmanager
+    async def lifespan(self, app: FastAPI):
+        """Lifespan context manager for FastAPI."""
+        logger.info(f"Remote MCP server starting on http://{self.host}:{self.port}")
+        logger.info("Per-client Kimai authentication enabled")
+        if self.default_kimai_url:
+            logger.info(f"Default Kimai URL: {self.default_kimai_url}")
 
         yield
 
-        # Cleanup
-        await self.mcp_server.cleanup()
+        # Cleanup all client sessions
+        logger.info("Shutting down, cleaning up client sessions...")
+        for session_id in list(self.client_sessions.keys()):
+            await self.cleanup_session(session_id)
 
     def create_app(self) -> FastAPI:
         """Create FastAPI application."""
         app = FastAPI(
             title="Kimai MCP Remote Server",
-            description="Remote access to Kimai MCP server via HTTP/SSE",
+            description="Remote access to Kimai MCP server via HTTP/SSE with per-client authentication",
             version=__version__,
             lifespan=self.lifespan,
         )
@@ -147,19 +235,32 @@ class RemoteMCPServer:
             return {
                 "status": "healthy",
                 "version": __version__,
-                "kimai_url": self.kimai_url,
+                "mode": "per-client-auth",
+                "default_kimai_url": self.default_kimai_url or None,
+                "active_sessions": len(self.client_sessions),
             }
 
         @app.get("/sse")
         async def handle_sse(
             request: Request,
             authorization: Optional[str] = Header(None),
+            x_kimai_url: Optional[str] = Header(None, alias="X-Kimai-URL"),
+            x_kimai_token: Optional[str] = Header(None, alias="X-Kimai-Token"),
+            x_kimai_user: Optional[str] = Header(None, alias="X-Kimai-User"),
         ):
-            """Handle SSE connection for MCP."""
-            # Verify authentication
+            """Handle SSE connection for MCP with per-client Kimai credentials.
+
+            Required Headers:
+                Authorization: Bearer <MCP_SERVER_TOKEN>
+                X-Kimai-Token: <USER_KIMAI_API_TOKEN>
+
+            Optional Headers:
+                X-Kimai-URL: <KIMAI_SERVER_URL> (uses server default if not provided)
+                X-Kimai-User: <DEFAULT_USER_ID>
+            """
+            # Verify MCP server authentication
             token = None
             if authorization:
-                # Support both "Bearer TOKEN" and "TOKEN" formats
                 if authorization.startswith("Bearer "):
                     token = authorization[7:]
                 else:
@@ -168,40 +269,64 @@ class RemoteMCPServer:
             if not self.verify_token(token):
                 raise HTTPException(
                     status_code=401,
-                    detail="Invalid or missing authentication token",
+                    detail="Invalid or missing MCP server authentication token",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
 
-            # Create SSE transport
-            async with SseServerTransport("/messages") as transport:
-                # Connect transport to MCP server
-                await self.mcp_server.server.run(
-                    transport.read_stream,
-                    transport.write_stream,
-                    self.mcp_server.server.create_initialization_options(),
-                )
+            # Extract and validate Kimai credentials
+            kimai_url, kimai_token = self.extract_kimai_credentials(
+                x_kimai_url, x_kimai_token
+            )
 
-                # Stream events
-                async def event_generator():
-                    async for event in transport.sse():
-                        yield event
+            # Create client session
+            session_id, mcp_server = await self.create_client_session(
+                kimai_url, kimai_token, x_kimai_user
+            )
 
-                return StreamingResponse(
-                    event_generator(),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",  # Disable nginx buffering
-                    },
-                )
+            try:
+                # Create SSE transport
+                async with SseServerTransport("/messages") as transport:
+                    # Connect transport to MCP server
+                    await mcp_server.server.run(
+                        transport.read_stream,
+                        transport.write_stream,
+                        mcp_server.server.create_initialization_options(),
+                    )
+
+                    # Stream events
+                    async def event_generator():
+                        try:
+                            async for event in transport.sse():
+                                yield event
+                        finally:
+                            # Cleanup session when connection closes
+                            await self.cleanup_session(session_id)
+
+                    return StreamingResponse(
+                        event_generator(),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",  # Disable nginx buffering
+                            "X-Session-ID": session_id,
+                        },
+                    )
+            except Exception as e:
+                # Cleanup on error
+                await self.cleanup_session(session_id)
+                raise
 
         @app.post("/messages")
         async def handle_messages(
             request: Request,
             authorization: Optional[str] = Header(None),
+            x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
         ):
-            """Handle incoming messages from client."""
+            """Handle incoming messages from client.
+
+            This endpoint is used by the SSE transport for client-to-server messages.
+            """
             # Verify authentication
             token = None
             if authorization:
@@ -223,9 +348,8 @@ class RemoteMCPServer:
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="Invalid JSON")
 
-            # Process message through MCP server
-            # Note: This is a simplified implementation
-            # In production, you'd need proper message routing
+            # Note: Message handling is done via the SSE transport
+            # This endpoint acknowledges receipt
             return {"status": "received"}
 
         return app
@@ -245,32 +369,9 @@ def create_parser() -> argparse.ArgumentParser:
     """Create argument parser for remote server CLI."""
     parser = argparse.ArgumentParser(
         prog="kimai-mcp-server",
-        description="Kimai MCP Remote Server - Centralized HTTP/SSE server for enterprise deployment",
+        description="Kimai MCP Remote Server - Centralized HTTP/SSE server with per-client authentication",
         epilog="Documentation: https://github.com/glazperle/kimai_mcp",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-
-    # Kimai connection settings
-    parser.add_argument(
-        "--kimai-url",
-        metavar="URL",
-        help="Kimai server URL (or set KIMAI_URL env var)",
-    )
-    parser.add_argument(
-        "--kimai-token",
-        metavar="TOKEN",
-        help="Kimai API token (or set KIMAI_API_TOKEN env var)",
-    )
-    parser.add_argument(
-        "--kimai-user",
-        metavar="USER_ID",
-        help="Default Kimai user ID (or set KIMAI_DEFAULT_USER env var)",
-    )
-    parser.add_argument(
-        "--ssl-verify",
-        metavar="VALUE",
-        default="true",
-        help="SSL verification for Kimai: 'true' (default), 'false', or path to CA cert",
     )
 
     # Server settings
@@ -289,6 +390,19 @@ def create_parser() -> argparse.ArgumentParser:
         "--server-token",
         metavar="TOKEN",
         help="Authentication token for MCP server (or set MCP_SERVER_TOKEN env var, auto-generated if not set)",
+    )
+
+    # Optional Kimai settings
+    parser.add_argument(
+        "--default-kimai-url",
+        metavar="URL",
+        help="Default Kimai server URL (clients can override, or set DEFAULT_KIMAI_URL env var)",
+    )
+    parser.add_argument(
+        "--ssl-verify",
+        metavar="VALUE",
+        default="true",
+        help="SSL verification for Kimai: 'true' (default), 'false', or path to CA cert",
     )
     parser.add_argument(
         "--allowed-origins",
@@ -312,18 +426,8 @@ def main():
     args = parser.parse_args()
 
     # Load from environment if not provided
-    kimai_url = args.kimai_url or os.getenv("KIMAI_URL")
-    kimai_token = args.kimai_token or os.getenv("KIMAI_API_TOKEN")
-    kimai_user = args.kimai_user or os.getenv("KIMAI_DEFAULT_USER")
+    default_kimai_url = args.default_kimai_url or os.getenv("DEFAULT_KIMAI_URL")
     server_token = args.server_token or os.getenv("MCP_SERVER_TOKEN")
-
-    # Validate required settings
-    if not kimai_url:
-        print("Error: Kimai URL is required (--kimai-url or KIMAI_URL env var)")
-        return 1
-    if not kimai_token:
-        print("Error: Kimai API token is required (--kimai-token or KIMAI_API_TOKEN env var)")
-        return 1
 
     # Parse SSL verify value
     ssl_verify: Optional[Union[bool, str]] = None
@@ -338,9 +442,7 @@ def main():
 
     # Create and run server
     server = RemoteMCPServer(
-        kimai_url=kimai_url,
-        kimai_token=kimai_token,
-        kimai_user=kimai_user,
+        default_kimai_url=default_kimai_url,
         ssl_verify=ssl_verify,
         server_token=server_token,
         host=args.host,

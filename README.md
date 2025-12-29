@@ -24,25 +24,47 @@ kimai-mcp --setup
 
 ### 🌐 Remote Server Deployment (Recommended for Teams)
 
-**For enterprise/team environments:** Deploy the server once and let all users connect remotely!
+**For enterprise/team environments:** Deploy the server once and let all users connect remotely with their own credentials!
 
 ```bash
 # Quick start with Docker
 docker run -d \
   -p 8000:8000 \
-  -e KIMAI_URL=https://your-kimai.com \
-  -e KIMAI_API_TOKEN=your-token \
+  -e DEFAULT_KIMAI_URL=https://your-kimai.com \
   ghcr.io/glazperle/kimai-mcp:latest
 
 # Or use Docker Compose (see DEPLOYMENT.md for full guide)
 docker-compose up -d
 ```
 
+**🔐 Per-Client Authentication:**
+- Each user uses their **own** Kimai API token
+- Individual permissions and access control
+- Auditable actions per user
+- No shared credentials
+- Enhanced security and compliance
+
 **Benefits:**
 - ✅ Install once, use everywhere
 - ✅ Central management and updates
-- ✅ Secure token-based authentication
+- ✅ Each user keeps their individual permissions
 - ✅ No local installation on client machines
+- ✅ Full audit trail per user
+
+**Client Setup:**
+```json
+{
+  "mcpServers": {
+    "kimai": {
+      "url": "http://your-server:8000/sse",
+      "headers": {
+        "Authorization": "Bearer MCP-SERVER-TOKEN",
+        "X-Kimai-Token": "YOUR-PERSONAL-KIMAI-TOKEN"
+      }
+    }
+  }
+}
+```
 
 📖 **[See full deployment guide →](DEPLOYMENT.md)**
 
