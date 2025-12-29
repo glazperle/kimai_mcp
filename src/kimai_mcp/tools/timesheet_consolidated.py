@@ -222,7 +222,8 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         user_filter = filters.get("user")
         if not user_filter:
             return [TextContent(type="text", text="Error: 'user' parameter required when user_scope is 'specific'")]
-    # user_scope == "all" means no user filter
+    elif user_scope == "all":
+        user_filter = "all"  # API requires explicit "all" to return all users' timesheets
 
     begin_datetime = None
     if "begin" in filters:

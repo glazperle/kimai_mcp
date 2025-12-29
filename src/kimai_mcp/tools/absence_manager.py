@@ -187,17 +187,51 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
         absences = await client.get_absences(absence_filter)
         
     elif user_scope == "all":
-        # API doesn't support "all users" in one call - iterate over all users
+        # Try to get absences for all users the current user has access to
         try:
-            # Fetch all users first
-            users = await client.get_users()
             all_absences = []
-            
-            # Iterate over all users and collect their absences
-            for user in users:
+
+            # First, try to get users from teams (works for team leads and admins)
+            accessible_user_ids = set()
+            try:
+                teams = await client.get_teams()
+                # Need to fetch each team individually to get members
+                for team in teams:
+                    try:
+                        team_detail = await client.get_team(team.id)
+                        if team_detail.members:
+                            for member in team_detail.members:
+                                accessible_user_ids.add(member.user.id)
+                    except Exception:
+                        continue
+            except Exception:
+                # No team access, try get_users as fallback
+                pass
+
+            # If no users from teams, try get_users (requires higher permissions)
+            if not accessible_user_ids:
+                try:
+                    users = await client.get_users()
+                    accessible_user_ids = {user.id for user in users}
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "forbidden" in error_msg or "403" in error_msg:
+                        return [TextContent(
+                            type="text",
+                            text="Error: You don't have permission to view all users' absences.\n\n"
+                                 "This requires either:\n"
+                                 "- System Administrator role, or\n"
+                                 "- Being a team lead (to see team members' absences)\n\n"
+                                 "Use user_scope='self' to view your own absences, or\n"
+                                 "user_scope='specific' with a user ID if you have permission for that user."
+                        )]
+                    raise
+
+            # Now fetch absences for each accessible user
+            for user_id in accessible_user_ids:
                 try:
                     user_filter = AbsenceFilter(
-                        user=str(user.id),
+                        user=str(user_id),
                         begin=begin_date,
                         end=end_date,
                         status=filters.get("status", "all")
@@ -206,11 +240,10 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
                     all_absences.extend(user_absences)
                 except Exception:
                     # Skip users we don't have permission to view
-                    # This can happen if user doesn't have 'contract_other_profile' permission
                     continue
-            
+
             absences = all_absences
-            
+
         except Exception as e:
             return [TextContent(type="text", text=f"Error fetching all users' absences: {str(e)}")]
     
