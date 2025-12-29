@@ -36,11 +36,11 @@ kimai-mcp --setup
 
 ### Core Management Tools
 1. **Entity Tool** - Universal CRUD operations for projects, activities, customers, users, teams, tags, invoices, holidays
-2. **Timesheet Tool** - Complete timesheet management (list, create, update, delete, export)
+2. **Timesheet Tool** - Complete timesheet management (list, create, update, delete, export, batch operations)
 3. **Timer Tool** - Active timer operations (start, stop, restart, view active/recent)
 4. **Rate Tool** - Rate management across all entity types
 5. **Team Access Tool** - Team member and permission management
-6. **Absence Tool** - Complete absence workflow (create, approve, reject, list)
+6. **Absence Tool** - Complete absence workflow (create, approve, reject, list, batch operations)
 7. **Calendar Tool** - Unified calendar data access
 8. **Meta Tool** - Custom field management across entities
 9. **User Current Tool** - Current user information
@@ -383,6 +383,66 @@ Then use this Claude Desktop configuration:
       "user": "5",
       "status": "all"
     }
+  }
+}
+```
+
+### Batch Operations
+
+Batch operations allow executing multiple API calls in parallel for efficient bulk processing.
+
+#### Batch Delete Absences
+```json
+{
+  "tool": "absence",
+  "parameters": {
+    "action": "batch_delete",
+    "ids": [1, 2, 3, 4, 5]
+  }
+}
+```
+
+#### Batch Approve Absences
+```json
+{
+  "tool": "absence",
+  "parameters": {
+    "action": "batch_approve",
+    "ids": [10, 11, 12, 13]
+  }
+}
+```
+
+#### Batch Delete Timesheets
+```json
+{
+  "tool": "timesheet",
+  "parameters": {
+    "action": "batch_delete",
+    "ids": [100, 101, 102, 103]
+  }
+}
+```
+
+#### Batch Export Timesheets
+```json
+{
+  "tool": "timesheet",
+  "parameters": {
+    "action": "batch_export",
+    "ids": [200, 201, 202]
+  }
+}
+```
+
+#### Batch Delete Entities
+```json
+{
+  "tool": "entity",
+  "parameters": {
+    "type": "project",
+    "action": "batch_delete",
+    "ids": [5, 6, 7]
   }
 }
 ```

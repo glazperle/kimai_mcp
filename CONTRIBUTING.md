@@ -195,6 +195,7 @@ kimai_mcp/
 │   ├── models.py                # Pydantic data models
 │   └── tools/                   # MCP tool implementations
 │       ├── __init__.py
+│       ├── batch_utils.py       # Batch operation utilities (asyncio.gather)
 │       ├── entity_manager.py    # Universal CRUD for all entity types
 │       ├── timesheet_consolidated.py  # Timesheet management
 │       ├── rate_manager.py      # Rate management across entities

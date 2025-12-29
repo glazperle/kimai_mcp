@@ -350,6 +350,113 @@ Parameters: {
 }
 ```
 
+## Batch Operations
+
+Batch operations allow executing multiple API calls in parallel for efficient bulk processing.
+
+### Batch Delete Absences
+
+```
+Tool: absence
+Parameters: {
+  "action": "batch_delete",
+  "ids": [1, 2, 3, 4, 5]
+}
+
+Output:
+Batch Delete Complete
+✓ Deleted: 5 absences
+```
+
+### Batch Approve Absences
+
+```
+Tool: absence
+Parameters: {
+  "action": "batch_approve",
+  "ids": [10, 11, 12, 13, 14]
+}
+
+Output:
+Batch Approve Complete
+✓ Approved: 5 absences
+```
+
+### Batch Reject Absences
+
+```
+Tool: absence
+Parameters: {
+  "action": "batch_reject",
+  "ids": [20, 21, 22]
+}
+
+Output:
+Batch Reject Complete
+✓ Rejected: 3 absences
+```
+
+### Batch Delete Timesheets
+
+```
+Tool: timesheet
+Parameters: {
+  "action": "batch_delete",
+  "ids": [100, 101, 102, 103, 104]
+}
+
+Output:
+Batch Delete Complete
+✓ Deleted: 5 timesheets
+```
+
+### Batch Export Timesheets
+
+Mark multiple timesheets as exported:
+
+```
+Tool: timesheet
+Parameters: {
+  "action": "batch_export",
+  "ids": [200, 201, 202]
+}
+
+Output:
+Batch Export Complete
+✓ Exported: 3 timesheets
+```
+
+### Batch Delete Entities
+
+Delete multiple entities of the same type:
+
+```
+Tool: entity
+Parameters: {
+  "type": "project",
+  "action": "batch_delete",
+  "ids": [5, 6, 7]
+}
+
+Output:
+Batch Delete Complete
+✓ Deleted: 3 projects
+```
+
+### Handling Partial Failures
+
+Batch operations continue even if some items fail. The output shows both successes and failures:
+
+```
+Output:
+Batch Delete Complete
+✓ Deleted: 432 absences
+✗ Failed: 3
+  - ID 15: Permission denied
+  - ID 42: Not found
+  - ID 99: Already deleted
+```
+
 ## Complex Workflows
 
 ### Daily Time Report
