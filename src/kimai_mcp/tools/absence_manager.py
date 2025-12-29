@@ -19,7 +19,7 @@ def absence_tool() -> Tool:
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "statistics", "types", "create", "delete", "approve", "reject", "request"],
+                    "enum": ["list", "statistics", "types", "create", "delete", "approve", "reject", "request", "attendance"],
                     "description": "The action to perform"
                 },
                 "id": {
@@ -111,6 +111,11 @@ def absence_tool() -> Tool:
                     "type": "boolean",
                     "description": "Include monthly breakdown in statistics",
                     "default": False
+                },
+                "date": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "Date for attendance check (YYYY-MM-DD). Defaults to today."
                 }
             }
         }
@@ -143,10 +148,16 @@ async def handle_absence(client: KimaiClient, **params) -> List[TextContent]:
             return await _handle_absence_reject(client, params.get("id"))
         elif action == "request":
             return await _handle_absence_request(client, params.get("id"))
+        elif action == "attendance":
+            return await _handle_attendance(
+                client,
+                params.get("filters", {}),
+                params.get("date")
+            )
         else:
             return [TextContent(
                 type="text",
-                text=f"Error: Unknown action '{action}'. Valid actions: list, types, create, delete, approve, reject, request"
+                text=f"Error: Unknown action '{action}'. Valid actions: list, statistics, types, create, delete, approve, reject, request, attendance"
             )]
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {str(e)}")]
@@ -519,6 +530,140 @@ async def _handle_absence_request(client: KimaiClient, id: Optional[int]) -> Lis
     """Handle absence request approval action."""
     if not id:
         return [TextContent(type="text", text="Error: 'id' parameter is required for request action")]
-    
+
     await client.request_absence_approval(id)
     return [TextContent(type="text", text=f"Requested approval for absence ID {id}")]
+
+
+async def _get_accessible_users(client: KimaiClient, user_scope: str) -> List:
+    """Get users based on scope with Teams-first approach.
+
+    Returns list of user objects (not just IDs) for building reports.
+    """
+    if user_scope == "self":
+        current_user = await client.get_current_user()
+        return [current_user]
+
+    # For "all" scope, try teams first then fallback to get_users
+    accessible_users = []
+    seen_user_ids = set()
+
+    # Try to get users from teams (works for team leads and admins)
+    try:
+        teams = await client.get_teams()
+        for team in teams:
+            try:
+                team_detail = await client.get_team(team.id)
+                if team_detail.members:
+                    for member in team_detail.members:
+                        if member.user.id not in seen_user_ids:
+                            seen_user_ids.add(member.user.id)
+                            accessible_users.append(member.user)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # If no users from teams, try get_users (requires higher permissions)
+    if not accessible_users:
+        try:
+            users = await client.get_users()
+            accessible_users = list(users)
+        except Exception:
+            # If both fail, return empty list
+            pass
+
+    return accessible_users
+
+
+async def _handle_attendance(
+    client: KimaiClient,
+    filters: Dict,
+    date_str: Optional[str] = None
+) -> List[TextContent]:
+    """Show who is present (not absent) on a given day."""
+
+    # Type labels for German output
+    TYPE_LABELS = {
+        "holiday": "Urlaub",
+        "sickness": "Krankheit",
+        "sickness_child": "Kind krank",
+        "time_off": "Zeitausgleich",
+        "parental": "Elternzeit",
+        "unpaid_vacation": "Unbezahlter Urlaub",
+        "other": "Sonstiges"
+    }
+
+    # 1. Determine date (Default: today)
+    if date_str:
+        try:
+            check_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return [TextContent(
+                type="text",
+                text=f"Error: Invalid date format. Expected YYYY-MM-DD, got '{date_str}'"
+            )]
+    else:
+        check_date = datetime.now().date()
+
+    # 2. Get all accessible users
+    user_scope = filters.get("user_scope", "all")
+    all_users = await _get_accessible_users(client, user_scope)
+
+    if not all_users:
+        return [TextContent(
+            type="text",
+            text="Error: Could not retrieve any users. You may need:\n"
+                 "- System Administrator role, or\n"
+                 "- Being a team lead (to see team members)"
+        )]
+
+    # 3. Check absences for this day
+    begin = check_date.strftime("%Y-%m-%dT00:00:00")
+    end = check_date.strftime("%Y-%m-%dT23:59:59")
+
+    absent_users_with_reason = {}  # user_id -> (user, absence_type)
+
+    for user in all_users:
+        try:
+            absences = await client.get_absences(AbsenceFilter(
+                user=str(user.id),
+                begin=begin,
+                end=end,
+                status="all"  # All absences (approved + open)
+            ))
+            if absences:
+                # Take first absence type (if multiple)
+                absence_type = absences[0].type if absences else "Abwesend"
+                absent_users_with_reason[user.id] = (user, absence_type)
+        except Exception:
+            # Skip users we can't check
+            continue
+
+    # 4. Present = All - Absent
+    present_users = [u for u in all_users if u.id not in absent_users_with_reason]
+
+    # 5. Build report
+    # Format date with weekday
+    weekday_names = {
+        0: "Montag", 1: "Dienstag", 2: "Mittwoch", 3: "Donnerstag",
+        4: "Freitag", 5: "Samstag", 6: "Sonntag"
+    }
+    weekday = weekday_names.get(check_date.weekday(), "")
+    formatted_date = f"{weekday}, {check_date.strftime('%d.%m.%Y')}"
+
+    result = f"# Attendance Report for {formatted_date}\n\n"
+    result += f"## Present ({len(present_users)} of {len(all_users)})\n"
+
+    for user in sorted(present_users, key=lambda u: u.username.lower()):
+        display_name = user.alias if hasattr(user, 'alias') and user.alias else user.username
+        result += f"- ✓ {display_name}\n"
+
+    if absent_users_with_reason:
+        result += f"\n## Absent ({len(absent_users_with_reason)})\n"
+        for user, absence_type in sorted(absent_users_with_reason.values(), key=lambda x: x[0].username.lower()):
+            display_name = user.alias if hasattr(user, 'alias') and user.alias else user.username
+            type_label = TYPE_LABELS.get(absence_type, absence_type)
+            result += f"- ✗ {display_name} ({type_label})\n"
+
+    return [TextContent(type="text", text=result)]
