@@ -5,21 +5,19 @@ The server only provides MCP protocol handling and does not store Kimai credenti
 """
 
 import argparse
-import asyncio
 import json
 import logging
 import os
 import secrets
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional, Union
+from typing import Dict, Optional, Union
 
 try:
     import uvicorn
     from fastapi import FastAPI, Header, HTTPException, Request
     from fastapi.responses import StreamingResponse
     from starlette.middleware.cors import CORSMiddleware
-    from sse_starlette import EventSourceResponse
 except ImportError as e:
     raise ImportError(
         "Remote server dependencies not installed. "
@@ -312,7 +310,7 @@ class RemoteMCPServer:
                             "X-Session-ID": session_id,
                         },
                     )
-            except Exception as e:
+            except Exception:
                 # Cleanup on error
                 await self.cleanup_session(session_id)
                 raise
@@ -344,7 +342,7 @@ class RemoteMCPServer:
 
             # Get message from request body
             try:
-                message = await request.json()
+                _ = await request.json()
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="Invalid JSON")
 
