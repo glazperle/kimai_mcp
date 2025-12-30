@@ -10,11 +10,8 @@ services:
 
     # Environment variables
     environment:
-      # MCP Server authentication (optional - auto-generated if not set)
-      - MCP_SERVER_TOKEN=${MCP_SERVER_TOKEN:-}
-
-      # Optional: Default Kimai URL (clients can override)
-      - DEFAULT_KIMAI_URL=${DEFAULT_KIMAI_URL:-}
+      # Path to users config file (inside container)
+      - USERS_CONFIG_FILE=/app/config/users.json
 
       # SSL verification for Kimai connections
       - KIMAI_SSL_VERIFY=${KIMAI_SSL_VERIFY:-true}
@@ -23,9 +20,11 @@ services:
     ports:
       - "${SERVER_PORT:-8000}:8000"
 
-    # Optional: Mount CA certificates for custom SSL
-    # volumes:
-    #   - ./certs/ca-bundle.crt:/app/certs/ca-bundle.crt:ro
+    # Mount the users config file
+    volumes:
+      - ./config/users.json:/app/config/users.json:ro
+      # Optional: Mount CA certificates for custom SSL
+      # - ./certs/ca-bundle.crt:/app/certs/ca-bundle.crt:ro
 
     # Health check
     healthcheck:

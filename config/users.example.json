@@ -1,0 +1,14 @@
+{
+  "max": {
+    "kimai_url": "https://kimai.example.com",
+    "kimai_token": "your-api-token-for-max",
+    "kimai_user_id": "1",
+    "ssl_verify": true
+  },
+  "anna": {
+    "kimai_url": "https://kimai.example.com",
+    "kimai_token": "your-api-token-for-anna",
+    "kimai_user_id": "2",
+    "ssl_verify": true
+  }
+}

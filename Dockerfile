@@ -28,6 +28,9 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app /app
 
+# Create config directory
+RUN mkdir -p /app/config
+
 # Create non-root user
 RUN useradd -m -u 1000 -s /bin/bash kimai && \
     chown -R kimai:kimai /app
@@ -42,5 +45,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-# Run the server
-CMD ["kimai-mcp-server"]
+# Default: Run the new Streamable HTTP server (for Claude.ai Connectors)
+# Use kimai-mcp-server for the legacy SSE server
+CMD ["kimai-mcp-streamable"]
