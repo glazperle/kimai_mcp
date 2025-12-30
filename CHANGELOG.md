@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] - 2025-12-30
+
+### Added
+
+- **Streamable HTTP Server for Claude.ai Connectors** - New `streamable_http_server.py` enables integration with Claude.ai custom connectors
+  - Works with Claude.ai web and mobile apps
+  - Multi-user support with per-user endpoints (`/mcp/{user_slug}`)
+  - Server-side Kimai credential management via `users.json`
+- **User Configuration System** - New `user_config.py` for managing multiple user credentials
+  - JSON-based configuration file (`config/users.json`)
+  - Support for per-user Kimai URL, token, and settings
+- New CLI entry point `kimai-mcp-streamable` for running the Streamable HTTP server
+- Example configuration template `config/users.example.json`
+
+### Changed
+
+- Docker default command changed from `kimai-mcp-server` to `kimai-mcp-streamable`
+- Docker Compose now mounts `config/users.json` for user configuration
+
+### Migration Notes
+
+- Existing SSE server users: No changes required, use `kimai-mcp-server`
+- Docker users: Default behavior changed to Streamable HTTP - override CMD if SSE is preferred
+
 ## [2.7.0] - 2025-12-29
 
 ### Added

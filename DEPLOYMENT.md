@@ -2,6 +2,92 @@
 
 Dieses Dokument beschreibt, wie Sie den Kimai MCP Server zentral in Ihrem Unternehmen bereitstellen können, sodass Sie ihn nicht auf jedem Client lokal installieren müssen.
 
+## 📊 Server-Typen
+
+Es gibt drei Server-Typen für unterschiedliche Anwendungsfälle:
+
+| Server | Befehl | Protokoll | Anwendung |
+|--------|--------|-----------|-----------|
+| **Streamable HTTP** | `kimai-mcp-streamable` | HTTP Streamable | Claude.ai Connectors (Web/Mobile) |
+| **SSE Server** | `kimai-mcp-server` | HTTP/SSE | Claude Desktop (Remote) |
+| **Lokaler Server** | `kimai-mcp` | MCP Stdio | Claude Desktop (Lokal) |
+
+### Streamable HTTP Server (Neu ab v2.8.0)
+
+Der Streamable HTTP Server ist optimiert für **Claude.ai Connectors**:
+
+- Funktioniert mit Claude.ai Web und Mobile Apps
+- Jeder User bekommt einen eigenen Endpoint (`/mcp/{username}`)
+- Kimai-Credentials werden serverseitig in `users.json` konfiguriert
+- Kein Token im Client erforderlich
+
+### SSE Server (Legacy)
+
+Der SSE Server ist für **Claude Desktop Remote-Verbindungen**:
+
+- Per-Client Authentifizierung via Header
+- Jeder Client sendet seinen eigenen Kimai-Token
+- Flexibler, aber komplexere Client-Konfiguration
+
+---
+
+## 🚀 Streamable HTTP Server (Empfohlen für Claude.ai)
+
+### 1. Konfiguration erstellen
+
+```bash
+# Repository klonen
+git clone https://github.com/glazperle/kimai_mcp.git
+cd kimai_mcp
+
+# Users-Konfiguration erstellen
+cp config/users.example.json config/users.json
+nano config/users.json
+```
+
+**config/users.json** Format:
+
+```json
+{
+  "max": {
+    "kimai_url": "https://kimai.firma.de",
+    "kimai_token": "api-token-fuer-max",
+    "kimai_user_id": "1"
+  },
+  "anna": {
+    "kimai_url": "https://kimai.firma.de",
+    "kimai_token": "api-token-fuer-anna",
+    "kimai_user_id": "2"
+  }
+}
+```
+
+### 2. Server starten
+
+```bash
+# Mit Docker Compose
+docker-compose up -d
+
+# Server-Logs prüfen
+docker-compose logs -f
+```
+
+### 3. In Claude.ai hinzufügen
+
+1. Claude.ai öffnen: **Settings → Connectors → Add custom connector**
+2. URL eingeben: `https://ihr-server.de/mcp/max`
+3. Fertig! Keine weitere Konfiguration nötig.
+
+### Endpoints
+
+| Endpoint | Methode | Beschreibung |
+|----------|---------|--------------|
+| `/health` | GET | Health Check |
+| `/users` | GET | Liste aller User-Endpoints |
+| `/mcp/{user}` | GET/POST/DELETE | MCP Endpoint pro User |
+
+---
+
 ## 🔐 Per-Client Authentifizierung
 
 **WICHTIG:** Dieser Server verwendet **per-client Authentifizierung**. Jeder Benutzer verwendet seinen **eigenen Kimai API-Token**.

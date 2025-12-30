@@ -1,3 +1,28 @@
+# =============================================================================
+# Kimai MCP Streamable HTTP Server
+# =============================================================================
+#
+# BEFORE STARTING: Create config/users.json with your user credentials:
+#
+#   cp config/users.example.json config/users.json
+#   # Edit config/users.json with your Kimai credentials:
+#   # {
+#   #   "username": {
+#   #     "kimai_url": "https://kimai.example.com",
+#   #     "kimai_token": "your-api-token",
+#   #     "kimai_user_id": "1"
+#   #   }
+#   # }
+#
+# START: docker-compose up -d
+# LOGS:  docker-compose logs -f
+# HEALTH: curl http://localhost:8000/health
+#
+# Claude.ai Connector URL: https://your-domain.com/mcp/{username}
+#
+# For SSE Server (legacy), change CMD in Dockerfile to: kimai-mcp-server
+# =============================================================================
+
 version: '3.8'
 
 services:

@@ -24,34 +24,53 @@ kimai-mcp --setup
 
 ### 🌐 Remote Server Deployment (Recommended for Teams)
 
-**For enterprise/team environments:** Deploy the server once and let all users connect remotely with their own credentials!
+**For enterprise/team environments:** Deploy the server once and let all users connect remotely!
+
+#### Server Types
+
+| Server | Command | Best For |
+|--------|---------|----------|
+| **Streamable HTTP** | `kimai-mcp-streamable` | Claude.ai Connectors (web/mobile) |
+| **SSE Server** | `kimai-mcp-server` | Claude Desktop (remote) |
+| **Local** | `kimai-mcp` | Single user, development |
+
+#### Quick Start with Docker (Streamable HTTP)
 
 ```bash
-# Quick start with Docker
-docker run -d \
-  -p 8000:8000 \
-  -e DEFAULT_KIMAI_URL=https://your-kimai.com \
-  ghcr.io/glazperle/kimai-mcp:latest
+# 1. Create config file
+mkdir config
+cat > config/users.json << 'EOF'
+{
+  "max": {
+    "kimai_url": "https://your-kimai.com",
+    "kimai_token": "your-api-token"
+  }
+}
+EOF
 
-# Or use Docker Compose (see DEPLOYMENT.md for full guide)
+# 2. Start server
 docker-compose up -d
 ```
 
-**🔐 Per-Client Authentication:**
-- Each user uses their **own** Kimai API token
-- Individual permissions and access control
-- Auditable actions per user
-- No shared credentials
-- Enhanced security and compliance
+#### Claude.ai Connectors Integration
+
+The Streamable HTTP server works with Claude.ai custom connectors:
+
+1. Deploy server with Docker (see above)
+2. In Claude.ai: **Settings → Connectors → Add custom connector**
+3. Enter URL: `https://your-domain.com/mcp/max`
+4. Done! Works in Claude.ai web and mobile apps
 
 **Benefits:**
-- ✅ Install once, use everywhere
-- ✅ Central management and updates
-- ✅ Each user keeps their individual permissions
-- ✅ No local installation on client machines
-- ✅ Full audit trail per user
+- ✅ Works with Claude.ai web and mobile apps
+- ✅ Each user gets their own endpoint (`/mcp/{username}`)
+- ✅ Server-side credential management
+- ✅ No client-side token exposure
 
-**Client Setup:**
+#### Claude Desktop (SSE Server)
+
+For Claude Desktop with remote server access:
+
 ```json
 {
   "mcpServers": {
