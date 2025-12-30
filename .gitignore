@@ -186,4 +186,5 @@ CLAUDE.md
 .env.local
 .env.production
 config.json
+config/users.json
 api_documentation.json

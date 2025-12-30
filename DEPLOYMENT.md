@@ -17,9 +17,11 @@ Es gibt drei Server-Typen für unterschiedliche Anwendungsfälle:
 Der Streamable HTTP Server ist optimiert für **Claude.ai Connectors**:
 
 - Funktioniert mit Claude.ai Web und Mobile Apps
-- Jeder User bekommt einen eigenen Endpoint (`/mcp/{username}`)
+- Jeder User bekommt einen eigenen Endpoint (`/mcp/{zufälliger-slug}`)
 - Kimai-Credentials werden serverseitig in `users.json` konfiguriert
 - Kein Token im Client erforderlich
+
+> **Sicherheitshinweis:** Verwenden Sie **zufällige Slugs**, keine Benutzernamen! URLs wie `/mcp/max` sind leicht zu erraten.
 
 ### SSE Server (Legacy)
 
@@ -40,6 +42,10 @@ Der SSE Server ist für **Claude Desktop Remote-Verbindungen**:
 git clone https://github.com/glazperle/kimai_mcp.git
 cd kimai_mcp
 
+# Zufällige Slugs generieren (WICHTIG für Sicherheit!)
+python -c "import secrets; print(secrets.token_urlsafe(12))"
+# Beispiel-Ausgabe: xK9mP2qW7vL4
+
 # Users-Konfiguration erstellen
 cp config/users.example.json config/users.json
 nano config/users.json
@@ -49,18 +55,20 @@ nano config/users.json
 
 ```json
 {
-  "max": {
+  "xK9mP2qW7vL4": {
     "kimai_url": "https://kimai.firma.de",
-    "kimai_token": "api-token-fuer-max",
+    "kimai_token": "api-token-fuer-benutzer-1",
     "kimai_user_id": "1"
   },
-  "anna": {
+  "bN3hT8rY5jF6": {
     "kimai_url": "https://kimai.firma.de",
-    "kimai_token": "api-token-fuer-anna",
+    "kimai_token": "api-token-fuer-benutzer-2",
     "kimai_user_id": "2"
   }
 }
 ```
+
+> **Wichtig:** Die Slugs (`xK9mP2qW7vL4`, `bN3hT8rY5jF6`) sollten zufällig generiert werden, nicht vorhersehbar sein wie Benutzernamen!
 
 ### 2. Server starten
 
@@ -75,7 +83,7 @@ docker-compose logs -f
 ### 3. In Claude.ai hinzufügen
 
 1. Claude.ai öffnen: **Settings → Connectors → Add custom connector**
-2. URL eingeben: `https://ihr-server.de/mcp/max`
+2. URL eingeben: `https://ihr-server.de/mcp/xK9mP2qW7vL4` (Ihren zufälligen Slug)
 3. Fertig! Keine weitere Konfiguration nötig.
 
 ### Endpoints
@@ -84,7 +92,7 @@ docker-compose logs -f
 |----------|---------|--------------|
 | `/health` | GET | Health Check |
 | `/users` | GET | Liste aller User-Endpoints |
-| `/mcp/{user}` | GET/POST/DELETE | MCP Endpoint pro User |
+| `/mcp/{slug}` | GET/POST/DELETE | MCP Endpoint pro User (zufälliger Slug) |
 
 ---
 

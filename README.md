@@ -37,20 +37,27 @@ kimai-mcp --setup
 #### Quick Start with Docker (Streamable HTTP)
 
 ```bash
-# 1. Create config file
+# 1. Generate a random slug for security (DO NOT use usernames!)
+python -c "import secrets; print(secrets.token_urlsafe(12))"
+# Output example: xK9mP2qW7vL4
+
+# 2. Create config file with random slug
 mkdir config
 cat > config/users.json << 'EOF'
 {
-  "max": {
+  "xK9mP2qW7vL4": {
     "kimai_url": "https://your-kimai.com",
-    "kimai_token": "your-api-token"
+    "kimai_token": "your-api-token",
+    "kimai_user_id": "1"
   }
 }
 EOF
 
-# 2. Start server
+# 3. Start server
 docker-compose up -d
 ```
+
+> **Security Warning:** Use random slugs, NOT usernames! Predictable URLs like `/mcp/john` can be easily guessed. Generate secure slugs with `python -c "import secrets; print(secrets.token_urlsafe(12))"`
 
 #### Claude.ai Connectors Integration
 
@@ -58,12 +65,12 @@ The Streamable HTTP server works with Claude.ai custom connectors:
 
 1. Deploy server with Docker (see above)
 2. In Claude.ai: **Settings → Connectors → Add custom connector**
-3. Enter URL: `https://your-domain.com/mcp/max`
+3. Enter URL: `https://your-domain.com/mcp/xK9mP2qW7vL4` (your random slug)
 4. Done! Works in Claude.ai web and mobile apps
 
 **Benefits:**
 - ✅ Works with Claude.ai web and mobile apps
-- ✅ Each user gets their own endpoint (`/mcp/{username}`)
+- ✅ Each user gets their own endpoint (`/mcp/{random-slug}`)
 - ✅ Server-side credential management
 - ✅ No client-side token exposure
 

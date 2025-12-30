@@ -1,13 +1,15 @@
 {
-  "max": {
+  "_SECURITY_WARNING": "Use RANDOM slugs, NOT usernames! Generate with: python -c \"import secrets; print(secrets.token_urlsafe(12))\"",
+
+  "xK9mP2qW7vL4": {
     "kimai_url": "https://kimai.example.com",
-    "kimai_token": "your-api-token-for-max",
+    "kimai_token": "your-api-token-here",
     "kimai_user_id": "1",
     "ssl_verify": true
   },
-  "anna": {
+  "bN3hT8rY5jF6": {
     "kimai_url": "https://kimai.example.com",
-    "kimai_token": "your-api-token-for-anna",
+    "kimai_token": "another-api-token",
     "kimai_user_id": "2",
     "ssl_verify": true
   }
