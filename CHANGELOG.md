@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2025-12-30
+
+### Added
+
+- **Comprehensive Security Module** - New `security.py` with enterprise-grade security features
+  - **Rate Limiting**: Token bucket algorithm to prevent DoS and brute-force attacks (configurable via `--rate-limit-rpm`)
+  - **Session Management**: Maximum concurrent sessions and TTL-based expiration (configurable via `--max-sessions`, `--session-ttl`)
+  - **Security Headers**: Automatic X-Content-Type-Options, X-Frame-Options, X-XSS-Protection headers
+  - **Enumeration Protection**: Random delays on 404 responses and automatic blocking after excessive failed requests
+- New CLI arguments for security configuration:
+  - `--rate-limit-rpm`: Requests per minute per IP (default: 60, 0 to disable)
+  - `--max-sessions`: Maximum concurrent sessions (default: 100, SSE server only)
+  - `--session-ttl`: Session timeout in seconds (default: 3600, SSE server only)
+  - `--require-https`: Enforce HTTPS connections (SSE server only)
+- Environment variable support: `RATE_LIMIT_RPM`, `MAX_SESSIONS`, `SESSION_TTL`, `REQUIRE_HTTPS`
+- Unit tests for all security components in `tests/test_security.py`
+
+### Changed
+
+- **CORS Security Fix**: `allow_credentials=False` when using wildcard origins (`*`) to prevent credential theft
+- **Removed X-Session-ID Header**: Session IDs no longer exposed in HTTP response headers
+
+### Removed
+
+- **`/users` Endpoint** (Streamable HTTP Server): Removed to prevent user/endpoint enumeration attacks
+- **User slugs in `/health` response** (Streamable HTTP Server): Now only returns `user_count` instead of full user list
+
+### Security
+
+- Fixed potential session hijacking via overly permissive CORS configuration
+- Fixed unbounded session growth that could lead to memory exhaustion
+- Fixed timing-based user enumeration via 404 response times
+- Added protection against brute-force attacks on MCP endpoints
+
+### Migration Notes
+
+- The `/users` endpoint is no longer available - administrators should track user slugs separately
+- Health check response format changed: `users` array replaced with `user_count` integer
+- Rate limiting is enabled by default (60 req/min) - set `--rate-limit-rpm=0` to disable
+
 ## [2.8.0] - 2025-12-30
 
 ### Added

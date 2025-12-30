@@ -90,9 +90,10 @@ docker-compose logs -f
 
 | Endpoint | Methode | Beschreibung |
 |----------|---------|--------------|
-| `/health` | GET | Health Check |
-| `/users` | GET | Liste aller User-Endpoints |
+| `/health` | GET | Health Check (gibt nur User-Anzahl zurück, keine Slugs) |
 | `/mcp/{slug}` | GET/POST/DELETE | MCP Endpoint pro User (zufälliger Slug) |
+
+> **Hinweis:** Der `/users` Endpoint wurde aus Sicherheitsgründen entfernt, um User-Enumeration zu verhindern.
 
 ---
 
@@ -401,7 +402,42 @@ openssl rand -base64 32
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-### 2. Transport-Sicherheit
+### 2. Integrierte Sicherheitsfunktionen (Neu ab v2.9.0)
+
+Der Server enthält mehrere Sicherheitsfeatures:
+
+| Feature | Beschreibung | Konfiguration |
+|---------|--------------|---------------|
+| **Rate Limiting** | Begrenzt Anfragen pro IP | `--rate-limit-rpm=60` (Standard: 60/min) |
+| **Session Limits** | Max. gleichzeitige Sessions | `--max-sessions=100` (nur SSE Server) |
+| **Session TTL** | Automatische Session-Bereinigung | `--session-ttl=3600` (nur SSE Server) |
+| **Security Headers** | X-Content-Type-Options, X-Frame-Options, etc. | Automatisch aktiviert |
+| **CORS-Sicherheit** | Keine Credentials mit Wildcard-Origins | Automatisch |
+| **Enumeration-Schutz** | Verzögerung bei 404, Blockierung nach zu vielen Fehlern | Automatisch |
+
+**Rate Limiting deaktivieren:**
+```bash
+# SSE Server
+kimai-mcp-server --rate-limit-rpm=0
+
+# Streamable HTTP Server
+kimai-mcp-streamable --rate-limit-rpm=0
+```
+
+**Session-Limits anpassen (nur SSE Server):**
+```bash
+kimai-mcp-server --max-sessions=200 --session-ttl=7200
+```
+
+**Umgebungsvariablen:**
+```bash
+RATE_LIMIT_RPM=60       # Requests pro Minute pro IP
+MAX_SESSIONS=100        # Max. gleichzeitige Sessions (nur SSE)
+SESSION_TTL=3600        # Session-Timeout in Sekunden (nur SSE)
+REQUIRE_HTTPS=false     # HTTPS erzwingen (nur SSE)
+```
+
+### 3. Transport-Sicherheit
 
 **Entwicklung/Test:**
 ```
@@ -413,7 +449,7 @@ http://192.168.1.100:8000/sse  # OK für internes Netzwerk
 https://mcp.ihre-domain.de/sse  # HTTPS erforderlich!
 ```
 
-### 3. Netzwerk-Sicherheit
+### 4. Netzwerk-Sicherheit
 
 - ✅ Server nur im internen Netzwerk betreiben
 - ✅ Firewall-Regeln: Nur Port 8000 (oder konfiguriert)
@@ -491,14 +527,23 @@ curl http://localhost:8000/health
 # Mit JSON Formatierung
 curl -s http://localhost:8000/health | jq
 
-# Beispiel-Antwort:
+# Beispiel-Antwort (SSE Server):
 # {
 #   "status": "healthy",
-#   "version": "2.6.0",
+#   "version": "2.9.0",
 #   "mode": "per-client-auth",
 #   "default_kimai_url": "https://kimai.firma.de",
 #   "active_sessions": 5
 # }
+
+# Beispiel-Antwort (Streamable HTTP Server):
+# {
+#   "status": "healthy",
+#   "version": "2.9.0",
+#   "transport": "streamable-http",
+#   "user_count": 3
+# }
+# Hinweis: User-Slugs werden nicht mehr angezeigt (Sicherheit)
 ```
 
 ### Logs ansehen

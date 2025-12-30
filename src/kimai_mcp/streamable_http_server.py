@@ -5,11 +5,17 @@ allowing it to work as a remote MCP server with Claude.ai Connectors.
 
 Each user gets their own endpoint (/mcp/{user_slug}) with their own
 Kimai credentials configured server-side.
+
+Security features:
+- Rate limiting (configurable requests per minute)
+- Enumeration protection with random delays
+- Security headers
 """
 
 import argparse
 import contextlib
 import logging
+import os
 import re
 from collections.abc import AsyncIterator
 from typing import Any, Dict, List, Optional
@@ -27,6 +33,13 @@ from mcp.types import Tool, TextContent
 from .client import KimaiClient, KimaiAPIError
 from .server import __version__
 from .user_config import UsersConfig, UserConfig
+from .security import (
+    EnumerationProtection,
+    RateLimitConfig,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    random_delay,
+)
 
 # Import consolidated tools
 from .tools.entity_manager import entity_tool, handle_entity
@@ -164,6 +177,10 @@ class MCPRoutingMiddleware:
 
     The StreamableHTTPSessionManager requires direct ASGI access (scope, receive, send),
     so we intercept MCP requests before they reach Starlette's router.
+
+    Security features:
+    - Random delay on 404 to prevent timing-based enumeration attacks
+    - Enumeration protection to block clients with excessive 404s
     """
 
     # Pattern to match /mcp/{user_slug} paths
@@ -178,6 +195,23 @@ class MCPRoutingMiddleware:
         """
         self.app = app
         self.user_sessions = user_sessions
+        # Enumeration protection: block clients with excessive 404s
+        self.enumeration_protection = EnumerationProtection(
+            max_404_per_minute=10,
+            block_duration_seconds=300,
+        )
+
+    def _get_client_ip(self, scope: Scope) -> str:
+        """Extract client IP from ASGI scope."""
+        headers = dict(scope.get("headers", []))
+        forwarded = headers.get(b"x-forwarded-for", b"").decode()
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        real_ip = headers.get(b"x-real-ip", b"").decode()
+        if real_ip:
+            return real_ip.strip()
+        client = scope.get("client")
+        return client[0] if client else "unknown"
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Handle ASGI request."""
@@ -199,9 +233,28 @@ class MCPRoutingMiddleware:
         self, scope: Scope, receive: Receive, send: Send, user_slug: str
     ) -> None:
         """Handle MCP request for a specific user."""
-        if user_slug not in self.user_sessions:
+        client_ip = self._get_client_ip(scope)
+
+        # Check if client is blocked due to enumeration attempts
+        if await self.enumeration_protection.is_blocked(client_ip):
             response = JSONResponse(
-                {"error": f"User not found: {user_slug}"},
+                {"error": "Too many failed requests"},
+                status_code=429,
+                headers={"Retry-After": "300"},
+            )
+            await response(scope, receive, send)
+            return
+
+        if user_slug not in self.user_sessions:
+            # Add random delay to prevent timing-based enumeration
+            await random_delay(0.1, 0.3)
+
+            # Record 404 and potentially block client
+            await self.enumeration_protection.record_404(client_ip)
+
+            # Generic error message (don't reveal whether slug format is valid)
+            response = JSONResponse(
+                {"error": "Not found"},
                 status_code=404,
             )
             await response(scope, receive, send)
@@ -228,6 +281,7 @@ class StreamableHTTPMCPServer:
         users_config: UsersConfig,
         host: str = "0.0.0.0",
         port: int = 8000,
+        rate_limit_rpm: int = 60,
     ):
         """Initialize the server.
 
@@ -235,11 +289,18 @@ class StreamableHTTPMCPServer:
             users_config: Configuration for all users
             host: Host to bind to
             port: Port to bind to
+            rate_limit_rpm: Maximum requests per minute per IP (default: 60, 0 to disable)
         """
         self.users_config = users_config
         self.host = host
         self.port = port
         self.user_sessions: Dict[str, UserMCPSession] = {}
+
+        # Rate limiting configuration
+        self.rate_limit_config = RateLimitConfig(
+            requests_per_minute=rate_limit_rpm,
+            enabled=rate_limit_rpm > 0,
+        )
 
     async def initialize_users(self) -> None:
         """Initialize all user sessions."""
@@ -291,27 +352,15 @@ class StreamableHTTPMCPServer:
         await self.cleanup_users()
 
     async def health_check(self, request: Request) -> JSONResponse:
-        """Health check endpoint."""
+        """Health check endpoint.
+
+        Note: User slugs are not exposed for security (prevents enumeration).
+        """
         return JSONResponse({
             "status": "healthy",
             "version": __version__,
             "transport": "streamable-http",
-            "users": list(self.user_sessions.keys()),
-            "active_sessions": len(self.user_sessions),
-        })
-
-    async def list_users(self, request: Request) -> JSONResponse:
-        """List available user endpoints."""
-        base_url = str(request.base_url).rstrip("/")
-        return JSONResponse({
-            "users": [
-                {
-                    "slug": slug,
-                    "endpoint": f"{base_url}/mcp/{slug}",
-                    "kimai_url": self.users_config.users[slug].kimai_url,
-                }
-                for slug in self.user_sessions.keys()
-            ]
+            "user_count": len(self.user_sessions),  # Only count, not slugs
         })
 
     async def root(self, request: Request) -> JSONResponse:
@@ -323,7 +372,6 @@ class StreamableHTTPMCPServer:
             "transport": "streamable-http",
             "endpoints": {
                 "health": f"{base_url}/health",
-                "users": f"{base_url}/users",
                 "mcp": f"{base_url}/mcp/{{user_slug}}",
             },
             "documentation": "https://github.com/glazperle/kimai_mcp",
@@ -332,10 +380,10 @@ class StreamableHTTPMCPServer:
     def create_app(self) -> ASGIApp:
         """Create the ASGI application with MCP routing middleware."""
         # Create Starlette app for non-MCP routes
+        # Note: /users endpoint removed for security (prevents user enumeration)
         routes = [
             Route("/", endpoint=self.root, methods=["GET"]),
             Route("/health", endpoint=self.health_check, methods=["GET"]),
-            Route("/users", endpoint=self.list_users, methods=["GET"]),
         ]
 
         starlette_app = Starlette(
@@ -357,6 +405,11 @@ class StreamableHTTPMCPServer:
             )
 
         app = self.create_app()
+
+        # Wrap with security middlewares (order matters: rate limit -> security headers -> app)
+        app = SecurityHeadersMiddleware(app)
+        app = RateLimitMiddleware(app, self.rate_limit_config)
+
         uvicorn.run(
             app,
             host=self.host,
@@ -390,6 +443,16 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="Path to users.json config file (or set USERS_CONFIG_FILE env var)",
     )
+
+    # Security settings
+    parser.add_argument(
+        "--rate-limit-rpm",
+        type=int,
+        default=60,
+        metavar="N",
+        help="Maximum requests per minute per IP (default: 60, 0 to disable)",
+    )
+
     parser.add_argument(
         "--version",
         action="version",
@@ -411,6 +474,11 @@ def main() -> int:
     parser = create_parser()
     args = parser.parse_args()
 
+    # Load security settings from environment if not provided via CLI
+    rate_limit_rpm = args.rate_limit_rpm
+    if os.getenv("RATE_LIMIT_RPM"):
+        rate_limit_rpm = int(os.getenv("RATE_LIMIT_RPM"))
+
     try:
         # Load users config
         users_config = UsersConfig.load(args.users_config)
@@ -421,6 +489,7 @@ def main() -> int:
             users_config=users_config,
             host=args.host,
             port=args.port,
+            rate_limit_rpm=rate_limit_rpm,
         )
         server.run()
         return 0

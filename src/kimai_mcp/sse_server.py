@@ -2,6 +2,12 @@
 
 Each client provides their own Kimai API token for secure, auditable access.
 The server only provides MCP protocol handling and does not store Kimai credentials.
+
+Security features:
+- Rate limiting (configurable requests per minute)
+- Session management with TTL and max session limits
+- Security headers (X-Content-Type-Options, X-Frame-Options, etc.)
+- Safe CORS configuration
 """
 
 import argparse
@@ -11,7 +17,7 @@ import os
 import secrets
 import uuid
 from contextlib import asynccontextmanager
-from typing import Dict, Optional, Union
+from typing import Optional, Union
 
 try:
     import uvicorn
@@ -26,6 +32,13 @@ except ImportError as e:
 
 from mcp.server.sse import SseServerTransport
 from .server import KimaiMCPServer, __version__
+from .security import (
+    RateLimitConfig,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    SessionConfig,
+    SessionManager,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +68,10 @@ class RemoteMCPServer:
         host: str = "0.0.0.0",
         port: int = 8000,
         allowed_origins: Optional[list[str]] = None,
+        max_sessions: int = 100,
+        session_ttl_seconds: int = 3600,
+        rate_limit_rpm: int = 60,
+        require_https: bool = False,
     ):
         """Initialize the remote MCP server.
 
@@ -65,12 +82,17 @@ class RemoteMCPServer:
             host: Host to bind the server to
             port: Port to bind the server to
             allowed_origins: List of allowed CORS origins
+            max_sessions: Maximum concurrent client sessions (default: 100)
+            session_ttl_seconds: Session timeout in seconds (default: 3600 = 1 hour)
+            rate_limit_rpm: Maximum requests per minute per IP (default: 60, 0 to disable)
+            require_https: Require HTTPS connections (default: False)
         """
         self.default_kimai_url = (default_kimai_url or "").rstrip('/')
         self.ssl_verify = ssl_verify
         self.host = host
         self.port = port
         self.allowed_origins = allowed_origins or ["*"]
+        self.require_https = require_https
 
         # Generate or use provided server token
         self.server_token = server_token or secrets.token_urlsafe(32)
@@ -83,8 +105,17 @@ class RemoteMCPServer:
             logger.info("Clients will need this token to connect to the server.")
             logger.info("=" * 70)
 
-        # Active client sessions (connection_id -> KimaiMCPServer)
-        self.client_sessions: Dict[str, KimaiMCPServer] = {}
+        # Session management with limits and TTL
+        self.session_manager = SessionManager(SessionConfig(
+            max_sessions=max_sessions,
+            session_ttl_seconds=session_ttl_seconds,
+        ))
+
+        # Rate limiting configuration
+        self.rate_limit_config = RateLimitConfig(
+            requests_per_minute=rate_limit_rpm,
+            enabled=rate_limit_rpm > 0,
+        )
 
     def verify_token(self, token: Optional[str]) -> bool:
         """Verify the MCP server authentication token.
@@ -148,6 +179,9 @@ class RemoteMCPServer:
 
         Returns:
             Tuple of (session_id, mcp_server)
+
+        Raises:
+            HTTPException: If session limit reached or connection fails
         """
         session_id = str(uuid.uuid4())
 
@@ -177,8 +211,14 @@ class RemoteMCPServer:
                 detail=f"Failed to connect to Kimai: {str(e)}"
             )
 
-        # Store session
-        self.client_sessions[session_id] = mcp_server
+        # Try to register session (enforces limits)
+        if not await self.session_manager.create(session_id, mcp_server):
+            await mcp_server.cleanup()
+            raise HTTPException(
+                status_code=503,
+                detail="Server at capacity. Please try again later.",
+                headers={"Retry-After": "60"}
+            )
 
         return session_id, mcp_server
 
@@ -188,10 +228,9 @@ class RemoteMCPServer:
         Args:
             session_id: Session ID to clean up
         """
-        if session_id in self.client_sessions:
-            mcp_server = self.client_sessions[session_id]
+        mcp_server = await self.session_manager.remove(session_id)
+        if mcp_server:
             await mcp_server.cleanup()
-            del self.client_sessions[session_id]
             logger.info(f"Cleaned up client session {session_id[:8]}")
 
     @asynccontextmanager
@@ -202,12 +241,14 @@ class RemoteMCPServer:
         if self.default_kimai_url:
             logger.info(f"Default Kimai URL: {self.default_kimai_url}")
 
+        # Start session manager (handles cleanup of expired sessions)
+        await self.session_manager.start()
+
         yield
 
-        # Cleanup all client sessions
+        # Stop session manager (cleans up all remaining sessions)
         logger.info("Shutting down, cleaning up client sessions...")
-        for session_id in list(self.client_sessions.keys()):
-            await self.cleanup_session(session_id)
+        await self.session_manager.stop()
 
     def create_app(self) -> FastAPI:
         """Create FastAPI application."""
@@ -218,14 +259,24 @@ class RemoteMCPServer:
             lifespan=self.lifespan,
         )
 
-        # Add CORS middleware
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=self.allowed_origins,
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        # Add CORS middleware with secure configuration
+        # SECURITY: Do not allow credentials with wildcard origins
+        if "*" in self.allowed_origins:
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=False,  # Must be False with wildcard
+                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_headers=["Authorization", "X-Kimai-URL", "X-Kimai-Token", "X-Kimai-User", "Content-Type"],
+            )
+        else:
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=self.allowed_origins,
+                allow_credentials=True,
+                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_headers=["Authorization", "X-Kimai-URL", "X-Kimai-Token", "X-Kimai-User", "Content-Type"],
+            )
 
         @app.get("/health")
         async def health_check():
@@ -235,7 +286,7 @@ class RemoteMCPServer:
                 "version": __version__,
                 "mode": "per-client-auth",
                 "default_kimai_url": self.default_kimai_url or None,
-                "active_sessions": len(self.client_sessions),
+                "active_sessions": self.session_manager.count,
             }
 
         @app.get("/sse")
@@ -304,10 +355,11 @@ class RemoteMCPServer:
                         event_generator(),
                         media_type="text/event-stream",
                         headers={
-                            "Cache-Control": "no-cache",
+                            "Cache-Control": "no-cache, no-store, must-revalidate",
                             "Connection": "keep-alive",
                             "X-Accel-Buffering": "no",  # Disable nginx buffering
-                            "X-Session-ID": session_id,
+                            "Pragma": "no-cache",
+                            # X-Session-ID removed for security - session handled internally
                         },
                     )
             except Exception:
@@ -355,6 +407,11 @@ class RemoteMCPServer:
     def run(self):
         """Run the remote MCP server."""
         app = self.create_app()
+
+        # Wrap with security middlewares (order matters: rate limit -> security headers -> app)
+        app = SecurityHeadersMiddleware(app)
+        app = RateLimitMiddleware(app, self.rate_limit_config)
+
         uvicorn.run(
             app,
             host=self.host,
@@ -409,6 +466,34 @@ def create_parser() -> argparse.ArgumentParser:
         help="Allowed CORS origins (default: all origins allowed)",
     )
 
+    # Security settings
+    parser.add_argument(
+        "--rate-limit-rpm",
+        type=int,
+        default=60,
+        metavar="N",
+        help="Maximum requests per minute per IP (default: 60, 0 to disable)",
+    )
+    parser.add_argument(
+        "--max-sessions",
+        type=int,
+        default=100,
+        metavar="N",
+        help="Maximum concurrent client sessions (default: 100)",
+    )
+    parser.add_argument(
+        "--session-ttl",
+        type=int,
+        default=3600,
+        metavar="SECONDS",
+        help="Session timeout in seconds (default: 3600 = 1 hour)",
+    )
+    parser.add_argument(
+        "--require-https",
+        action="store_true",
+        help="Require HTTPS connections (default: disabled)",
+    )
+
     parser.add_argument(
         "--version",
         action="version",
@@ -426,6 +511,21 @@ def main():
     # Load from environment if not provided
     default_kimai_url = args.default_kimai_url or os.getenv("DEFAULT_KIMAI_URL")
     server_token = args.server_token or os.getenv("MCP_SERVER_TOKEN")
+
+    # Load security settings from environment if not provided via CLI
+    rate_limit_rpm = args.rate_limit_rpm
+    if os.getenv("RATE_LIMIT_RPM"):
+        rate_limit_rpm = int(os.getenv("RATE_LIMIT_RPM"))
+
+    max_sessions = args.max_sessions
+    if os.getenv("MAX_SESSIONS"):
+        max_sessions = int(os.getenv("MAX_SESSIONS"))
+
+    session_ttl = args.session_ttl
+    if os.getenv("SESSION_TTL"):
+        session_ttl = int(os.getenv("SESSION_TTL"))
+
+    require_https = args.require_https or os.getenv("REQUIRE_HTTPS", "").lower() == "true"
 
     # Parse SSL verify value
     ssl_verify: Optional[Union[bool, str]] = None
@@ -446,6 +546,10 @@ def main():
         host=args.host,
         port=args.port,
         allowed_origins=args.allowed_origins,
+        max_sessions=max_sessions,
+        session_ttl_seconds=session_ttl,
+        rate_limit_rpm=rate_limit_rpm,
+        require_https=require_https,
     )
 
     server.run()
