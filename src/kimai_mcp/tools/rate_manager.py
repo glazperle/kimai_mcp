@@ -10,7 +10,13 @@ def rate_tool() -> Tool:
     """Define the consolidated rate management tool."""
     return Tool(
         name="rate",
-        description="Universal rate management tool for customer, project, and activity rates.",
+        description="""Rate management for customers, projects, and activities.
+
+- List rates: action=list, entity="project", entity_id=ID
+- Add rate: action=add, entity="project", entity_id=ID, data={rate:50}
+- User-specific rate: action=add, ..., data={rate:50, user:USER_ID}
+
+NOTE: For user hourly_rate preference, use entity tool with set_preferences instead.""",
         inputSchema={
             "type": "object",
             "required": ["entity", "entity_id", "action"],

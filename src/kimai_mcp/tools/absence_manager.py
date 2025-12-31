@@ -13,7 +13,17 @@ def absence_tool() -> Tool:
     """Define the consolidated absence management tool."""
     return Tool(
         name="absence",
-        description="Universal absence management tool for complete absence workflow. Supports list, statistics, create, delete, approve, reject, and request approval actions.",
+        description="""Absence management: vacation requests, sick leave, time off.
+
+COMMON TASKS:
+- Request vacation: action=create, data={type:"holiday", date:"2024-12-20", end:"2024-12-31"}
+- List my absences: action=list, filters={user_scope:"self"}
+- Check attendance: action=attendance, data={date:"2024-12-20"}
+- Approve request: action=approve, id=ABSENCE_ID
+
+ABSENCE TYPES: holiday, time_off, sickness, sickness_child, parental, other, unpaid_vacation
+
+NOTE: To change annual vacation days quota, use entity tool with set_preferences and holidays preference.""",
         inputSchema={
             "type": "object",
             "required": ["action"],

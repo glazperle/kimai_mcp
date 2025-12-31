@@ -14,12 +14,37 @@ from .batch_utils import execute_batch, format_batch_result
 
 logger = logging.getLogger(__name__)
 
+# Preference aliases for more intuitive names
+PREFERENCE_ALIASES = {
+    # Vacation
+    "vacation_days": "holidays",
+    "annual_leave": "holidays",
+    "vacation": "holidays",
+    # Work time
+    "weekly_hours": "hours_per_week",
+    # Contract type
+    "contract_type": "work_contract_type",
+}
+
+
+def normalize_preference_name(name: str) -> str:
+    """Convert intuitive preference names to Kimai API names."""
+    return PREFERENCE_ALIASES.get(name.lower(), name)
+
 
 def entity_tool() -> Tool:
     """Define the consolidated entity management tool."""
     return Tool(
         name="entity",
-        description="Universal entity management tool for CRUD operations on projects, activities, customers, users, teams, tags, invoices, and holidays.",
+        description="""Universal entity management for Kimai (projects, activities, customers, users, teams, tags, invoices, holidays).
+
+COMMON TASKS:
+- Change vacation days: action=set_preferences, type=user, id=USER_ID, preferences=[{name:"holidays", value:"25"}]
+- Lock timesheet month: action=lock_month, type=user, id=USER_ID, month="2024-12-01"
+- Create project: action=create, type=project, data={name:"...", customer:ID}
+
+USER PREFERENCES (action=set_preferences, type=user only):
+  holidays (vacation days), hours_per_week, work_contract_type, work_monday..work_sunday""",
         inputSchema={
             "type": "object",
             "required": ["type", "action"],
@@ -109,16 +134,23 @@ def entity_tool() -> Tool:
                         "required": ["name"]
                     },
                     "description": """List of preferences for set_preferences action (type=user only).
-                    Common work contract preferences:
-                    - work_contract_type: "week" or "day"
-                    - hours_per_week: Total weekly hours in seconds (144000 = 40h)
-                    - work_monday..work_sunday: Daily hours in seconds (28800 = 8h)
-                    - work_days_week: Work days as comma-separated numbers (1=Mon, e.g., "1,2,3,4,5")
-                    - holidays: Vacation days per year (e.g., "30")
-                    - public_holiday_group: Holiday group ID (e.g., "1")
-                    - work_start_day/work_last_day: Contract period (YYYY-MM-DD)
-                    - hourly_rate/internal_rate: User rates
-                    """
+
+VACATION:
+- holidays: Vacation days per year (e.g., "25", "30"). Aliases: vacation_days, annual_leave
+
+WORK CONTRACT:
+- work_contract_type: "week" (weekly hours) or "day" (daily hours)
+- hours_per_week: Weekly hours in seconds (144000 = 40h, 126000 = 35h). Alias: weekly_hours
+- work_monday..work_sunday: Daily hours in seconds (28800 = 8h, 0 = no work)
+- work_days_week: Work days as "1,2,3,4,5" (1=Monday)
+
+CONTRACT PERIOD:
+- work_start_day: Contract start date (YYYY-MM-DD)
+- work_last_day: Contract end date (YYYY-MM-DD)
+
+OTHER:
+- public_holiday_group: Holiday region ID (e.g., "1")
+- hourly_rate/internal_rate: User rates"""
                 }
             },
             "allOff": [
@@ -1000,8 +1032,17 @@ class UserEntityHandler(BaseEntityHandler):
             - holidays: Vacation days per year
             - public_holiday_group: Holiday group ID
             - work_start_day/work_last_day: Contract period (YYYY-MM-DD)
+
+        Aliases supported: vacation_days -> holidays, weekly_hours -> hours_per_week
         """
-        user = await self.client.update_user_preferences(user_id, preferences)
+        # Normalize preference names using aliases
+        normalized_preferences = []
+        for pref in preferences:
+            normalized_pref = pref.copy()
+            normalized_pref["name"] = normalize_preference_name(pref["name"])
+            normalized_preferences.append(normalized_pref)
+
+        user = await self.client.update_user_preferences(user_id, normalized_preferences)
 
         result = f"Updated preferences for {user.username} (ID: {user.id})\n\n"
         result += "Updated preferences:\n"

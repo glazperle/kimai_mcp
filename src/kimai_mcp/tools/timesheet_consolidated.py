@@ -14,7 +14,15 @@ def timesheet_tool() -> Tool:
     """Define the consolidated timesheet management tool."""
     return Tool(
         name="timesheet",
-        description="Consolidated timesheet management tool for list, get, create, update, delete, duplicate, and export operations.",
+        description="""Timesheet management for time entries.
+
+COMMON TASKS:
+- List my timesheets: action=list, filters={user_scope:"self"}
+- List all timesheets: action=list, filters={user_scope:"all"}
+- Create entry: action=create, data={project:ID, activity:ID, begin:"...", end:"..."}
+- Export entries: action=batch_export, ids=[...]
+
+NOTE: For running timers (no end time), use the 'timer' tool instead.""",
         inputSchema={
             "type": "object",
             "required": ["action"],
@@ -125,7 +133,13 @@ def timer_tool() -> Tool:
     """Define the timer management tool."""
     return Tool(
         name="timer",
-        description="Timer management tool for start, stop, restart, and active timer operations.",
+        description="""Timer management for running time tracking.
+
+- Start timer: action=start, data={project:ID, activity:ID}
+- Stop timer: action=stop, id=TIMESHEET_ID
+- Show active: action=active
+
+NOTE: Creates timesheet entries without end time. Use 'timesheet' tool for completed entries.""",
         inputSchema={
             "type": "object",
             "required": ["action"],
