@@ -876,7 +876,35 @@ class KimaiClient:
         payload = user.model_dump(exclude_none=True, by_alias=True)
         data = await self._request("PATCH", f"/users/{user_id}", json=payload)
         return UserEntity(**data)
-    
+
+    async def update_user_preferences(
+        self,
+        user_id: int,
+        preferences: List[Dict[str, Any]]
+    ) -> UserEntity:
+        """Update user preferences (e.g., work contract settings).
+
+        Args:
+            user_id: The user ID
+            preferences: List of {"name": "...", "value": "..."} dicts.
+                Common preferences for work contracts:
+                - work_contract_type: "week" or "day"
+                - hours_per_week: Total weekly hours in seconds (144000 = 40h)
+                - work_monday..work_sunday: Daily hours in seconds (28800 = 8h)
+                - holidays: Vacation days per year
+                - public_holiday_group: Holiday group ID
+                - work_start_day/work_last_day: Contract period (YYYY-MM-DD)
+
+        Returns:
+            Updated UserEntity with all preferences
+        """
+        data = await self._request(
+            "PATCH",
+            f"/users/{user_id}/preferences",
+            json=preferences
+        )
+        return UserEntity(**data)
+
     async def delete_api_token(self, token_id: int) -> Dict[str, Any]:
         """Delete an API token (only own tokens)."""
         return await self._request("DELETE", f"/users/api-token/{token_id}")

@@ -125,7 +125,7 @@ For Claude Desktop with remote server access:
 - **Timesheet Management** - Create, update, delete, start/stop timers, view active timers
 - **Project & Activity Management** - Browse and view projects and activities
 - **Customer Management** - Browse and view customer information
-- **User Management** - List, view, create, and update user accounts
+- **User Management** - List, view, create, update user accounts, and configure work contracts (preferences)
 - **Team Management** - Create teams, manage members, control access permissions
 - **Absence Management** - Create, approve, reject, and track absences
 - **Tag Management** - Create and manage tags for better organization

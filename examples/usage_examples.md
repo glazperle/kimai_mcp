@@ -308,6 +308,95 @@ Parameters: {
 }
 ```
 
+## Work Contract Configuration
+
+Configure user work contracts including working hours, vacation days, and contract periods.
+
+### Set Weekly Hours Contract (40h/week)
+
+```
+Tool: entity
+Parameters: {
+  "type": "user",
+  "action": "set_preferences",
+  "id": 5,
+  "preferences": [
+    {"name": "work_contract_type", "value": "week"},
+    {"name": "hours_per_week", "value": "144000"},
+    {"name": "work_days_week", "value": "1,2,3,4,5"},
+    {"name": "holidays", "value": "30"},
+    {"name": "public_holiday_group", "value": "1"},
+    {"name": "work_start_day", "value": "2025-01-01"}
+  ]
+}
+
+Output:
+Updated preferences for john.doe (ID: 5)
+
+Updated preferences:
+  - work_contract_type: week
+  - hours_per_week: 144000
+  - work_days_week: 1,2,3,4,5
+  - holidays: 30
+  - public_holiday_group: 1
+  - work_start_day: 2025-01-01
+```
+
+### Set Daily Hours Contract (Different Hours Per Day)
+
+For part-time or flexible schedules:
+
+```
+Tool: entity
+Parameters: {
+  "type": "user",
+  "action": "set_preferences",
+  "id": 5,
+  "preferences": [
+    {"name": "work_contract_type", "value": "day"},
+    {"name": "work_monday", "value": "28800"},
+    {"name": "work_tuesday", "value": "28800"},
+    {"name": "work_wednesday", "value": "28800"},
+    {"name": "work_thursday", "value": "28800"},
+    {"name": "work_friday", "value": "14400"},
+    {"name": "holidays", "value": "24"},
+    {"name": "work_start_day", "value": "2025-01-01"}
+  ]
+}
+```
+
+### Time Conversion Reference
+
+All time values are in **seconds**:
+
+| Hours | Seconds | Common Use |
+|-------|---------|------------|
+| 1h | 3600 | - |
+| 4h | 14400 | Half-day |
+| 6h | 21600 | 6h day |
+| 7h | 25200 | 7h day |
+| 7.5h | 27000 | 7.5h day |
+| 8h | 28800 | Full day |
+| 32h | 115200 | 4-day week |
+| 38.5h | 138600 | Common DE |
+| 39h | 140400 | 39h week |
+| 40h | 144000 | Full week |
+
+### Common Work Contract Preferences
+
+| Preference | Type | Description |
+|------------|------|-------------|
+| `work_contract_type` | `"week"` or `"day"` | Contract type |
+| `hours_per_week` | seconds | Weekly hours (type=week) |
+| `work_monday`..`work_sunday` | seconds | Daily hours (type=day) |
+| `work_days_week` | `"1,2,3,4,5"` | Work days (1=Mon, 7=Sun) |
+| `holidays` | `"30"` | Vacation days per year |
+| `public_holiday_group` | `"1"` | Holiday group ID |
+| `work_start_day` | `"YYYY-MM-DD"` | Contract start |
+| `work_last_day` | `"YYYY-MM-DD"` | Contract end (optional) |
+| `hourly_rate` | `"0"` | User's hourly rate |
+| `internal_rate` | `"0"` | Internal billing rate |
+
 ## Absence Management
 
 ### List Absences

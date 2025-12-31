@@ -31,7 +31,7 @@ def entity_tool() -> Tool:
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["list", "get", "create", "update", "delete", "lock_month", "unlock_month", "batch_delete"],
+                    "enum": ["list", "get", "create", "update", "delete", "lock_month", "unlock_month", "batch_delete", "set_preferences"],
                     "description": """The action to perform:
                     - list: List entities matching the given filters
                     - create: Create a new entity
@@ -41,6 +41,7 @@ def entity_tool() -> Tool:
                     - lock_month: Lock working time months for a user (type=user only)
                     - unlock_month: Unlock working time months for a user (type=user only)
                     - batch_delete: Delete multiple entities by IDs (requires 'ids' parameter)
+                    - set_preferences: Set user preferences for work contracts (type=user only)
                     """
                 },
                 "id": {
@@ -96,6 +97,28 @@ def entity_tool() -> Tool:
                     "type": "string",
                     "enum": ["all"],
                     "description": "Set to 'all' to apply lock_month/unlock_month to all active users. Use instead of 'id' or 'ids'."
+                },
+                "preferences": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Preference name"},
+                            "value": {"type": "string", "description": "Preference value"}
+                        },
+                        "required": ["name"]
+                    },
+                    "description": """List of preferences for set_preferences action (type=user only).
+                    Common work contract preferences:
+                    - work_contract_type: "week" or "day"
+                    - hours_per_week: Total weekly hours in seconds (144000 = 40h)
+                    - work_monday..work_sunday: Daily hours in seconds (28800 = 8h)
+                    - work_days_week: Work days as comma-separated numbers (1=Mon, e.g., "1,2,3,4,5")
+                    - holidays: Vacation days per year (e.g., "30")
+                    - public_holiday_group: Holiday group ID (e.g., "1")
+                    - work_start_day/work_last_day: Contract period (YYYY-MM-DD)
+                    - hourly_rate/internal_rate: User rates
+                    """
                 }
             },
             "allOff": [
@@ -445,10 +468,28 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
             if not ids:
                 return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_delete action")]
             return await _handle_batch_delete(handler, entity_type, ids)
+        elif action == "set_preferences":
+            if entity_type != "user":
+                return [TextContent(
+                    type="text",
+                    text="Error: 'set_preferences' action is only available for user entities"
+                )]
+            preferences = params.get("preferences", [])
+            if not preferences:
+                return [TextContent(
+                    type="text",
+                    text="Error: 'preferences' parameter is required for set_preferences action"
+                )]
+            if not entity_id:
+                return [TextContent(
+                    type="text",
+                    text="Error: 'id' parameter is required for set_preferences action"
+                )]
+            return await handler.set_preferences(entity_id, preferences)
         else:
             return [TextContent(
                 type="text",
-                text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, lock_month, unlock_month, batch_delete"
+                text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, lock_month, unlock_month, batch_delete, set_preferences"
             )]
     except KimaiAPIError as e:
         logger.error(f"Kimai API Error in tool entity: {e.message} (Status: {e.status_code})")
@@ -941,6 +982,36 @@ class UserEntityHandler(BaseEntityHandler):
             result += f", {len(failed)} failed:\n"
             for uid, error in failed:
                 result += f"  - User {uid}: {error}\n"
+
+        return [TextContent(type="text", text=result)]
+
+    async def set_preferences(self, user_id: int, preferences: List[Dict]) -> List[TextContent]:
+        """Set user preferences (e.g., work contract settings).
+
+        Args:
+            user_id: The user ID
+            preferences: List of {"name": "...", "value": "..."} dicts
+
+        Common work contract preferences:
+            - work_contract_type: "week" or "day"
+            - hours_per_week: Total weekly hours in seconds (144000 = 40h)
+            - work_monday..work_sunday: Daily hours in seconds (28800 = 8h)
+            - work_days_week: Work days (e.g., "1,2,3,4,5")
+            - holidays: Vacation days per year
+            - public_holiday_group: Holiday group ID
+            - work_start_day/work_last_day: Contract period (YYYY-MM-DD)
+        """
+        user = await self.client.update_user_preferences(user_id, preferences)
+
+        result = f"Updated preferences for {user.username} (ID: {user.id})\n\n"
+        result += "Updated preferences:\n"
+        for pref in preferences:
+            result += f"  - {pref['name']}: {pref.get('value', '(empty)')}\n"
+
+        if user.preferences:
+            result += "\nAll current preferences:\n"
+            for pref in user.preferences:
+                result += f"  - {pref.get('name')}: {pref.get('value', '(empty)')}\n"
 
         return [TextContent(type="text", text=result)]
 

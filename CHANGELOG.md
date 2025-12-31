@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] - 2025-12-31
+
+### Added
+
+- **User Preferences Management** - New `set_preferences` action for user entities in the `entity` tool
+  - Configure work contracts (weekly or daily hours)
+  - Set vacation days and public holiday groups
+  - Define contract start/end dates
+  - Set user rates (hourly/internal)
+  - Supports both "week" type (total hours) and "day" type (per-weekday hours)
+- New client method `update_user_preferences()` for PATCH `/api/users/{id}/preferences`
+- New `UserPreference` Pydantic model for preference name-value pairs
+- Documentation for all work contract preferences in `examples/usage_examples.md`
+
+### Changed
+
+- `entity` tool now accepts `preferences` parameter for user type with `set_preferences` action
+
 ## [2.9.0] - 2025-12-30
 
 ### Added

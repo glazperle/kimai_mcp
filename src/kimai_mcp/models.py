@@ -333,6 +333,21 @@ class UserEntity(BaseModel):
     preferences: Optional[List[Dict[str, Any]]] = None
 
 
+class UserPreference(BaseModel):
+    """Model for user preference name-value pair.
+
+    Used for work contract settings like:
+    - work_contract_type: "week" or "day"
+    - hours_per_week: Total weekly hours in seconds (e.g., 144000 = 40h)
+    - work_monday..work_sunday: Daily hours in seconds (e.g., 28800 = 8h)
+    - holidays: Vacation days per year
+    - public_holiday_group: Holiday group ID
+    - work_start_day/work_last_day: Contract period (YYYY-MM-DD)
+    """
+    name: str = Field(..., min_length=2, max_length=50)
+    value: Optional[str] = Field(None, max_length=250)
+
+
 class UserEditForm(BaseModel):
     """Form for updating users."""
     alias: Optional[str] = None
