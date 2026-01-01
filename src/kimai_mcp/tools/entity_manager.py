@@ -1042,7 +1042,22 @@ class UserEntityHandler(BaseEntityHandler):
             normalized_pref["name"] = normalize_preference_name(pref["name"])
             normalized_preferences.append(normalized_pref)
 
-        user = await self.client.update_user_preferences(user_id, normalized_preferences)
+        try:
+            user = await self.client.update_user_preferences(user_id, normalized_preferences)
+        except KimaiAPIError as e:
+            if e.status_code == 404:
+                # Work Contract not configured for this user
+                base_url = str(self.client.base_url).rstrip('/api')
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Work Contract not configured for user {user_id}.\n\n"
+                         f"The user preferences endpoint returned 404, which means the Work Contract "
+                         f"has not been set up for this user in Kimai.\n\n"
+                         f"Please configure it first in the Kimai UI:\n"
+                         f"  {base_url}/en/user/{user_id}/work-hours\n\n"
+                         f"After setting initial values there, the API will work."
+                )]
+            raise  # Re-raise other errors
 
         result = f"Updated preferences for {user.username} (ID: {user.id})\n\n"
         result += "Updated preferences:\n"
