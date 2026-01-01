@@ -1047,6 +1047,15 @@ class UserEntityHandler(BaseEntityHandler):
         except KimaiAPIError as e:
             if e.status_code == 404:
                 # Work Contract not configured for this user
+                # Fetch user to get username for the URL
+                try:
+                    from urllib.parse import quote
+                    user_info = await self.client.get_user(user_id)
+                    username = user_info.username if user_info else f"user-{user_id}"
+                    username_encoded = quote(username, safe='')
+                except Exception:
+                    username_encoded = f"user-{user_id}"
+
                 base_url = str(self.client.base_url).rstrip('/api')
                 return [TextContent(
                     type="text",
@@ -1054,7 +1063,7 @@ class UserEntityHandler(BaseEntityHandler):
                          f"The user preferences endpoint returned 404, which means the Work Contract "
                          f"has not been set up for this user in Kimai.\n\n"
                          f"Please configure it first in the Kimai UI:\n"
-                         f"  {base_url}/en/user/{user_id}/work-hours\n\n"
+                         f"  {base_url}/de/profile/{username_encoded}/contract\n\n"
                          f"After setting initial values there, the API will work."
                 )]
             raise  # Re-raise other errors
