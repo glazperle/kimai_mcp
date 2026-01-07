@@ -180,7 +180,6 @@ test_tools_registration.py
 
 # Claude Code specific - contains sensitive information
 .claude/
-CLAUDE.md
 
 # Kimai specific - don't commit real credentials or large docs
 .env.local
