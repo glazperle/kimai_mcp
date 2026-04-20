@@ -268,7 +268,12 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
                                 text=f"Error: Invalid date time format for field end '{filters['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
 
 
-    if begin_datetime == end_datetime and begin_datetime.time() == datetime.min.time():
+    if (
+        begin_datetime is not None
+        and end_datetime is not None
+        and begin_datetime == end_datetime
+        and begin_datetime.time() == datetime.min.time()
+    ):
         end_datetime = begin_datetime + timedelta(days=1)
     
     # Build filter
