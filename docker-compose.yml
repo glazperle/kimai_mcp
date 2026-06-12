@@ -7,20 +7,20 @@
 #   cp config/users.example.json config/users.json
 #   # Edit config/users.json with your Kimai credentials:
 #   # {
-#   #   "username": {
+#   #   "random-slug": {
 #   #     "kimai_url": "https://kimai.example.com",
 #   #     "kimai_token": "your-api-token",
-#   #     "kimai_user_id": "1"
+#   #     "auth_secret": "long-random-secret-for-oauth-login"
 #   #   }
 #   # }
+#   # Generate slug/secret: python -c "import secrets; print(secrets.token_urlsafe(32))"
 #
 # START: docker-compose up -d
 # LOGS:  docker-compose logs -f
 # HEALTH: curl http://localhost:8000/health
 #
-# Claude.ai Connector URL: https://your-domain.com/mcp/{username}
-#
-# For SSE Server (legacy), change CMD in Dockerfile to: kimai-mcp-server
+# Claude.ai Connector URL (OAuth 2.1, recommended): https://your-domain.com/mcp
+# Legacy per-user URL (deprecated): https://your-domain.com/mcp/{slug}
 # =============================================================================
 
 version: '3.8'
@@ -41,13 +41,25 @@ services:
       # SSL verification for Kimai connections
       - KIMAI_SSL_VERIFY=${KIMAI_SSL_VERIFY:-true}
 
+      # Public base URL = OAuth issuer (required behind a reverse proxy, must be HTTPS)
+      - KIMAI_MCP_PUBLIC_URL=${KIMAI_MCP_PUBLIC_URL:-}
+
+      # Only trust X-Forwarded-For from these peers (your reverse proxy IPs, comma-separated)
+      - KIMAI_MCP_TRUSTED_PROXIES=${KIMAI_MCP_TRUSTED_PROXIES:-}
+
+      # Persist registered OAuth clients across restarts
+      - KIMAI_MCP_OAUTH_STATE_FILE=${KIMAI_MCP_OAUTH_STATE_FILE:-/app/config/oauth_clients.json}
+
+      # Set to true to disable the deprecated /mcp/{slug} endpoints
+      - KIMAI_MCP_DISABLE_LEGACY_SLUGS=${KIMAI_MCP_DISABLE_LEGACY_SLUGS:-false}
+
     # Ports
     ports:
       - "${SERVER_PORT:-8000}:8000"
 
-    # Mount the users config file
+    # Mount the config directory (users.json read, oauth_clients.json written)
     volumes:
-      - ./config/users.json:/app/config/users.json:ro
+      - ./config:/app/config
       # Optional: Mount CA certificates for custom SSL
       # - ./certs/ca-bundle.crt:/app/certs/ca-bundle.crt:ro
 

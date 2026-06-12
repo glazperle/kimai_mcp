@@ -4,10 +4,11 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
 from mcp.types import Tool, TextContent
-from ..client import KimaiClient
+from ..client import KimaiClient, KimaiAPIError
 from ..models import TimesheetEditForm, TimesheetFilter, MetaFieldForm
 from .timesheet_analytics import TimesheetAnalytics
 from .batch_utils import execute_batch, format_batch_result
+from .user_discovery import resolve_accessible_users
 
 
 def timesheet_tool() -> Tool:
@@ -287,77 +288,66 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         exported=filters.get("exported"),
         active=filters.get("active"),
         billable=filters.get("billable"),
-        page=filters.get("page", 1),
+        # Only pass 'page' when explicitly requested by the user,
+        # otherwise the client's auto-pagination is disabled.
+        page=filters.get("page"),
         size=filters.get("size", 50),
         term=filters.get("term")
     )
-    
+
     # Fetch timesheets - with pagination if needed
     timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
-    
-    # Auto-fetch all pages if calculate_stats is enabled
-    if filters.get("calculate_stats") and len(timesheets) == timesheet_filter.size:
-        # Might have more pages, fetch all
+
+    # Auto-fetch remaining pages if calculate_stats is enabled and the client
+    # did not already fetch everything (e.g. manual pagination was used)
+    if filters.get("calculate_stats") and not fetched_all:
+        # Bound the additional fetching so a huge date range cannot pull an
+        # unbounded number of pages into a single response.
+        MAX_STATS_RESULTS = 10000
         all_timesheets = list(timesheets)
-        page = 2
-        while True:
+        page = (last_page or 1) + 1
+        page_size = timesheet_filter.size or 50
+        while len(all_timesheets) < MAX_STATS_RESULTS:
             timesheet_filter.page = page
-            batch, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
+            batch, _fetched, last_page = await client.get_timesheets(timesheet_filter)
             if not batch:
+                fetched_all = True
                 break
             all_timesheets.extend(batch)
-            if len(batch) < timesheet_filter.size:
+            if len(batch) < page_size:
+                fetched_all = True
                 break
             page += 1
         timesheets = all_timesheets
     
     # Build response
     if user_scope == "all":
-        result = f"Found {len(timesheets)} timesheets for all users\\n\\n"
+        result = f"Found {len(timesheets)} timesheets for all users\n\n"
     elif user_scope == "specific":
-        result = f"Found {len(timesheets)} timesheets for user {user_filter}\\n\\n"
+        result = f"Found {len(timesheets)} timesheets for user {user_filter}\n\n"
     else:
-        result = f"Found {len(timesheets)} timesheets for current user\\n\\n"
+        result = f"Found {len(timesheets)} timesheets for current user\n\n"
 
     if not fetched_all:
-        result += f"Not all records were returned obtained records up to page f{last_page}\\n\\n"
+        result += f"Not all records were returned; fetched records up to page {last_page}\n\n"
     
     # Include user list if requested
     if filters.get("include_user_list"):
         try:
-            # Try to get users from teams first (works for team leads and admins)
-            users = []
-            try:
-                teams = await client.get_teams()
-                user_dict = {}
-                for team in teams:
-                    try:
-                        team_detail = await client.get_team(team.id)
-                        if team_detail.members:
-                            for member in team_detail.members:
-                                user_dict[member.user.id] = member.user
-                    except Exception:
-                        continue
-                users = list(user_dict.values())
-            except Exception:
-                pass
+            # Teams-first discovery with get_users fallback
+            users = await resolve_accessible_users(client)
 
-            # Fallback to get_users if no team members found
-            if not users:
-                users = await client.get_users()
-
-            result += "Available users:\\n"
+            result += "Available users:\n"
             for user in users[:10]:  # Limit to 10 users
-                result += f"  - ID: {user.id}, Username: {user.username}, Name: {getattr(user, 'alias', None) or 'N/A'}\\n"
+                result += f"  - ID: {user.id}, Username: {user.username}, Name: {getattr(user, 'alias', None) or 'N/A'}\n"
             if len(users) > 10:
-                result += f"  ... and {len(users) - 10} more users\\n"
-            result += "\\n"
+                result += f"  ... and {len(users) - 10} more users\n"
+            result += "\n"
         except Exception as e:
-            error_msg = str(e).lower()
-            if "forbidden" in error_msg or "403" in error_msg:
-                result += "Note: Unable to list users (insufficient permissions). Use user_scope='self' or specify a user ID.\\n\\n"
+            if isinstance(e, KimaiAPIError) and e.status_code == 403:
+                result += "Note: Unable to list users (insufficient permissions). Use user_scope='self' or specify a user ID.\n\n"
             else:
-                result += f"Note: Unable to list users: {str(e)}\\n\\n"
+                result += f"Note: Unable to list users: {str(e)}\n\n"
     
     # Calculate statistics if requested
     if filters.get("calculate_stats"):
@@ -388,12 +378,12 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
             project_map = {}
         
         if filters.get("stats_format") == "json":
-            result += "\\n## Statistics (JSON):\\n"
+            result += "\n## Statistics (JSON):\n"
             result += json.dumps(stats, indent=2)
-            result += "\\n\\n"
+            result += "\n\n"
         else:
-            result += "\\n" + TimesheetAnalytics.format_statistics_report(stats, project_map)
-            result += "\\n\\n"
+            result += "\n" + TimesheetAnalytics.format_statistics_report(stats, project_map)
+            result += "\n\n"
         
         # If only stats requested, return early
         if filters.get("stats_format") == "summary":
@@ -404,18 +394,18 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         duration = (ts.end - ts.begin).total_seconds() / 3600 if ts.end else "Running"
         status = "Running" if not ts.end else "Stopped"
         
-        result += f"ID: {ts.id} - Project ID: {ts.project} / Activity ID: {ts.activity}\\n"
-        result += f"  User ID: {ts.user if ts.user else 'Unknown'}\\n"
-        result += f"  Duration: {duration:.2f} hours\\n" if isinstance(duration, float) else f"  Status: {status}\\n"
-        result += f"  Begin: {ts.begin.strftime('%Y-%m-%d %H:%M')}\\n"
+        result += f"ID: {ts.id} - Project ID: {ts.project} / Activity ID: {ts.activity}\n"
+        result += f"  User ID: {ts.user if ts.user else 'Unknown'}\n"
+        result += f"  Duration: {duration:.2f} hours\n" if isinstance(duration, float) else f"  Status: {status}\n"
+        result += f"  Begin: {ts.begin.strftime('%Y-%m-%d %H:%M')}\n"
         if ts.end:
-            result += f"  End: {ts.end.strftime('%Y-%m-%d %H:%M')}\\n"
+            result += f"  End: {ts.end.strftime('%Y-%m-%d %H:%M')}\n"
         
         if ts.description:
-            result += f"  Description: {ts.description}\\n"
+            result += f"  Description: {ts.description}\n"
         if ts.tags:
-            result += f"  Tags: {', '.join(ts.tags)}\\n"
-        result += "\\n"
+            result += f"  Tags: {', '.join(ts.tags)}\n"
+        result += "\n"
     
     return [TextContent(type="text", text=result)]
 
@@ -430,32 +420,32 @@ async def _handle_timesheet_get(client: KimaiClient, id: Optional[int]) -> List[
     duration = (ts.end - ts.begin).total_seconds() / 3600 if ts.end else "Running"
     status = "Running" if not ts.end else "Stopped"
     
-    result = f"Timesheet ID: {ts.id}\\n"
-    result += f"Project ID: {ts.project}\\n"
-    result += f"Activity ID: {ts.activity}\\n"
-    result += f"User ID: {ts.user if ts.user else 'Unknown'}\\n"
-    result += f"Status: {status}\\n"
+    result = f"Timesheet ID: {ts.id}\n"
+    result += f"Project ID: {ts.project}\n"
+    result += f"Activity ID: {ts.activity}\n"
+    result += f"User ID: {ts.user if ts.user else 'Unknown'}\n"
+    result += f"Status: {status}\n"
     
-    result += f"Begin: {ts.begin.strftime('%Y-%m-%d %H:%M:%S')}\\n"
+    result += f"Begin: {ts.begin.strftime('%Y-%m-%d %H:%M:%S')}\n"
     if ts.end:
-        result += f"End: {ts.end.strftime('%Y-%m-%d %H:%M:%S')}\\n"
-        result += f"Duration: {duration:.2f} hours\\n"
+        result += f"End: {ts.end.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        result += f"Duration: {duration:.2f} hours\n"
     
-    result += f"Billable: {'Yes' if ts.billable else 'No'}\\n"
-    result += f"Exported: {'Yes' if ts.exported else 'No'}\\n"
+    result += f"Billable: {'Yes' if ts.billable else 'No'}\n"
+    result += f"Exported: {'Yes' if ts.exported else 'No'}\n"
     
     if ts.description:
-        result += f"Description: {ts.description}\\n"
+        result += f"Description: {ts.description}\n"
     if ts.tags:
-        result += f"Tags: {', '.join(ts.tags)}\\n"
+        result += f"Tags: {', '.join(ts.tags)}\n"
     if ts.rate:
-        result += f"Rate: {ts.rate}\\n"
+        result += f"Rate: {ts.rate}\n"
     if ts.fixed_rate:
-        result += f"Fixed Rate: {ts.fixed_rate}\\n"
+        result += f"Fixed Rate: {ts.fixed_rate}\n"
     if ts.hourly_rate:
-        result += f"Hourly Rate: {ts.hourly_rate}\\n"
+        result += f"Hourly Rate: {ts.hourly_rate}\n"
     if ts.break_duration:
-        result += f"Break: {ts.break_duration // 60} minutes\\n"
+        result += f"Break: {ts.break_duration // 60} minutes\n"
 
     return [TextContent(type="text", text=result)]
 
@@ -558,7 +548,7 @@ async def _handle_timesheet_export_toggle(client: KimaiClient, id: Optional[int]
     if not id:
         return [TextContent(type="text", text="Error: 'id' parameter is required for export_toggle action")]
     
-    ts = await client.mark_timesheet_exported(id)
+    ts = await client.toggle_timesheet_export(id)
     status = "exported" if ts.exported else "not exported"
     return [TextContent(
         type="text",
@@ -644,43 +634,24 @@ When using the timesheet tool with action='list', you can control which users' t
 """
     
     if show_users:
-        guide += "\\n## Available Users:\\n\\n"
+        guide += "\n## Available Users:\n\n"
         try:
-            # Try to get users from teams first (works for team leads and admins)
-            users = []
-            try:
-                teams = await client.get_teams()
-                user_dict = {}
-                for team in teams:
-                    try:
-                        team_detail = await client.get_team(team.id)
-                        if team_detail.members:
-                            for member in team_detail.members:
-                                user_dict[member.user.id] = member.user
-                    except Exception:
-                        continue
-                users = list(user_dict.values())
-            except Exception:
-                pass
-
-            # Fallback to get_users if no team members found
-            if not users:
-                users = await client.get_users()
+            # Teams-first discovery with get_users fallback
+            users = await resolve_accessible_users(client)
 
             for user in users[:20]:  # Limit to 20 users
                 status = "Active" if getattr(user, 'enabled', True) else "Inactive"
                 guide += f"- ID: {user.id} | Username: {user.username} | "
-                guide += f"Name: {getattr(user, 'alias', None) or 'N/A'} | Status: {status}\\n"
+                guide += f"Name: {getattr(user, 'alias', None) or 'N/A'} | Status: {status}\n"
 
             if len(users) > 20:
-                guide += f"\\n... and {len(users) - 20} more users\\n"
+                guide += f"\n... and {len(users) - 20} more users\n"
         except Exception as e:
-            error_msg = str(e).lower()
-            if "forbidden" in error_msg or "403" in error_msg:
-                guide += "Unable to list users (insufficient permissions).\\n"
-                guide += "You may still use user_scope='specific' with a user ID if you have permission.\\n"
+            if isinstance(e, KimaiAPIError) and e.status_code == 403:
+                guide += "Unable to list users (insufficient permissions).\n"
+                guide += "You may still use user_scope='specific' with a user ID if you have permission.\n"
             else:
-                guide += f"Error fetching users: {str(e)}\\n"
+                guide += f"Error fetching users: {str(e)}\n"
 
     return [TextContent(type="text", text=guide)]
 
@@ -744,20 +715,21 @@ async def _handle_timer_active(client: KimaiClient) -> List[TextContent]:
     if not timesheets:
         return [TextContent(type="text", text="No active timers running")]
     
-    result = f"Found {len(timesheets)} active timer(s):\\n\\n"
+    result = f"Found {len(timesheets)} active timer(s):\n\n"
     
     for ts in timesheets:
-        elapsed = (datetime.now() - ts.begin).total_seconds() / 3600
+        now = datetime.now(ts.begin.tzinfo) if ts.begin.tzinfo else datetime.now()
+        elapsed = (now - ts.begin).total_seconds() / 3600
         
-        result += f"ID: {ts.id} - Project: {ts.project} / Activity: {ts.activity}\\n"
-        result += f"  Started: {ts.begin.strftime('%Y-%m-%d %H:%M')}\\n"
-        result += f"  Elapsed: {elapsed:.2f} hours\\n"
+        result += f"ID: {ts.id} - Project: {ts.project} / Activity: {ts.activity}\n"
+        result += f"  Started: {ts.begin.strftime('%Y-%m-%d %H:%M')}\n"
+        result += f"  Elapsed: {elapsed:.2f} hours\n"
         
         if ts.description:
-            result += f"  Description: {ts.description}\\n"
+            result += f"  Description: {ts.description}\n"
         if ts.tags:
-            result += f"  Tags: {', '.join(ts.tags)}\\n"
-        result += "\\n"
+            result += f"  Tags: {', '.join(ts.tags)}\n"
+        result += "\n"
     
     return [TextContent(type="text", text=result)]
 
@@ -781,22 +753,22 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: Optional[s
     )
     timesheets, fetched_all, last_page = await client.get_timesheets(filter_params)
     
-    result = f"Recent {len(timesheets)} timesheet(s):\\n\\n"
+    result = f"Recent {len(timesheets)} timesheet(s):\n\n"
     
     for ts in timesheets:
         duration = (ts.end - ts.begin).total_seconds() / 3600 if ts.end else "Running"
         
-        result += f"ID: {ts.id} - Project: {ts.project} / Activity: {ts.activity}\\n"
-        result += f"  Date: {ts.begin.strftime('%Y-%m-%d')}\\n"
+        result += f"ID: {ts.id} - Project: {ts.project} / Activity: {ts.activity}\n"
+        result += f"  Date: {ts.begin.strftime('%Y-%m-%d')}\n"
         
         if isinstance(duration, float):
-            result += f"  Duration: {duration:.2f} hours\\n"
+            result += f"  Duration: {duration:.2f} hours\n"
         else:
-            result += f"  Status: {duration}\\n"
+            result += f"  Status: {duration}\n"
         
         if ts.description:
-            result += f"  Description: {ts.description}\\n"
-        result += "\\n"
+            result += f"  Description: {ts.description}\n"
+        result += "\n"
 
     return [TextContent(type="text", text=result)]
 
@@ -823,7 +795,7 @@ async def _handle_batch_export(client: KimaiClient, ids: List[int]) -> List[Text
         return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_export action")]
 
     async def export_one(id: int) -> int:
-        await client.mark_timesheet_exported(id)
+        await client.toggle_timesheet_export(id)
         return id
 
     success, failed = await execute_batch(ids, export_one)

@@ -79,25 +79,22 @@ async def handle_rate(client: KimaiClient, **params) -> List[TextContent]:
             text=f"Error: Unknown entity type '{entity}'. Valid types: customer, project, activity"
         )]
     
-    # Execute action
-    try:
-        if action == "list":
-            return await handler.list(entity_id)
-        elif action == "add":
-            if not data:
-                return [TextContent(type="text", text="Error: 'data' parameter is required for add action")]
-            return await handler.add(entity_id, data)
-        elif action == "delete":
-            if not rate_id:
-                return [TextContent(type="text", text="Error: 'rate_id' parameter is required for delete action")]
-            return await handler.delete(entity_id, rate_id)
-        else:
-            return [TextContent(
-                type="text",
-                text=f"Error: Unknown action '{action}'. Valid actions: list, add, delete"
-            )]
-    except Exception as e:
-        return [TextContent(type="text", text=f"Error: {str(e)}")]
+    # Execute action - errors propagate to the central handler in server.py
+    if action == "list":
+        return await handler.list(entity_id)
+    elif action == "add":
+        if not data:
+            return [TextContent(type="text", text="Error: 'data' parameter is required for add action")]
+        return await handler.add(entity_id, data)
+    elif action == "delete":
+        if not rate_id:
+            return [TextContent(type="text", text="Error: 'rate_id' parameter is required for delete action")]
+        return await handler.delete(entity_id, rate_id)
+    else:
+        return [TextContent(
+            type="text",
+            text=f"Error: Unknown action '{action}'. Valid actions: list, add, delete"
+        )]
 
 
 class BaseRateHandler:
@@ -121,25 +118,24 @@ class BaseRateHandler:
         if not rates:
             return f"No rates configured for {entity_name} ID {entity_id}"
         
-        result = f"Found {len(rates)} rate(s) for {entity_name} ID {entity_id}:\\n\\n"
+        result = f"Found {len(rates)} rate(s) for {entity_name} ID {entity_id}:\n\n"
         
         for rate in rates:
-            result += f"Rate ID: {rate.id}\\n"
+            result += f"Rate ID: {rate.id}\n"
             
             if hasattr(rate, "user") and rate.user:
-                result += f"  User: {rate.user.username} (ID: {rate.user.id})\\n"
+                result += f"  User: {rate.user.username} (ID: {rate.user.id})\n"
             else:
-                result += "  User: All users (default rate)\\n"
+                result += "  User: All users (default rate)\n"
             
-            result += f"  Rate: {rate.rate}\\n"
+            result += f"  Rate: {rate.rate}\n"
             
-            if hasattr(rate, "internalRate") and rate.internalRate is not None:
-                result += f"  Internal Rate: {rate.internalRate}\\n"
+            if rate.internal_rate is not None:
+                result += f"  Internal Rate: {rate.internal_rate}\n"
+
+            result += f"  Type: {'Fixed' if rate.is_fixed else 'Hourly'}\n"
             
-            if hasattr(rate, "isFixed"):
-                result += f"  Type: {'Fixed' if rate.isFixed else 'Hourly'}\\n"
-            
-            result += "\\n"
+            result += "\n"
         
         return result
 

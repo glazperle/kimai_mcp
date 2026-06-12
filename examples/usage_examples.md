@@ -760,6 +760,103 @@ Parameters: {
 }
 ```
 
+## Comment Management (Kimai 2.57+)
+
+Comments can be attached to projects and customers. Markdown is supported, and pinned comments always appear first.
+
+### List Comments on a Project
+
+```
+Tool: comment
+Parameters: {
+  "entity": "project",
+  "entity_id": 15,
+  "action": "list"
+}
+```
+
+### Add a Comment to a Customer
+
+```
+Tool: comment
+Parameters: {
+  "entity": "customer",
+  "entity_id": 5,
+  "action": "create",
+  "data": {
+    "message": "New billing contact: invoice@acme.example (see email from June)",
+    "pinned": true
+  }
+}
+
+Output:
+Added comment ID 42 to customer ID 5 (pinned)
+```
+
+### Pin / Unpin a Comment
+
+The `pin` action toggles the pinned status:
+
+```
+Tool: comment
+Parameters: {
+  "entity": "project",
+  "entity_id": 15,
+  "action": "pin",
+  "comment_id": 42
+}
+```
+
+### Delete a Comment
+
+```
+Tool: comment
+Parameters: {
+  "entity": "project",
+  "entity_id": 15,
+  "action": "delete",
+  "comment_id": 42
+}
+```
+
+## Meta Field Management
+
+The `meta` tool manages custom fields for customers, projects, activities, timesheets and invoices (invoice requires Kimai 2.56+).
+
+### Update Meta Fields on a Project
+
+```
+Tool: meta
+Parameters: {
+  "entity": "project",
+  "entity_id": 15,
+  "action": "update",
+  "data": [
+    {"name": "cost_center", "value": "CC-1234"},
+    {"name": "po_number", "value": "PO-2026-001"}
+  ]
+}
+```
+
+Note: For customer, project, activity and timesheet the API accepts one meta field per request; the tool iterates automatically when multiple fields are given.
+
+### Update Invoice Meta Fields (Kimai 2.56+)
+
+Invoice meta fields are sent in a single request containing all fields:
+
+```
+Tool: meta
+Parameters: {
+  "entity": "invoice",
+  "entity_id": 7,
+  "action": "update",
+  "data": [
+    {"name": "payment_reference", "value": "TRX-998877"},
+    {"name": "dunning_level", "value": "1"}
+  ]
+}
+```
+
 ## Server Configuration
 
 ### Get All Configuration

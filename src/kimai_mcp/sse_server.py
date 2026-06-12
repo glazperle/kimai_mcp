@@ -97,13 +97,13 @@ class RemoteMCPServer:
         # Generate or use provided server token
         self.server_token = server_token or secrets.token_urlsafe(32)
         if not server_token:
-            logger.info("=" * 70)
-            logger.info("Generated new authentication token for MCP server:")
-            logger.info(f"  {self.server_token}")
-            logger.info("=" * 70)
-            logger.info("IMPORTANT: Save this token securely!")
-            logger.info("Clients will need this token to connect to the server.")
-            logger.info("=" * 70)
+            # SECURITY: never log the generated token. Operators must provide a
+            # token explicitly via --server-token or MCP_SERVER_TOKEN to know it.
+            logger.warning(
+                "No server token provided - generated a random one (not logged for "
+                "security). Clients cannot connect without it; set --server-token "
+                "or the MCP_SERVER_TOKEN env var to use a known token."
+            )
 
         # Session management with limits and TTL
         self.session_manager = SessionManager(SessionConfig(
@@ -503,8 +503,25 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+DEPRECATION_NOTICE = (
+    "DEPRECATION WARNING: The SSE transport (kimai-mcp-server) is deprecated in the "
+    "MCP specification and this server implementation is NOT functional. "
+    "Please use the Streamable HTTP server with OAuth instead: "
+    "kimai-mcp-streamable --users-config ./config/users.json"
+)
+
+
 def main():
     """Main entry point for remote server."""
+    import sys
+
+    # Deprecation warning: SSE transport is deprecated in the MCP spec and this
+    # server is not functional. Use kimai-mcp-streamable with OAuth instead.
+    print("=" * 70, file=sys.stderr)
+    print(DEPRECATION_NOTICE, file=sys.stderr)
+    print("=" * 70, file=sys.stderr)
+    logger.warning(DEPRECATION_NOTICE)
+
     parser = create_parser()
     args = parser.parse_args()
 

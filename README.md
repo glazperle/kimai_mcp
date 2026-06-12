@@ -30,25 +30,29 @@ kimai-mcp --setup
 
 | Server | Command | Best For |
 |--------|---------|----------|
-| **Streamable HTTP** | `kimai-mcp-streamable` | Claude.ai Connectors (web/mobile) |
-| **SSE Server** | `kimai-mcp-server` | Claude Desktop (remote) |
-| **Local** | `kimai-mcp` | Single user, development |
+| **Local** | `kimai-mcp` | Claude Desktop, single user, development |
+| **Streamable HTTP** | `kimai-mcp-streamable` | Claude.ai Connectors (web/mobile), teams |
+| **SSE Server** | `kimai-mcp-server` | **Deprecated** — do not use (see below) |
 
-#### Quick Start with Docker (Streamable HTTP)
+> **Deprecation notice:** The SSE server (`kimai-mcp-server`) is deprecated and not functional (the SSE transport was removed from the MCP specification). It prints a startup warning. Use the Streamable HTTP server (`kimai-mcp-streamable`) instead.
+
+#### Quick Start with Docker (Streamable HTTP + OAuth)
+
+Since v2.12.0 the Streamable HTTP server includes an OAuth 2.1 authorization server. Users authenticate with a user slug and a per-user `auth_secret` instead of a secret URL.
 
 ```bash
-# 1. Generate a random slug for security (DO NOT use usernames!)
-python -c "import secrets; print(secrets.token_urlsafe(12))"
-# Output example: xK9mP2qW7vL4
+# 1. Generate a random slug and an auth_secret per user
+python -c "import secrets; print(secrets.token_urlsafe(16))"   # slug
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # auth_secret
 
-# 2. Create config file with random slug
+# 2. Create config file
 mkdir config
 cat > config/users.json << 'EOF'
 {
-  "xK9mP2qW7vL4": {
+  "xK9mP2qW7vL4aB8c": {
     "kimai_url": "https://your-kimai.com",
     "kimai_token": "your-api-token",
-    "kimai_user_id": "1"
+    "auth_secret": "long-random-oauth-login-secret"
   }
 }
 EOF
@@ -57,69 +61,74 @@ EOF
 docker-compose up -d
 ```
 
-> **Security Warning:** Use random slugs, NOT usernames! Predictable URLs like `/mcp/john` can be easily guessed. Generate secure slugs with `python -c "import secrets; print(secrets.token_urlsafe(12))"`
+> **Security Warning:** Use random slugs, NOT usernames! The server warns at startup about low-entropy slugs (shorter than 16 characters or plain lowercase words). Slugs may only contain letters, digits, `-` and `_`.
 
-#### Claude.ai Connectors Integration
+#### Claude.ai Connectors Integration (OAuth)
 
 The Streamable HTTP server works with Claude.ai custom connectors:
 
-1. Deploy server with Docker (see above)
-2. In Claude.ai: **Settings → Connectors → Add custom connector**
-3. Enter URL: `https://your-domain.com/mcp/xK9mP2qW7vL4` (your random slug)
-4. Done! Works in Claude.ai web and mobile apps
+1. Set an `auth_secret` for each user in `users.json` (see above)
+2. Run the server behind an HTTPS reverse proxy:
+   ```bash
+   kimai-mcp-streamable \
+     --users-config ./config/users.json \
+     --public-url https://mcp.example.com \
+     --trusted-proxy 127.0.0.1 \
+     --oauth-state-file ./config/oauth_clients.json \
+     --disable-legacy-slugs
+   ```
+3. In Claude.ai: **Settings → Connectors → Add custom connector**
+4. Enter URL: `https://mcp.example.com/mcp` (no slug in the URL)
+5. Claude.ai registers itself automatically (Dynamic Client Registration). When connecting, a login page appears — enter your user slug and `auth_secret`.
 
-**Benefits:**
-- ✅ Works with Claude.ai web and mobile apps
-- ✅ Each user gets their own endpoint (`/mcp/{random-slug}`)
-- ✅ Server-side credential management
-- ✅ No client-side token exposure
+Access tokens are valid for 1 hour and refreshed automatically (refresh tokens up to 30 days). Tokens are kept in memory, so users must reconnect after a server restart.
 
-#### Claude Desktop (SSE Server)
-
-For Claude Desktop with remote server access:
-
-```json
-{
-  "mcpServers": {
-    "kimai": {
-      "url": "http://your-server:8000/sse",
-      "headers": {
-        "Authorization": "Bearer MCP-SERVER-TOKEN",
-        "X-Kimai-Token": "YOUR-PERSONAL-KIMAI-TOKEN"
-      }
-    }
-  }
-}
-```
+**Legacy endpoints:** The previous per-user URLs `/mcp/{slug}` still work but are deprecated. Migrate to the OAuth endpoint `/mcp` and start the server with `--disable-legacy-slugs`.
 
 📖 **[See full deployment guide →](DEPLOYMENT.md)**
 
 ## Command Line Options
 
+Options for the local server (`kimai-mcp`):
+
 | Option | Description |
 | ------ | ----------- |
 | `--kimai-url URL` | Kimai server URL (e.g., `https://kimai.example.com`) |
 | `--kimai-token TOKEN` | API authentication token from your Kimai user profile |
-| `--kimai-user USER_ID` | Default user ID for operations (optional) |
+| `--kimai-user USER_ID` | **Deprecated** — accepted but ignored (use the `user_scope` parameter of the tools instead) |
 | `--ssl-verify VALUE` | SSL verification: `true` (default), `false`, or path to CA certificate |
 | `--setup` | Interactive setup wizard for Claude Desktop configuration |
 | `--help` | Show help message and exit |
 | `--version` | Show version number and exit |
 
+Options for the Streamable HTTP server (`kimai-mcp-streamable`):
+
+| Option | Environment variable | Description |
+| ------ | -------------------- | ----------- |
+| `--host HOST` | — | Host to bind to (default: `0.0.0.0`) |
+| `--port PORT` | — | Port to bind to (default: `8000`) |
+| `--users-config FILE` | `USERS_CONFIG_FILE` | Path to `users.json` |
+| `--public-url URL` | `KIMAI_MCP_PUBLIC_URL` | Public base URL, used as OAuth issuer/resource URL (required behind a reverse proxy) |
+| `--oauth-state-file FILE` | `KIMAI_MCP_OAUTH_STATE_FILE` | JSON file to persist registered OAuth clients across restarts |
+| `--disable-legacy-slugs` | `KIMAI_MCP_DISABLE_LEGACY_SLUGS` | Disable the deprecated `/mcp/{slug}` endpoints |
+| `--trusted-proxy IP` | `KIMAI_MCP_TRUSTED_PROXIES` (comma-separated) | Reverse proxy IPs whose `X-Forwarded-For`/`X-Real-IP` headers are honored; may be given multiple times |
+| `--rate-limit-rpm N` | `RATE_LIMIT_RPM` | Maximum requests per minute per IP (default: 60, 0 to disable) |
+
 ## 🛠️ Available Tools
 
 ### Core Management Tools
-1. **Entity Tool** - Universal CRUD operations for projects, activities, customers, users, teams, tags, invoices, holidays
-2. **Timesheet Tool** - Complete timesheet management (list, create, update, delete, export, batch operations)
-3. **Timer Tool** - Active timer operations (start, stop, restart, view active/recent)
-4. **Rate Tool** - Rate management across all entity types
-5. **Team Access Tool** - Team member and permission management
-6. **Absence Tool** - Complete absence workflow (create, approve, reject, list, attendance, batch operations, auto-split)
-7. **Calendar Tool** - Unified calendar data access
-8. **Meta Tool** - Custom field management across entities
-9. **User Current Tool** - Current user information
-10. **Project Analysis Tool** - Advanced project analytics
-11. **Config Tool** - Server configuration (timesheet settings, color codes, plugins, version info)
+1. **Entity Tool** (`entity`) - Universal CRUD operations for projects, activities, customers, users, teams, tags, invoices, holidays
+2. **Timesheet Tool** (`timesheet`) - Complete timesheet management (list, create, update, delete, export, batch operations)
+3. **Timer Tool** (`timer`) - Active timer operations (start, stop, restart, view active/recent)
+4. **Rate Tool** (`rate`) - Rate management across all entity types
+5. **Team Access Tool** (`team_access`) - Team member and permission management
+6. **Absence Tool** (`absence`) - Complete absence workflow (create, approve, reject, list, attendance, batch operations, auto-split)
+7. **Calendar Tool** (`calendar`) - Unified calendar data access
+8. **Meta Tool** (`meta`) - Custom field management for customers, projects, activities, timesheets, and invoices (invoice meta requires Kimai 2.56+)
+9. **User Current Tool** (`user_current`) - Current user information
+10. **Project Analysis Tool** (`analyze_project_team`) - Advanced project analytics
+11. **Config Tool** (`config`) - Server configuration (timesheet settings, color codes, plugins, version info)
+12. **Comment Tool** (`comment`) - Comments on projects and customers: list, create, delete, pin (requires Kimai 2.57+)
 
 ### Complete Kimai Integration
 - **Timesheet Management** - Create, update, delete, start/stop timers, view active timers
@@ -130,12 +139,13 @@ For Claude Desktop with remote server access:
 - **Absence Management** - Create, approve, reject, and track absences
 - **Tag Management** - Create and manage tags for better organization
 - **Invoice Queries** - View invoice information and status
+- **Comments** - Manage pinned and regular comments on projects and customers (Kimai 2.57+)
 
 ### Advanced Features
 - **Real-time Timer Control** - Start, stop, and monitor active time tracking
 - **Comprehensive Filtering** - Advanced filters for all data types
 - **Permission Management** - Respect Kimai's role-based permissions
-- **Error Handling** - Proper error handling with meaningful messages
+- **Error Handling** - API errors are reported with status code and validation details; 403 responses include a permission hint (Kimai 2.57/2.58 enforce API permissions more strictly)
 - **Flexible Configuration** - Multiple configuration methods (CLI args, .env files, environment variables)
 
 ## Installation
@@ -205,7 +215,6 @@ Add the following to your Claude Desktop configuration:
 **Important Notes:**
 - Replace `https://your-kimai-instance.com` with your actual Kimai URL
 - Replace `your-api-token-here` with your API token from Kimai
-- Optionally add `--kimai-user=USER_ID` for a default user ID
 - The `kimai-mcp` command is available after `pip install kimai-mcp`
 
 **Alternative:** If `kimai-mcp` is not in your PATH, use `python -m kimai_mcp.server` instead:
@@ -237,7 +246,6 @@ If you prefer using a .env file for configuration, create a `.env` file in your 
 # .env file in the kimai_mcp directory
 KIMAI_URL=https://your-kimai-instance.com
 KIMAI_API_TOKEN=your-api-token-here
-KIMAI_DEFAULT_USER=1
 KIMAI_SSL_VERIFY=true  # or path to CA certificate
 ```
 
@@ -276,7 +284,6 @@ If you prefer system environment variables, you can set:
 ```bash
 export KIMAI_URL="https://your-kimai-instance.com"
 export KIMAI_API_TOKEN="your-api-token-here"
-export KIMAI_DEFAULT_USER="1"  # Optional
 ```
 
 Then use this Claude Desktop configuration:
@@ -549,6 +556,36 @@ Batch operations allow executing multiple API calls in parallel for efficient bu
 }
 ```
 
+### Comments (Kimai 2.57+)
+
+#### List Project Comments
+```json
+{
+  "tool": "comment",
+  "parameters": {
+    "entity": "project",
+    "entity_id": 17,
+    "action": "list"
+  }
+}
+```
+
+#### Add a Pinned Customer Comment
+```json
+{
+  "tool": "comment",
+  "parameters": {
+    "entity": "customer",
+    "entity_id": 5,
+    "action": "create",
+    "data": {
+      "message": "Billing contact changed, see email from 2026-06-01",
+      "pinned": true
+    }
+  }
+}
+```
+
 ### Current User Information
 
 #### Get Current User
@@ -726,18 +763,28 @@ kimai_mcp/
 ├── src/
 │   ├── kimai_mcp/
 │   │   ├── __init__.py
-│   │   ├── server.py         # MCP server implementation
-│   │   ├── client.py         # Kimai API client
-│   │   ├── models.py         # Data models
-│   │   └── tools/            # MCP tool implementations
+│   │   ├── server.py                  # Local MCP server (stdio)
+│   │   ├── streamable_http_server.py  # Streamable HTTP server with OAuth (Claude.ai)
+│   │   ├── sse_server.py              # SSE server (deprecated, non-functional)
+│   │   ├── oauth.py                   # Embedded OAuth 2.1 authorization server
+│   │   ├── user_config.py             # users.json / env multi-user configuration
+│   │   ├── security.py                # Rate limiting, security headers, enumeration protection
+│   │   ├── client.py                  # Kimai API client
+│   │   ├── models.py                  # Data models
+│   │   └── tools/                     # MCP tool implementations
 │   │       ├── entity_manager.py
-│   │       ├── timesheet_consolidated.py
+│   │       ├── timesheet_consolidated.py  # timesheet + timer tools
 │   │       ├── rate_manager.py
 │   │       ├── team_access_manager.py
 │   │       ├── absence_manager.py
-│   │       ├── calendar_meta.py
+│   │       ├── calendar_meta.py           # calendar, meta, user_current tools
+│   │       ├── comment_tool.py            # project/customer comments
 │   │       ├── project_analysis.py
-│   │       └── config_info.py
+│   │       ├── config_info.py
+│   │       ├── user_discovery.py          # shared user resolution helper
+│   │       ├── batch_utils.py
+│   │       ├── absence_analytics.py
+│   │       └── timesheet_analytics.py
 ├── tests/
 ├── README.md
 ├── pyproject.toml

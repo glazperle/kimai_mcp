@@ -14,6 +14,7 @@ from .models import (
     Version, Absence, AbsenceForm, AbsenceFilter,
     Team, TeamEditForm, TagEntity, TagEditForm, TagFilter,
     Invoice, InvoiceFilter,
+    Comment, CommentForm,
     PublicHoliday, PublicHolidayFilter,
     Plugin, CalendarEvent, TimesheetConfig,
     Rate, RateForm, MetaFieldForm
@@ -199,11 +200,17 @@ class KimaiClient:
     
     # Timesheet endpoints
     
-    async def get_timesheets(self, filters: Optional[TimesheetFilter] = None) -> Tuple[List[TimesheetEntity], bool, Optional[int]]:
+    async def get_timesheets(
+        self,
+        filters: Optional[TimesheetFilter] = None,
+        max_results: Optional[int] = None
+    ) -> Tuple[List[TimesheetEntity], bool, Optional[int]]:
         """Get list of timesheets.
-        
+
         Args:
             filters: Timesheet filters
+            max_results: Optional cap for auto-pagination. Fetching stops once
+                this many records have been collected (fetched_all is False then).
 
         Returns:
             * List of timesheets and a flag indicating if there are more results to fetch
@@ -224,10 +231,13 @@ class KimaiClient:
             # 4. Not using a large size limit (size <= 100 or not specified)
             has_time_filter = filters.begin is not None or filters.end is not None
             has_entity_filter = (
-                filters.user is not None or 
+                filters.user is not None or
                 filters.users is not None or
+                filters.project is not None or
                 filters.projects is not None or
+                filters.customer is not None or
                 filters.customers is not None or
+                filters.activity is not None or
                 filters.activities is not None
             )
             manual_pagination = filters.page is not None
@@ -275,15 +285,10 @@ class KimaiClient:
         # If not auto-paginating, just return single page
         if not should_paginate_all:
             data = await self._request("GET", "/timesheets", params=params)
-            if filters and filters.size:
-                if filters.size > len(data):
-                    fetched_all = True
-                else:
-                    fetched_all = False
-            elif len(data) < 50:
-                fetched_all = True
-            else:
-                fetched_all = False
+            # Use the actual page size (API default is 50) to decide whether
+            # this single page already contained all matching records.
+            page_size = filters.size if filters and filters.size else 50
+            fetched_all = len(data) < page_size
             return [TimesheetEntity(**item) for item in data], fetched_all, filters.page if filters and filters.page else 1
         
         # Auto-pagination logic
@@ -308,13 +313,20 @@ class KimaiClient:
 
             if len(data) < page_size:
                 break
-                
-            page += 1
-            
-            if page > 100:
+
+            if max_results is not None and len(all_timesheets) >= max_results:
                 fetched_all = False
                 break
-        
+
+            # Safety cap: stop after the 100th fully-fetched page. Checked BEFORE
+            # incrementing so the returned page number is the last one actually
+            # fetched (callers resume at page+1 and must not skip a page).
+            if page >= 100:
+                fetched_all = False
+                break
+
+            page += 1
+
         return all_timesheets, fetched_all, page
     
     async def get_active_timesheets(self) -> List[TimesheetEntity]:
@@ -722,10 +734,12 @@ class KimaiClient:
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
 
+            # Kimai rejects date-only values here (400); it requires a full
+            # ISO datetime (YYYY-MM-DDTHH:MM:SS), like the other list endpoints.
             if filters.begin:
-                params['begin'] = filters.begin.date().isoformat()
+                params['begin'] = filters.begin.replace(microsecond=0).isoformat()
             if filters.end:
-                params['end'] = filters.end.date().isoformat()
+                params['end'] = filters.end.replace(microsecond=0).isoformat()
 
         data = await self._request("GET", "/public-holidays", params=params)
         return [PublicHoliday(**item) for item in data]
@@ -740,10 +754,11 @@ class KimaiClient:
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
 
+            # Full ISO datetime required (date-only returns 400).
             if filters.begin:
-                params['begin'] = filters.begin.date().isoformat()
+                params['begin'] = filters.begin.replace(microsecond=0).isoformat()
             if filters.end:
-                params['end'] = filters.end.date().isoformat()
+                params['end'] = filters.end.replace(microsecond=0).isoformat()
 
         data = await self._request("GET", "/public-holidays/calendar", params=params)
         return [CalendarEvent(**item) for item in data]
@@ -941,3 +956,54 @@ class KimaiClient:
         """Get a specific invoice by ID."""
         data = await self._request("GET", f"/invoices/{invoice_id}")
         return Invoice(**data)
+
+    async def update_invoice_meta(self, invoice_id: int, meta_fields: List[MetaFieldForm]) -> Invoice:
+        """Update meta fields of an invoice (requires Kimai 2.56+).
+
+        Unlike the other meta endpoints, this one accepts an array of fields in a single request.
+        """
+        payload = [field.model_dump(exclude_none=True) for field in meta_fields]
+        data = await self._request("PATCH", f"/invoices/{invoice_id}/custom-fields", json=payload)
+        return Invoice(**data)
+
+    # Comment endpoints (requires Kimai 2.57+)
+
+    async def get_project_comments(self, project_id: int) -> List[Comment]:
+        """Get comments for a project."""
+        data = await self._request("GET", f"/projects/{project_id}/comments")
+        return [Comment(**item) for item in data]
+
+    async def create_project_comment(self, project_id: int, form: CommentForm) -> Comment:
+        """Add a comment to a project."""
+        data = await self._request("POST", f"/projects/{project_id}/comments",
+                                   json=form.model_dump(exclude_none=True))
+        return Comment(**data)
+
+    async def delete_project_comment(self, project_id: int, comment_id: int) -> None:
+        """Delete a project comment."""
+        await self._request("DELETE", f"/projects/{project_id}/comments/{comment_id}")
+
+    async def pin_project_comment(self, project_id: int, comment_id: int) -> Comment:
+        """Toggle the pinned status of a project comment."""
+        data = await self._request("PATCH", f"/projects/{project_id}/comments/{comment_id}/pin")
+        return Comment(**data)
+
+    async def get_customer_comments(self, customer_id: int) -> List[Comment]:
+        """Get comments for a customer."""
+        data = await self._request("GET", f"/customers/{customer_id}/comments")
+        return [Comment(**item) for item in data]
+
+    async def create_customer_comment(self, customer_id: int, form: CommentForm) -> Comment:
+        """Add a comment to a customer."""
+        data = await self._request("POST", f"/customers/{customer_id}/comments",
+                                   json=form.model_dump(exclude_none=True))
+        return Comment(**data)
+
+    async def delete_customer_comment(self, customer_id: int, comment_id: int) -> None:
+        """Delete a customer comment."""
+        await self._request("DELETE", f"/customers/{customer_id}/comments/{comment_id}")
+
+    async def pin_customer_comment(self, customer_id: int, comment_id: int) -> Comment:
+        """Toggle the pinned status of a customer comment."""
+        data = await self._request("PATCH", f"/customers/{customer_id}/comments/{comment_id}/pin")
+        return Comment(**data)

@@ -289,6 +289,23 @@ class InvoiceFilter(BaseModel):
     size: Optional[int] = None
 
 
+# Comment models (Kimai 2.57+, projects and customers)
+
+class Comment(BaseModel):
+    """Comment on a project or customer."""
+    id: Optional[int] = None
+    message: str
+    created_by: Optional[User] = Field(None, alias="createdBy")
+    created_at: Optional[datetime] = Field(None, alias="createdAt")
+    pinned: bool = False
+
+
+class CommentForm(BaseModel):
+    """Form for creating a comment (markdown is supported in message)."""
+    message: str
+    pinned: Optional[bool] = None
+
+
 # Public Holiday models
 
 class PublicHolidayGroup(BaseModel):

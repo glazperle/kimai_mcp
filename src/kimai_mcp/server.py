@@ -36,14 +36,25 @@ from .tools.calendar_meta import calendar_tool, meta_tool, user_current_tool, ha
     handle_user_current
 from .tools.project_analysis import analyze_project_team_tool, handle_analyze_project_team
 from .tools.config_info import config_tool, handle_config
+from .tools.comment_tool import comment_tool, handle_comment
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def format_api_error(e: KimaiAPIError) -> str:
+    """Format a KimaiAPIError for the MCP client, including validation details."""
+    text = f"Kimai API Error: {e.message} (Status: {e.status_code})"
+    if e.status_code == 403:
+        text += "\nThe API token lacks permission for this operation (Kimai enforces team/user permissions strictly)."
+    if e.details:
+        text += f"\nDetails: {json.dumps(e.details, ensure_ascii=False, default=str)}"
+    return text
+
+
 class KimaiMCPServer:
-    """Kimai MCP Server with consolidated tools (73 → 10 tools)."""
+    """Kimai MCP Server with consolidated tools (73 → 12 tools)."""
 
     def __init__(self, base_url: Optional[str] = None, api_token: Optional[str] = None,
                  default_user_id: Optional[str] = None,
@@ -69,7 +80,11 @@ class KimaiMCPServer:
         # Configuration - prefer arguments, fallback to environment variables
         self.base_url = (base_url or os.getenv("KIMAI_URL", "")).rstrip('/')
         self.api_token = api_token or os.getenv("KIMAI_API_TOKEN", "")
-        self.default_user_id = default_user_id or os.getenv("KIMAI_DEFAULT_USER")
+        if default_user_id or os.getenv("KIMAI_DEFAULT_USER"):
+            logger.warning(
+                "default_user_id (--kimai-user / KIMAI_DEFAULT_USER) is deprecated and has no effect; "
+                "use the user_scope parameter of the individual tools instead."
+            )
 
         # SSL verification - prefer argument, fallback to environment variable
         if ssl_verify is not None:
@@ -133,6 +148,9 @@ class KimaiMCPServer:
 
             # Configuration Info (server config, plugins, version)
             config_tool(),
+
+            # Comments on projects and customers (Kimai 2.57+)
+            comment_tool(),
         ]
 
     async def _call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
@@ -167,10 +185,12 @@ class KimaiMCPServer:
                 return await handle_analyze_project_team(self.client, arguments)
             elif name == "config":
                 return await handle_config(self.client, **arguments)
+            elif name == "comment":
+                return await handle_comment(self.client, **arguments)
             else:
                 return [TextContent(
                     type="text",
-                    text=f"Unknown tool: {name}. Available tools: entity, timesheet, timer, rate, team_access, absence, calendar, meta, user_current, analyze_project_team, config"
+                    text=f"Unknown tool: {name}. Available tools: entity, timesheet, timer, rate, team_access, absence, calendar, meta, user_current, analyze_project_team, config, comment"
                 )]
 
         except KimaiAPIError as e:
@@ -178,7 +198,7 @@ class KimaiMCPServer:
             logger.error(f"Arguments were: {arguments}")
             return [TextContent(
                 type="text",
-                text=f"Kimai API Error: {e.message} (Status: {e.status_code})"
+                text=format_api_error(e)
             )]
         except Exception as e:
             logger.error(f"Error calling tool {name}: {str(e)}", exc_info=True)
@@ -197,7 +217,7 @@ class KimaiMCPServer:
         try:
             version = await self.client.get_version()
             logger.info(
-                f"Connected to Kimai {version.version} with 10 consolidated tools (87% reduction from 73 tools)")
+                f"Connected to Kimai {version.version} with 12 consolidated tools")
         except Exception as e:
             logger.error(f"Failed to connect to Kimai: {str(e)}")
             raise
@@ -205,7 +225,7 @@ class KimaiMCPServer:
         # Configure server options
         options = InitializationOptions(
             server_name="kimai-mcp-consolidated",
-            server_version="2.0.0",
+            server_version=__version__,
             capabilities=self.server.get_capabilities(
                 notification_options=NotificationOptions(),
                 experimental_capabilities={},
@@ -248,7 +268,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--kimai-user",
         metavar="USER_ID",
-        help="Default user ID for operations (optional)"
+        help="Deprecated, has no effect (kept for backward compatibility)"
     )
     parser.add_argument(
         "--ssl-verify",
@@ -342,13 +362,10 @@ def interactive_setup():
         print("\n  Error: API Token is required.")
         return
 
-    user_id = input("  Default User ID (optional, press Enter to skip): ").strip() or None
     ssl_verify = input("  SSL Verify (true/false/path, default: true): ").strip() or "true"
 
     # Build config
     args = [f"--kimai-url={kimai_url}", f"--kimai-token={api_token}"]
-    if user_id:
-        args.append(f"--kimai-user={user_id}")
     if ssl_verify.lower() != "true":
         args.append(f"--ssl-verify={ssl_verify}")
 

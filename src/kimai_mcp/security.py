@@ -13,12 +13,54 @@ import random
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Client IP Extraction
+# =============================================================================
+
+
+def get_client_ip(scope: Scope, trusted_proxies: Optional[Iterable[str]] = None) -> str:
+    """Extract the client IP from an ASGI scope.
+
+    SECURITY: The X-Forwarded-For / X-Real-IP headers are only honored when
+    the direct peer is a configured trusted proxy. Otherwise these headers
+    are attacker-controlled and would allow trivially bypassing IP-based
+    rate limiting and enumeration protection.
+
+    Args:
+        scope: ASGI connection scope
+        trusted_proxies: IPs of reverse proxies whose forwarding headers
+            may be trusted (e.g. ["127.0.0.1"]). If empty/None, forwarding
+            headers are ignored entirely.
+
+    Returns:
+        Client IP address string
+    """
+    client = scope.get("client")
+    direct_ip = client[0] if client else "unknown"
+
+    if trusted_proxies and direct_ip in set(trusted_proxies):
+        headers = dict(scope.get("headers") or [])
+        forwarded = headers.get(b"x-forwarded-for", b"").decode()
+        if forwarded:
+            # Take the LAST hop in the chain: that entry is the peer our trusted
+            # proxy actually saw and appended. The leftmost entries are
+            # client-supplied and therefore spoofable, which would let an
+            # attacker rotate fake IPs to bypass rate limiting / enumeration
+            # protection.
+            return forwarded.split(",")[-1].strip()
+        real_ip = headers.get(b"x-real-ip", b"").decode()
+        if real_ip:
+            return real_ip.strip()
+
+    return direct_ip
 
 
 # =============================================================================
@@ -127,45 +169,26 @@ class RateLimitMiddleware:
         self,
         app: ASGIApp,
         config: Optional[RateLimitConfig] = None,
+        trusted_proxies: Optional[Iterable[str]] = None,
     ):
         """Initialize the rate limiting middleware.
 
         Args:
             app: The ASGI application to wrap
             config: Rate limiting configuration
+            trusted_proxies: IPs of reverse proxies whose X-Forwarded-For /
+                X-Real-IP headers may be trusted. If not set, forwarding
+                headers are ignored (see get_client_ip).
         """
         self.app = app
         self.config = config or RateLimitConfig()
         self.limiter = TokenBucketRateLimiter(self.config)
+        self.trusted_proxies = list(trusted_proxies) if trusted_proxies else []
         self._cleanup_task: Optional[asyncio.Task] = None
 
     def _get_client_ip(self, scope: Scope) -> str:
-        """Extract client IP from ASGI scope.
-
-        Checks X-Forwarded-For header first (for reverse proxy scenarios),
-        then falls back to direct connection IP.
-
-        Args:
-            scope: ASGI connection scope
-
-        Returns:
-            Client IP address string
-        """
-        # Check for X-Forwarded-For (when behind proxy)
-        headers = dict(scope.get("headers", []))
-        forwarded = headers.get(b"x-forwarded-for", b"").decode()
-        if forwarded:
-            # Take the first IP in the chain (original client)
-            return forwarded.split(",")[0].strip()
-
-        # Check for X-Real-IP
-        real_ip = headers.get(b"x-real-ip", b"").decode()
-        if real_ip:
-            return real_ip.strip()
-
-        # Fall back to direct connection
-        client = scope.get("client")
-        return client[0] if client else "unknown"
+        """Extract client IP from ASGI scope (proxy-header aware, see get_client_ip)."""
+        return get_client_ip(scope, self.trusted_proxies)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Handle ASGI request with rate limiting.

@@ -1,5 +1,6 @@
 """Configuration and system info tool for Kimai."""
 
+import asyncio
 from typing import List
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
@@ -34,24 +35,22 @@ async def handle_config(client: KimaiClient, **params) -> List[TextContent]:
     """Handle configuration info requests."""
     config_type = params.get("type", "all")
 
-    try:
-        if config_type == "timesheet":
-            return await _handle_timesheet_config(client)
-        elif config_type == "colors":
-            return await _handle_color_config(client)
-        elif config_type == "plugins":
-            return await _handle_plugins(client)
-        elif config_type == "version":
-            return await _handle_version(client)
-        elif config_type == "all":
-            return await _handle_all_config(client)
-        else:
-            return [TextContent(
-                type="text",
-                text=f"Error: Unknown config type '{config_type}'. Valid types: timesheet, colors, plugins, version, all"
-            )]
-    except Exception as e:
-        return [TextContent(type="text", text=f"Error: {str(e)}")]
+    # Errors propagate to the central handler in server.py
+    if config_type == "timesheet":
+        return await _handle_timesheet_config(client)
+    elif config_type == "colors":
+        return await _handle_color_config(client)
+    elif config_type == "plugins":
+        return await _handle_plugins(client)
+    elif config_type == "version":
+        return await _handle_version(client)
+    elif config_type == "all":
+        return await _handle_all_config(client)
+    else:
+        return [TextContent(
+            type="text",
+            text=f"Error: Unknown config type '{config_type}'. Valid types: timesheet, colors, plugins, version, all"
+        )]
 
 
 async def _handle_timesheet_config(client: KimaiClient) -> List[TextContent]:
@@ -118,38 +117,40 @@ async def _handle_version(client: KimaiClient) -> List[TextContent]:
 
 
 async def _handle_all_config(client: KimaiClient) -> List[TextContent]:
-    """Get all configuration info."""
+    """Get all configuration info (fetched in parallel)."""
+    version_result, ts_result, plugin_result, color_result = await asyncio.gather(
+        _handle_version(client),
+        _handle_timesheet_config(client),
+        _handle_plugins(client),
+        _handle_color_config(client),
+        return_exceptions=True,
+    )
+
     results = []
 
     # Version
-    try:
-        version_result = await _handle_version(client)
+    if isinstance(version_result, BaseException):
+        results.append(TextContent(type="text", text=f"Version error: {version_result}"))
+    else:
         results.extend(version_result)
-    except Exception as e:
-        results.append(TextContent(type="text", text=f"Version error: {e}"))
 
     # Timesheet config
-    try:
-        ts_result = await _handle_timesheet_config(client)
+    if isinstance(ts_result, BaseException):
+        results.append(TextContent(type="text", text=f"Timesheet config error: {ts_result}"))
+    else:
         results.append(TextContent(type="text", text="\n---\n"))
         results.extend(ts_result)
-    except Exception as e:
-        results.append(TextContent(type="text", text=f"Timesheet config error: {e}"))
 
     # Plugins
-    try:
-        plugin_result = await _handle_plugins(client)
+    if isinstance(plugin_result, BaseException):
+        results.append(TextContent(type="text", text=f"Plugins error: {plugin_result}"))
+    else:
         results.append(TextContent(type="text", text="\n---\n"))
         results.extend(plugin_result)
-    except Exception as e:
-        results.append(TextContent(type="text", text=f"Plugins error: {e}"))
 
-    # Colors (optional, may not be configured)
-    try:
-        color_result = await _handle_color_config(client)
+    # Colors (optional, may not be configured - errors are ignored)
+    if not isinstance(color_result, BaseException):
         results.append(TextContent(type="text", text="\n---\n"))
         results.extend(color_result)
-    except Exception:
-        pass  # Colors are optional
 
     return results

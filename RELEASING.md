@@ -54,7 +54,7 @@ Create or update `CHANGELOG.md` with release notes:
 
 ### 3. Update Version in Code
 
-Also update `__version__` in `src/kimai_mcp/server.py`:
+Also update `__version__` in `src/kimai_mcp/__init__.py` (must match `pyproject.toml`):
 
 ```python
 __version__ = "2.7.0"
@@ -63,7 +63,7 @@ __version__ = "2.7.0"
 ### 4. Commit Version Bump
 
 ```bash
-git add pyproject.toml src/kimai_mcp/server.py CHANGELOG.md
+git add pyproject.toml src/kimai_mcp/__init__.py CHANGELOG.md
 git commit -m "chore: Bump version to 2.7.0"
 git push origin main
 ```
@@ -110,6 +110,10 @@ gh release create v2.7.0 \
 
 ### 8. Publish to PyPI
 
+PyPI publishing is **automated**: the `.github/workflows/publish.yml` workflow builds and uploads the package when a GitHub Release is published (step 6). No manual upload is needed.
+
+Manual fallback (only if the workflow fails):
+
 ```bash
 # Install build tools
 pip install --upgrade build twine
@@ -119,10 +123,9 @@ python -m build
 
 # Upload to PyPI (requires PyPI credentials)
 python -m twine upload dist/*
-
-# Or upload to TestPyPI first
-python -m twine upload --repository testpypi dist/*
 ```
+
+> **Common pitfall:** If the PyPI upload fails with "version already exists", the version numbers in `pyproject.toml` / `src/kimai_mcp/__init__.py` were not updated before tagging. Update both files, commit, and re-create the release.
 
 ### 9. Test the Release
 

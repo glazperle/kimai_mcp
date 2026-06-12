@@ -1,49 +1,37 @@
 {
-  "description": "Claude Desktop configuration for remote Kimai MCP server with per-client authentication",
-  "mcpServers": {
-    "kimai": {
-      "url": "http://your-server-address:8000/sse",
-      "headers": {
-        "Authorization": "Bearer your-mcp-server-token-here",
-        "X-Kimai-Token": "your-personal-kimai-api-token"
-      }
-    }
+  "description": "Connecting to a remote Kimai MCP server (Streamable HTTP with OAuth 2.1, since v2.12.0)",
+  "connector_setup": {
+    "url": "https://mcp.example.com/mcp",
+    "steps": [
+      "1. Admin: set an 'auth_secret' for your user in config/users.json on the server",
+      "2. In Claude.ai: Settings -> Connectors -> Add custom connector",
+      "3. Enter the URL above (the shared /mcp endpoint, WITHOUT a user slug)",
+      "4. Claude.ai registers itself automatically via Dynamic Client Registration",
+      "5. When connecting, a login page appears: enter your user slug and auth_secret"
+    ]
   },
   "notes": [
-    "SERVER SETUP:",
-    "- Replace 'your-server-address' with your actual server IP or domain",
-    "- Replace 'your-mcp-server-token-here' with the MCP server token from logs",
+    "SERVER SETUP (admin):",
+    "- Start the server behind an HTTPS reverse proxy, for example:",
+    "  kimai-mcp-streamable --users-config ./config/users.json --public-url https://mcp.example.com --trusted-proxy 127.0.0.1 --oauth-state-file ./config/oauth_clients.json --disable-legacy-slugs",
+    "- Each user entry in users.json needs: kimai_url, kimai_token and auth_secret",
+    "- Generate secrets with: python -c \"import secrets; print(secrets.token_urlsafe(32))\"",
     "",
-    "YOUR CREDENTIALS:",
-    "- Replace 'your-personal-kimai-api-token' with YOUR Kimai API token",
-    "- Each user uses their OWN Kimai API token (not shared!)",
-    "- Get your token from your Kimai user profile > API section",
+    "TOKENS:",
+    "- Access tokens are valid for 1 hour and refreshed automatically (up to 30 days)",
+    "- Tokens are kept in memory: reconnect the connector after a server restart",
     "",
-    "OPTIONAL HEADERS:",
-    "- X-Kimai-URL: Override default Kimai server URL (if needed)",
-    "- X-Kimai-User: Default user ID for operations",
+    "LEGACY (DEPRECATED):",
+    "- The old per-user URLs https://mcp.example.com/mcp/{user-slug} still work but are deprecated",
+    "- Migrate to the OAuth endpoint /mcp and start the server with --disable-legacy-slugs",
+    "",
+    "SSE SERVER (REMOVED FROM DOCS):",
+    "- The SSE server (kimai-mcp-server, /sse endpoint with Authorization/X-Kimai-Token headers)",
+    "  is deprecated and not functional; do not use it",
     "",
     "SECURITY:",
-    "- Your Kimai token is sent securely to the server",
-    "- Server creates isolated session with YOUR permissions",
-    "- All actions are auditable under your Kimai user account",
-    "- No shared credentials = better security and compliance",
-    "",
-    "PRODUCTION:",
-    "- Use HTTPS: https://mcp.your-domain.com/sse",
-    "- For internal network: http://192.168.1.100:8000/sse"
-  ],
-  "example_with_all_headers": {
-    "mcpServers": {
-      "kimai": {
-        "url": "http://your-server-address:8000/sse",
-        "headers": {
-          "Authorization": "Bearer your-mcp-server-token-here",
-          "X-Kimai-Token": "your-personal-kimai-api-token",
-          "X-Kimai-URL": "https://your-kimai-instance.com",
-          "X-Kimai-User": "42"
-        }
-      }
-    }
-  }
+    "- Kimai credentials are stored server-side only; nothing is configured in the client",
+    "- Each user keeps their individual Kimai permissions and audit trail",
+    "- See DEPLOYMENT.md for the full deployment guide"
+  ]
 }

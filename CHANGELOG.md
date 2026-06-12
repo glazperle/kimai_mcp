@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] - 2026-06-12
+
+### Upgrade Notes
+
+Nothing breaks for existing setups, but please note:
+
+- **Dependency bump**: `mcp>=1.27.0` is now required (was `>=0.9.0`). `pip install --upgrade kimai-mcp` handles this automatically.
+- **Streamable HTTP server**: Your existing `/mcp/{slug}` URLs keep working, but they are now deprecated in favor of OAuth 2.1 (see below). The server logs a warning at startup if a slug has low entropy — treat slug URLs like passwords or migrate to OAuth. Use `--disable-legacy-slugs` to turn slug URLs off entirely.
+- **users.json**: The `kimai_user_id` field never had any effect and has been removed. Files that still contain it keep loading (the field is ignored). Slugs must match `[a-zA-Z0-9_-]+`; anything else is now rejected at startup.
+- **SSE server (`kimai-mcp-server`) is deprecated**: It was non-functional (broken transport wiring) and now prints a deprecation warning. Migrate remote setups to `kimai-mcp-streamable`.
+- **`--kimai-user` / `KIMAI_DEFAULT_USER` is deprecated**: It never had any effect; it is still accepted but ignored (with a warning). Remove it from your configs.
+- **Error output format changed**: API errors returned to the MCP client now include the HTTP status, validation details, and a permission hint on 403. Only relevant if you parse error strings.
+- **Kimai server version requirements for new features**: the `comment` tool requires Kimai 2.57+, invoice meta fields require Kimai 2.56+. Everything else works with older Kimai versions as before.
+
+### Added
+
+- **OAuth 2.1 for the Streamable HTTP server** (Claude.ai Connectors)
+  - New protected `/mcp` endpoint (no slug) with Bearer-token authentication
+  - Dynamic Client Registration, mandatory PKCE (S256), refresh-token rotation
+  - Login form at `/oauth/login` (user slug + new per-user `auth_secret` in users.json or `KIMAI_USER_<SLUG>_AUTH_SECRET`)
+  - New CLI options / env vars: `--public-url` (`KIMAI_MCP_PUBLIC_URL`), `--trusted-proxy` (`KIMAI_MCP_TRUSTED_PROXIES`), `--disable-legacy-slugs` (`KIMAI_MCP_DISABLE_LEGACY_SLUGS`), `--oauth-state-file` (`KIMAI_MCP_OAUTH_STATE_FILE`)
+- **New `comment` tool** (12th tool): list/create/delete/pin comments on projects and customers (Kimai 2.57+)
+- **Invoice meta fields**: `meta` tool now supports `entity: "invoice"` (Kimai 2.56+); all fields are sent in a single request
+- Dispatch smoke tests covering every tool action against a spec'd client mock, plus OAuth/security test suites
+
+### Fixed
+
+- **Five completely broken tool actions** (called non-existent client methods or wrong signatures): `timesheet export_toggle`, `timesheet batch_export`, `absence batch_approve`, `entity invoice list`, `entity holiday list`, and `meta update` (passed a list where the API client expects single fields)
+- `entity holiday list` / holiday calendar returned 400 from Kimai because dates were sent date-only; they now use full ISO datetime (verified against Kimai 2.60.0)
+- `timer active` crashed with a timezone error as soon as a timer was running
+- Tool outputs contained literal `\n` text instead of line breaks (~270 occurrences)
+- Rate listing never showed internal rate and fixed/hourly type; absence listing never showed end date and half-day flag (wrong attribute names)
+- `entity project list` ignored the `term` search filter
+- Broken JSON schema keyword (`allOff`) disabled conditional validation in the `entity` tool
+- Auto-pagination in the client was unreachable from the `timesheet` tool and ignored singular entity filters
+- MCP handshake reported hardcoded version 2.0.0 instead of the package version
+- httpx client leak when a user session failed to initialize (Streamable HTTP server)
+- Rate-limiter and enumeration-protection cleanup never ran (unbounded memory growth)
+- `X-Forwarded-For` was trusted unconditionally, allowing rate-limit bypass; now only honored behind a configured `--trusted-proxy`
+
+### Changed
+
+- Centralized error handling: API errors now reach the client with status code, validation details, and a 403 permission hint (relevant since Kimai 2.57/2.58 enforce permissions more strictly)
+- Performance: `user_scope="all"` operations (absences, statistics, attendance, bulk lock/unlock) now run user lookups and per-user requests in parallel; shared user-discovery helper replaces six duplicated code paths; `config type=all` fetches in parallel; tag listing filters server-side
+- `analyze_project_team` stops fetching at the dataset limit instead of discarding data afterwards, and searches projects server-side
+
+### Deprecated
+
+- SSE server (`kimai-mcp-server`) — non-functional, use `kimai-mcp-streamable`
+- `--kimai-user` / `KIMAI_DEFAULT_USER` — never had any effect
+- `/mcp/{slug}` URLs on the Streamable HTTP server — use OAuth at `/mcp`
+
+### Removed
+
+- `kimai_user_id` from users.json / `KIMAI_USER_*_USER_ID` env vars (dead configuration)
+- `sse-starlette` dependency (unused)
+
+## [2.11.3] - 2026-04-21
+
+### Fixed
+
+- Timesheet list no longer crashes when `begin`/`end` filters are missing (#12, #13)
+
+## [2.11.2] - 2026-01-07
+
+### Fixed
+
+- Version is imported from `__init__.py` instead of being hardcoded in `server.py`
+
+## [2.11.1] - 2026-01-01
+
+### Changed
+
+- Better work contract error handling
+
 ## [2.10.0] - 2025-12-31
 
 ### Added

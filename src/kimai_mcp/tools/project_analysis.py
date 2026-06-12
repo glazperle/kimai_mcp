@@ -7,7 +7,10 @@ from collections import defaultdict
 
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient, KimaiAPIError
-from ..models import TimesheetFilter
+from ..models import TimesheetFilter, ProjectFilter
+
+# Safety limit: stop fetching timesheets once this many entries were collected
+MAX_ANALYSIS_RESULTS = 10000
 
 
 def analyze_project_team_tool() -> Tool:
@@ -43,15 +46,17 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
     include_details = arguments.get('include_details', True)
     
     try:
-        # 1. Find project by name
-        projects = await client.get_projects()
+        # 1. Find project by name (server-side term search instead of loading all projects)
+        projects = await client.get_projects(ProjectFilter(term=project_name))
         matching_projects = [p for p in projects if project_name.lower() in p.name.lower()]
-        
+
         if not matching_projects:
+            # Load all projects only to present available options
+            all_projects = await client.get_projects()
             return [TextContent(
-                type="text", 
-                text=f"❌ No project found matching '{project_name}'. Available projects:\n" + 
-                     "\n".join([f"• {p.name}" for p in projects[:10]])
+                type="text",
+                text=f"❌ No project found matching '{project_name}'. Available projects:\n" +
+                     "\n".join([f"• {p.name}" for p in all_projects[:10]])
             )]
         
         if len(matching_projects) > 1:
@@ -109,48 +114,49 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
         )
         
         try:
-            # 4. Fetch data in parallel for better performance
+            # 4. Fetch data in parallel for better performance.
+            # The fetch is capped at MAX_ANALYSIS_RESULTS so huge datasets
+            # don't get downloaded completely before the safety check.
             timesheets, users, activities = await asyncio.gather(
-                client.get_timesheets(filters),
+                client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS),
                 client.get_users(full=False),  # Use optimized performance mode
                 client.get_activities()
             )
             timesheets, fetched_all, last_page = timesheets
-            
+
             # Post-process team filtering if needed
             if user_scope == 'team':
                 team_user_ids_int = [int(uid) for uid in team_user_ids]
                 timesheets = [ts for ts in timesheets if ts.user in team_user_ids_int]
         except KimaiAPIError as e:
-            error_str = str(e).lower()
-            if "403" in str(e) or "permission" in error_str or "unauthorized" in error_str:
+            if e.status_code in (401, 403):
                 return [TextContent(
-                    type="text", 
+                    type="text",
                     text=f"❌ Insufficient permissions to access project '{project.name}' data.\n\n**Required permissions:**\n• `view_other_timesheet` - to see all team members\n• `view_user` - to access user information\n\n**Tip:** Try asking your Kimai admin to grant these permissions or use `user_scope: 'self'` to see only your own data."
                 )]
-            elif "not found" in error_str or "404" in str(e):
+            elif e.status_code == 404:
                 return [TextContent(
-                    type="text", 
+                    type="text",
                     text=f"❌ Project '{project.name}' was found but some related data is not accessible. This might indicate deleted/archived data."
                 )]
             else:
                 # Re-raise unexpected errors with more context
                 return [TextContent(
-                    type="text", 
+                    type="text",
                     text=f"❌ API Error while analyzing project '{project.name}': {str(e)}\n\nPlease check your Kimai connection and try again."
                 )]
-        
+
         if not timesheets:
             return [TextContent(
-                type="text", 
+                type="text",
                 text=f"📋 No timesheets found for project '{project.name}' in the specified period."
             )]
-        
-        # Safety check for very large datasets
-        if len(timesheets) > 10000:
+
+        # Safety check: fetch was aborted because the dataset exceeds the limit
+        if len(timesheets) >= MAX_ANALYSIS_RESULTS:
             return [TextContent(
-                type="text", 
-                text=f"⚠️ Dataset too large: {len(timesheets)} entries found for project '{project.name}'.\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
+                type="text",
+                text=f"⚠️ Dataset too large: more than {MAX_ANALYSIS_RESULTS} entries found for project '{project.name}' (fetch stopped at {len(timesheets)}).\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
             )]
         
         # Create lookup dictionaries

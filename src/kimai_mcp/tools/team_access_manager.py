@@ -51,23 +51,21 @@ async def handle_team_access(client: KimaiClient, **params) -> List[TextContent]
     
     if not team_id:
         return [TextContent(type="text", text="Error: 'team_id' parameter is required")]
-    
-    try:
-        if action == "add_member":
-            return await _handle_add_member(client, team_id, user_id)
-        elif action == "remove_member":
-            return await _handle_remove_member(client, team_id, user_id)
-        elif action == "grant":
-            return await _handle_grant_access(client, team_id, target, target_id)
-        elif action == "revoke":
-            return await _handle_revoke_access(client, team_id, target, target_id)
-        else:
-            return [TextContent(
-                type="text",
-                text=f"Error: Unknown action '{action}'. Valid actions: add_member, remove_member, grant, revoke"
-            )]
-    except Exception as e:
-        return [TextContent(type="text", text=f"Error: {str(e)}")]
+
+    # Errors propagate to the central handler in server.py
+    if action == "add_member":
+        return await _handle_add_member(client, team_id, user_id)
+    elif action == "remove_member":
+        return await _handle_remove_member(client, team_id, user_id)
+    elif action == "grant":
+        return await _handle_grant_access(client, team_id, target, target_id)
+    elif action == "revoke":
+        return await _handle_revoke_access(client, team_id, target, target_id)
+    else:
+        return [TextContent(
+            type="text",
+            text=f"Error: Unknown action '{action}'. Valid actions: add_member, remove_member, grant, revoke"
+        )]
 
 
 async def _handle_add_member(client: KimaiClient, team_id: int, user_id: Optional[int]) -> List[TextContent]:

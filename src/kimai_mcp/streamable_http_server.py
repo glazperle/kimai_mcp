@@ -3,16 +3,22 @@
 This server implements the MCP Streamable HTTP transport specification,
 allowing it to work as a remote MCP server with Claude.ai Connectors.
 
-Each user gets their own endpoint (/mcp/{user_slug}) with their own
-Kimai credentials configured server-side.
+Authentication (v2.12+):
+- OAuth 2.1 (recommended): single protected endpoint /mcp. Clients register
+  via Dynamic Client Registration, users authenticate with their user slug
+  and per-user auth_secret on an HTML login form (PKCE S256 mandatory).
+- Legacy (deprecated): per-user endpoints /mcp/{user_slug} with secret slugs.
+  Can be disabled with --disable-legacy-slugs.
 
 Security features:
 - Rate limiting (configurable requests per minute)
 - Enumeration protection with random delays
 - Security headers
+- Proxy headers (X-Forwarded-For) only honored from trusted proxies
 """
 
 import argparse
+import asyncio
 import contextlib
 import logging
 import os
@@ -20,24 +26,36 @@ import re
 from collections.abc import AsyncIterator
 from typing import Any, Dict, List, Optional
 
+from pydantic import AnyHttpUrl
 from starlette.applications import Starlette
+from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcp.server import Server
+from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAuthMiddleware
+from mcp.server.auth.provider import ProviderTokenVerifier
+from mcp.server.auth.routes import (
+    build_resource_metadata_url,
+    create_auth_routes,
+    create_protected_resource_routes,
+)
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool, TextContent
 
 from .client import KimaiClient, KimaiAPIError
-from .server import __version__
+from .oauth import KimaiOAuthProvider
+from .server import __version__, format_api_error
 from .user_config import UsersConfig, UserConfig
 from .security import (
     EnumerationProtection,
     RateLimitConfig,
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
+    get_client_ip,
     random_delay,
 )
 
@@ -51,10 +69,27 @@ from .tools.calendar_meta import calendar_tool, meta_tool, user_current_tool, ha
     handle_user_current
 from .tools.project_analysis import analyze_project_team_tool, handle_analyze_project_team
 from .tools.config_info import config_tool, handle_config
+from .tools.comment_tool import comment_tool, handle_comment
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Interval for the periodic security cleanup task (seconds)
+SECURITY_CLEANUP_INTERVAL_SECONDS = 300
+
+
+def is_low_entropy_slug(slug: str) -> bool:
+    """Heuristic for guessable legacy user slugs.
+
+    A slug is considered low-entropy if it is shorter than 16 characters
+    or consists only of a lowercase word (e.g. a first name).
+    """
+    if len(slug) < 16:
+        return True
+    if slug.isalpha() and slug.islower():
+        return True
+    return False
 
 
 class UserMCPSession:
@@ -126,6 +161,7 @@ class UserMCPSession:
             user_current_tool(),
             analyze_project_team_tool(),
             config_tool(),
+            comment_tool(),
         ]
 
     async def _call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
@@ -158,6 +194,8 @@ class UserMCPSession:
                 return await handle_analyze_project_team(self.kimai_client, arguments)
             elif name == "config":
                 return await handle_config(self.kimai_client, **arguments)
+            elif name == "comment":
+                return await handle_comment(self.kimai_client, **arguments)
             else:
                 return [TextContent(
                     type="text",
@@ -165,36 +203,59 @@ class UserMCPSession:
                 )]
 
         except KimaiAPIError as e:
-            logger.error(f"Kimai API Error for user '{self.user_slug}' in tool {name}: {e.message}")
-            return [TextContent(type="text", text=f"Kimai API Error: {e.message} (Status: {e.status_code})")]
+            logger.error(
+                f"Kimai API Error for user '{self.user_slug}' in tool {name}: "
+                f"{e.message} (Status: {e.status_code}), Details: {e.details}"
+            )
+            # Use the shared formatter so stdio and remote transports stay identical
+            return [TextContent(type="text", text=format_api_error(e))]
         except Exception as e:
             logger.error(f"Error for user '{self.user_slug}' calling tool {name}: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error: {str(e)}")]
 
 
 class MCPRoutingMiddleware:
-    """ASGI Middleware that routes /mcp/{user_slug} requests to the appropriate session manager.
+    """ASGI middleware that routes MCP endpoints to the appropriate session manager.
 
-    The StreamableHTTPSessionManager requires direct ASGI access (scope, receive, send),
-    so we intercept MCP requests before they reach Starlette's router.
+    Routes:
+    - /mcp: OAuth-protected endpoint. Delegated to the bearer-auth wrapped app,
+      which maps the verified token's subject (user slug) to the session.
+    - /mcp/{user_slug}: legacy (deprecated) per-user endpoint, optionally disabled.
+
+    The StreamableHTTPSessionManager requires direct ASGI access (scope, receive,
+    send), so we intercept MCP requests before they reach Starlette's router.
 
     Security features:
     - Random delay on 404 to prevent timing-based enumeration attacks
     - Enumeration protection to block clients with excessive 404s
+    - Proxy headers only honored from trusted proxies
     """
 
     # Pattern to match /mcp/{user_slug} paths
     MCP_PATH_PATTERN = re.compile(r"^/mcp/([a-zA-Z0-9_-]+)$")
 
-    def __init__(self, app: ASGIApp, user_sessions: Dict[str, UserMCPSession]):
+    def __init__(
+        self,
+        app: ASGIApp,
+        user_sessions: Dict[str, UserMCPSession],
+        oauth_mcp_app: Optional[ASGIApp] = None,
+        legacy_slugs_enabled: bool = True,
+        trusted_proxies: Optional[List[str]] = None,
+    ):
         """Initialize middleware.
 
         Args:
             app: The wrapped ASGI application (Starlette)
             user_sessions: Dictionary of user slug to session
+            oauth_mcp_app: Bearer-auth protected ASGI app serving /mcp
+            legacy_slugs_enabled: Whether the deprecated /mcp/{slug} routes are served
+            trusted_proxies: IPs of reverse proxies whose forwarding headers may be trusted
         """
         self.app = app
         self.user_sessions = user_sessions
+        self.oauth_mcp_app = oauth_mcp_app
+        self.legacy_slugs_enabled = legacy_slugs_enabled
+        self.trusted_proxies = trusted_proxies or []
         # Enumeration protection: block clients with excessive 404s
         self.enumeration_protection = EnumerationProtection(
             max_404_per_minute=10,
@@ -202,16 +263,8 @@ class MCPRoutingMiddleware:
         )
 
     def _get_client_ip(self, scope: Scope) -> str:
-        """Extract client IP from ASGI scope."""
-        headers = dict(scope.get("headers", []))
-        forwarded = headers.get(b"x-forwarded-for", b"").decode()
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        real_ip = headers.get(b"x-real-ip", b"").decode()
-        if real_ip:
-            return real_ip.strip()
-        client = scope.get("client")
-        return client[0] if client else "unknown"
+        """Extract client IP from ASGI scope (proxy headers only from trusted proxies)."""
+        return get_client_ip(scope, self.trusted_proxies)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Handle ASGI request."""
@@ -220,9 +273,18 @@ class MCPRoutingMiddleware:
             return
 
         path = scope.get("path", "")
-        match = self.MCP_PATH_PATTERN.match(path)
 
+        # OAuth-protected endpoint (token-based user mapping)
+        if path == "/mcp" and self.oauth_mcp_app is not None:
+            await self.oauth_mcp_app(scope, receive, send)
+            return
+
+        match = self.MCP_PATH_PATTERN.match(path)
         if match:
+            if not self.legacy_slugs_enabled:
+                response = JSONResponse({"error": "Not found"}, status_code=404)
+                await response(scope, receive, send)
+                return
             user_slug = match.group(1)
             await self._handle_mcp_request(scope, receive, send, user_slug)
         else:
@@ -232,7 +294,7 @@ class MCPRoutingMiddleware:
     async def _handle_mcp_request(
         self, scope: Scope, receive: Receive, send: Send, user_slug: str
     ) -> None:
-        """Handle MCP request for a specific user."""
+        """Handle MCP request for a specific user (legacy slug routing)."""
         client_ip = self._get_client_ip(scope)
 
         # Check if client is blocked due to enumeration attempts
@@ -282,6 +344,10 @@ class StreamableHTTPMCPServer:
         host: str = "0.0.0.0",
         port: int = 8000,
         rate_limit_rpm: int = 60,
+        public_url: Optional[str] = None,
+        trusted_proxies: Optional[List[str]] = None,
+        disable_legacy_slugs: bool = False,
+        oauth_state_file: Optional[str] = None,
     ):
         """Initialize the server.
 
@@ -290,11 +356,36 @@ class StreamableHTTPMCPServer:
             host: Host to bind to
             port: Port to bind to
             rate_limit_rpm: Maximum requests per minute per IP (default: 60, 0 to disable)
+            public_url: Public base URL of this server, used as OAuth issuer and
+                resource URL (required behind a reverse proxy). Defaults to
+                http://localhost:{port}.
+            trusted_proxies: IPs of reverse proxies whose X-Forwarded-For /
+                X-Real-IP headers may be trusted.
+            disable_legacy_slugs: Disable the deprecated /mcp/{user_slug} routes.
+            oauth_state_file: Optional JSON file to persist registered OAuth clients.
         """
         self.users_config = users_config
         self.host = host
         self.port = port
         self.user_sessions: Dict[str, UserMCPSession] = {}
+        self.trusted_proxies = list(trusted_proxies) if trusted_proxies else []
+        self.legacy_slugs_enabled = not disable_legacy_slugs
+
+        self.public_url = (public_url or f"http://localhost:{port}").rstrip("/")
+
+        # OAuth 2.1 authorization server settings (SDK scaffolding)
+        self.auth_settings = AuthSettings(
+            issuer_url=AnyHttpUrl(self.public_url),
+            resource_server_url=AnyHttpUrl(f"{self.public_url}/mcp"),
+            client_registration_options=ClientRegistrationOptions(enabled=True),
+            revocation_options=RevocationOptions(enabled=True),
+            required_scopes=None,
+        )
+        self.oauth_provider = KimaiOAuthProvider(
+            users_config=users_config,
+            public_url=self.public_url,
+            state_file=oauth_state_file,
+        )
 
         # Rate limiting configuration
         self.rate_limit_config = RateLimitConfig(
@@ -302,17 +393,25 @@ class StreamableHTTPMCPServer:
             enabled=rate_limit_rpm > 0,
         )
 
+        # References for the periodic security cleanup task
+        self._rate_limit_middleware: Optional[RateLimitMiddleware] = None
+        self._routing_middleware: Optional[MCPRoutingMiddleware] = None
+
     async def initialize_users(self) -> None:
         """Initialize all user sessions."""
         for slug, config in self.users_config.users.items():
+            session = UserMCPSession(slug, config)
             try:
-                session = UserMCPSession(slug, config)
                 await session.initialize()
-                self.user_sessions[slug] = session
-                logger.info(f"Initialized session for user '{slug}'")
             except Exception as e:
                 logger.error(f"Failed to initialize user '{slug}': {e}")
+                # Release resources (e.g. the httpx client) of the failed session
+                with contextlib.suppress(Exception):
+                    await session.cleanup()
                 # Continue with other users
+                continue
+            self.user_sessions[slug] = session
+            logger.info(f"Initialized session for user '{slug}'")
 
         if not self.user_sessions:
             raise RuntimeError("No user sessions could be initialized")
@@ -326,30 +425,76 @@ class StreamableHTTPMCPServer:
             except Exception as e:
                 logger.error(f"Error cleaning up user '{slug}': {e}")
 
+    def _warn_low_entropy_slugs(self) -> None:
+        """Warn about guessable legacy slugs at startup."""
+        if not self.legacy_slugs_enabled:
+            return
+        for slug in self.users_config.users:
+            if is_low_entropy_slug(slug):
+                logger.warning(
+                    f"User slug '{slug}' has low entropy (shorter than 16 characters or a "
+                    f"plain lowercase word) and is exposed at the deprecated legacy endpoint "
+                    f"/mcp/{slug}. Anyone who guesses this slug gains full access to the "
+                    f"associated Kimai account. Please switch to the OAuth-protected /mcp "
+                    f"endpoint (set 'auth_secret' for the user) and start the server with "
+                    f"--disable-legacy-slugs."
+                )
+
+    async def _security_cleanup_loop(self) -> None:
+        """Periodically clean up rate limiter, enumeration protection and OAuth state."""
+        while True:
+            await asyncio.sleep(SECURITY_CLEANUP_INTERVAL_SECONDS)
+            try:
+                if self._rate_limit_middleware is not None:
+                    await self._rate_limit_middleware.limiter.cleanup_old_entries()
+                if self._routing_middleware is not None:
+                    await self._routing_middleware.enumeration_protection.cleanup_old_entries()
+                self.oauth_provider.cleanup_expired()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Error in security cleanup task: {e}")
+
     @contextlib.asynccontextmanager
     async def lifespan(self, app: Starlette) -> AsyncIterator[None]:
         """Manage server lifecycle."""
         logger.info(f"Starting Streamable HTTP MCP server on {self.host}:{self.port}")
         logger.info(f"Version: {__version__}")
+        logger.info(f"Public URL (OAuth issuer): {self.public_url}")
 
         # Initialize users
         await self.initialize_users()
+        self._warn_low_entropy_slugs()
 
-        # Start all session managers
-        async with contextlib.AsyncExitStack() as stack:
-            for slug, session in self.user_sessions.items():
-                if session.session_manager:
-                    await stack.enter_async_context(session.session_manager.run())
-                    logger.info(f"Started session manager for user '{slug}'")
+        # Periodic security cleanup (rate limiter / enumeration protection / OAuth)
+        cleanup_task = asyncio.create_task(self._security_cleanup_loop())
 
-            logger.info(f"Server ready with {len(self.user_sessions)} user endpoint(s)")
-            logger.info(f"Endpoints: {', '.join(f'/mcp/{s}' for s in self.user_sessions.keys())}")
+        try:
+            # Start all session managers
+            async with contextlib.AsyncExitStack() as stack:
+                for slug, session in self.user_sessions.items():
+                    if session.session_manager:
+                        await stack.enter_async_context(session.session_manager.run())
+                        logger.info(f"Started session manager for user '{slug}'")
 
-            yield
+                logger.info(f"Server ready with {len(self.user_sessions)} user session(s)")
+                logger.info(f"OAuth-protected MCP endpoint: {self.public_url}/mcp")
+                if self.legacy_slugs_enabled:
+                    logger.warning(
+                        "Legacy slug endpoints /mcp/{user_slug} are enabled (DEPRECATED). "
+                        "Use the OAuth endpoint /mcp and --disable-legacy-slugs instead."
+                    )
+                else:
+                    logger.info("Legacy slug endpoints are disabled")
 
-        # Cleanup
-        logger.info("Shutting down...")
-        await self.cleanup_users()
+                yield
+        finally:
+            # Cleanup
+            logger.info("Shutting down...")
+            cleanup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cleanup_task
+            await self.cleanup_users()
 
     async def health_check(self, request: Request) -> JSONResponse:
         """Health check endpoint.
@@ -365,34 +510,98 @@ class StreamableHTTPMCPServer:
 
     async def root(self, request: Request) -> JSONResponse:
         """Root endpoint with server info."""
-        base_url = str(request.base_url).rstrip("/")
         return JSONResponse({
             "name": "Kimai MCP Server",
             "version": __version__,
             "transport": "streamable-http",
             "endpoints": {
-                "health": f"{base_url}/health",
-                "mcp": f"{base_url}/mcp/{{user_slug}}",
+                "health": f"{self.public_url}/health",
+                "mcp": f"{self.public_url}/mcp",
+                "oauth_metadata": f"{self.public_url}/.well-known/oauth-authorization-server",
             },
             "documentation": "https://github.com/glazperle/kimai_mcp",
         })
 
+    async def _handle_oauth_mcp_request(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Serve /mcp for an authenticated user (token subject -> session)."""
+        user = scope.get("user")
+        access_token = getattr(user, "access_token", None)
+        subject = getattr(access_token, "subject", None)
+
+        session = self.user_sessions.get(subject) if subject else None
+        if session is None or session.session_manager is None:
+            response = JSONResponse(
+                {"error": "No active session for the authenticated user"},
+                status_code=403,
+            )
+            await response(scope, receive, send)
+            return
+
+        await session.session_manager.handle_request(scope, receive, send)
+
+    def _create_oauth_mcp_app(self) -> ASGIApp:
+        """Build the bearer-auth protected ASGI app for the /mcp endpoint."""
+        resource_metadata_url = build_resource_metadata_url(self.auth_settings.resource_server_url)
+        return AuthenticationMiddleware(
+            app=RequireAuthMiddleware(
+                self._handle_oauth_mcp_request,
+                required_scopes=self.auth_settings.required_scopes or [],
+                resource_metadata_url=resource_metadata_url,
+            ),
+            backend=BearerAuthBackend(ProviderTokenVerifier(self.oauth_provider)),
+        )
+
     def create_app(self) -> ASGIApp:
-        """Create the ASGI application with MCP routing middleware."""
-        # Create Starlette app for non-MCP routes
-        # Note: /users endpoint removed for security (prevents user enumeration)
+        """Create the ASGI application with OAuth, MCP routing and security middlewares."""
         routes = [
             Route("/", endpoint=self.root, methods=["GET"]),
             Route("/health", endpoint=self.health_check, methods=["GET"]),
         ]
+
+        # OAuth 2.1 authorization server routes (RFC 8414 metadata, /authorize,
+        # /token, /register, /revoke) provided by the MCP SDK scaffolding.
+        routes.extend(
+            create_auth_routes(
+                provider=self.oauth_provider,
+                issuer_url=self.auth_settings.issuer_url,
+                service_documentation_url=None,
+                client_registration_options=self.auth_settings.client_registration_options,
+                revocation_options=self.auth_settings.revocation_options,
+            )
+        )
+
+        # RFC 9728 protected resource metadata for /mcp
+        routes.extend(
+            create_protected_resource_routes(
+                resource_url=self.auth_settings.resource_server_url,
+                authorization_servers=[self.auth_settings.issuer_url],
+                resource_name="Kimai MCP Server",
+            )
+        )
+
+        # HTML login form for the authorization flow
+        routes.extend(self.oauth_provider.routes())
 
         starlette_app = Starlette(
             routes=routes,
             lifespan=self.lifespan,
         )
 
-        # Wrap with MCP routing middleware
-        return MCPRoutingMiddleware(starlette_app, self.user_sessions)
+        # Wrap with MCP routing middleware (handles /mcp and legacy /mcp/{slug})
+        self._routing_middleware = MCPRoutingMiddleware(
+            starlette_app,
+            self.user_sessions,
+            oauth_mcp_app=self._create_oauth_mcp_app(),
+            legacy_slugs_enabled=self.legacy_slugs_enabled,
+            trusted_proxies=self.trusted_proxies,
+        )
+
+        # Security middlewares (order matters: rate limit -> security headers -> app)
+        app: ASGIApp = SecurityHeadersMiddleware(self._routing_middleware)
+        self._rate_limit_middleware = RateLimitMiddleware(
+            app, self.rate_limit_config, trusted_proxies=self.trusted_proxies
+        )
+        return self._rate_limit_middleware
 
     def run(self) -> None:
         """Run the server."""
@@ -405,10 +614,6 @@ class StreamableHTTPMCPServer:
             )
 
         app = self.create_app()
-
-        # Wrap with security middlewares (order matters: rate limit -> security headers -> app)
-        app = SecurityHeadersMiddleware(app)
-        app = RateLimitMiddleware(app, self.rate_limit_config)
 
         uvicorn.run(
             app,
@@ -443,6 +648,32 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="Path to users.json config file (or set USERS_CONFIG_FILE env var)",
     )
+    parser.add_argument(
+        "--public-url",
+        metavar="URL",
+        help=(
+            "Public base URL of this server, used as OAuth issuer/resource URL "
+            "(required behind a reverse proxy; or set KIMAI_MCP_PUBLIC_URL env var). "
+            "Default: http://localhost:{port}"
+        ),
+    )
+    parser.add_argument(
+        "--oauth-state-file",
+        metavar="FILE",
+        help=(
+            "Optional JSON file to persist registered OAuth clients across restarts "
+            "(or set KIMAI_MCP_OAUTH_STATE_FILE env var)"
+        ),
+    )
+    parser.add_argument(
+        "--disable-legacy-slugs",
+        action="store_true",
+        help=(
+            "Disable the deprecated /mcp/{user_slug} endpoints; only the "
+            "OAuth-protected /mcp endpoint remains "
+            "(or set KIMAI_MCP_DISABLE_LEGACY_SLUGS=true)"
+        ),
+    )
 
     # Security settings
     parser.add_argument(
@@ -451,6 +682,19 @@ def create_parser() -> argparse.ArgumentParser:
         default=60,
         metavar="N",
         help="Maximum requests per minute per IP (default: 60, 0 to disable)",
+    )
+    parser.add_argument(
+        "--trusted-proxy",
+        action="append",
+        default=None,
+        metavar="IP",
+        dest="trusted_proxies",
+        help=(
+            "IP of a trusted reverse proxy whose X-Forwarded-For/X-Real-IP headers "
+            "are honored; may be given multiple times "
+            "(or set KIMAI_MCP_TRUSTED_PROXIES as comma-separated list). "
+            "Without trusted proxies these headers are ignored."
+        ),
     )
 
     parser.add_argument(
@@ -479,6 +723,18 @@ def main() -> int:
     if os.getenv("RATE_LIMIT_RPM"):
         rate_limit_rpm = int(os.getenv("RATE_LIMIT_RPM"))
 
+    public_url = args.public_url or os.getenv("KIMAI_MCP_PUBLIC_URL")
+    oauth_state_file = args.oauth_state_file or os.getenv("KIMAI_MCP_OAUTH_STATE_FILE")
+
+    trusted_proxies = list(args.trusted_proxies or [])
+    env_proxies = os.getenv("KIMAI_MCP_TRUSTED_PROXIES")
+    if env_proxies:
+        trusted_proxies.extend(p.strip() for p in env_proxies.split(",") if p.strip())
+
+    disable_legacy_slugs = args.disable_legacy_slugs or (
+        os.getenv("KIMAI_MCP_DISABLE_LEGACY_SLUGS", "").lower() in ("1", "true", "yes")
+    )
+
     try:
         # Load users config
         users_config = UsersConfig.load(args.users_config)
@@ -490,6 +746,10 @@ def main() -> int:
             host=args.host,
             port=args.port,
             rate_limit_rpm=rate_limit_rpm,
+            public_url=public_url,
+            trusted_proxies=trusted_proxies,
+            disable_legacy_slugs=disable_legacy_slugs,
+            oauth_state_file=oauth_state_file,
         )
         server.run()
         return 0

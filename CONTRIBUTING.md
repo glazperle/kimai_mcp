@@ -72,8 +72,7 @@ Thank you for your interest in contributing to the Kimai MCP Server! This docume
 
 4. **Test with real Kimai instance:**
    ```bash
-   python test_tools_registration.py
-   python -m kimai_mcp
+   python -m kimai_mcp --kimai-url=https://your-test-kimai.com --kimai-token=your-token
    ```
 
 5. **Commit your changes:**
@@ -190,31 +189,41 @@ kimai_mcp/
 ├── src/kimai_mcp/
 │   ├── __init__.py
 │   ├── __main__.py              # Entry point for python -m kimai_mcp
-│   ├── server.py                # Main MCP server implementation
+│   ├── server.py                # Local MCP server (stdio)
+│   ├── streamable_http_server.py  # Streamable HTTP server with OAuth (Claude.ai Connectors)
+│   ├── sse_server.py            # SSE server (deprecated, non-functional)
+│   ├── oauth.py                 # Embedded OAuth 2.1 authorization server
+│   ├── user_config.py           # Multi-user configuration (users.json / env vars)
+│   ├── security.py              # Rate limiting, security headers, enumeration protection
 │   ├── client.py                # Kimai API client wrapper
 │   ├── models.py                # Pydantic data models
 │   └── tools/                   # MCP tool implementations
 │       ├── __init__.py
 │       ├── batch_utils.py       # Batch operation utilities (asyncio.gather)
 │       ├── entity_manager.py    # Universal CRUD for all entity types
-│       ├── timesheet_consolidated.py  # Timesheet management
+│       ├── timesheet_consolidated.py  # Timesheet and timer tools
 │       ├── rate_manager.py      # Rate management across entities
 │       ├── team_access_manager.py     # Team member/permission management
 │       ├── absence_manager.py   # Absence workflow management
-│       ├── calendar_meta.py     # Calendar and meta field tools
+│       ├── calendar_meta.py     # Calendar, meta field and current-user tools
+│       ├── comment_tool.py      # Project/customer comments (Kimai 2.57+)
 │       ├── project_analysis.py  # Project analytics
-│       └── config_info.py       # Server configuration tools
-├── tests/                       # Test suite
+│       ├── config_info.py       # Server configuration tools
+│       ├── user_discovery.py    # Shared helper to resolve accessible users
+│       ├── absence_analytics.py # Absence statistics helpers
+│       └── timesheet_analytics.py  # Timesheet statistics helpers
+├── tests/                       # Test suite (test_oauth.py, test_security.py, test_timesheet_list.py)
 ├── examples/                    # Usage examples
 └── pyproject.toml              # Project configuration
 ```
 
 ### Key Components
 
-1. **KimaiMCPServer**: Main server class that implements MCP protocol
-2. **KimaiClient**: Async HTTP client for Kimai API
-3. **Tool Modules**: Individual modules for each category of functionality
-4. **Models**: Pydantic models for data validation and serialization
+1. **KimaiMCPServer**: Local stdio server class that implements the MCP protocol
+2. **StreamableHTTPMCPServer**: Multi-user remote server with OAuth 2.1 (Claude.ai Connectors)
+3. **KimaiClient**: Async HTTP client for Kimai API
+4. **Tool Modules**: Individual modules for each category of functionality
+5. **Models**: Pydantic models for data validation and serialization
 
 ## 🚀 Release Process
 
@@ -227,7 +236,7 @@ We follow [Semantic Versioning](https://semver.org/):
 
 ### Changelog
 
-Update `README.md` changelog section with:
+Update `CHANGELOG.md` with:
 - New features added
 - Bug fixes
 - Breaking changes

@@ -56,8 +56,8 @@ def meta_tool() -> Tool:
             "properties": {
                 "entity": {
                     "type": "string",
-                    "enum": ["customer", "project", "activity", "timesheet"],
-                    "description": "The entity type to manage meta fields for"
+                    "enum": ["customer", "project", "activity", "timesheet", "invoice"],
+                    "description": "The entity type to manage meta fields for (invoice requires Kimai 2.56+)"
                 },
                 "entity_id": {
                     "type": "integer",
@@ -106,19 +106,17 @@ async def handle_calendar(client: KimaiClient, **params) -> List[TextContent]:
     """Handle calendar operations."""
     calendar_type = params.get("type")
     filters = params.get("filters", {})
-    
-    try:
-        if calendar_type == "absences":
-            return await _handle_calendar_absences(client, filters)
-        elif calendar_type == "holidays":
-            return await _handle_calendar_holidays(client, filters)
-        else:
-            return [TextContent(
-                type="text",
-                text=f"Error: Unknown calendar type '{calendar_type}'. Valid types: absences, holidays"
-            )]
-    except Exception as e:
-        return [TextContent(type="text", text=f"Error: {str(e)}")]
+
+    # Errors propagate to the central handler in server.py
+    if calendar_type == "absences":
+        return await _handle_calendar_absences(client, filters)
+    elif calendar_type == "holidays":
+        return await _handle_calendar_holidays(client, filters)
+    else:
+        return [TextContent(
+            type="text",
+            text=f"Error: Unknown calendar type '{calendar_type}'. Valid types: absences, holidays"
+        )]
 
 
 async def handle_meta(client: KimaiClient, **params) -> List[TextContent]:
@@ -140,61 +138,60 @@ async def handle_meta(client: KimaiClient, **params) -> List[TextContent]:
     if not data:
         return [TextContent(type="text", text="Error: 'data' parameter is required for update action")]
     
-    try:
-        # Route to appropriate meta handler
-        handlers = {
-            "customer": client.update_customer_meta,
-            "project": client.update_project_meta,
-            "activity": client.update_activity_meta,
-            "timesheet": client.update_timesheet_meta
-        }
-        
-        handler = handlers.get(entity)
-        if not handler:
-            return [TextContent(
-                type="text",
-                text=f"Error: Unknown entity type '{entity}'. Valid types: customer, project, activity, timesheet"
-            )]
-        
-        # Convert data to MetaFieldForm objects
-        meta_fields = [MetaFieldForm(name=field["name"], value=field["value"]) for field in data]
-        
-        # Execute meta update
-        await handler(entity_id, meta_fields)
-        
+    # Route to appropriate meta handler
+    # Errors propagate to the central handler in server.py
+    handlers = {
+        "customer": client.update_customer_meta,
+        "project": client.update_project_meta,
+        "activity": client.update_activity_meta,
+        "timesheet": client.update_timesheet_meta
+    }
+
+    handler = handlers.get(entity)
+    if not handler and entity != "invoice":
         return [TextContent(
             type="text",
-            text=f"Updated {len(meta_fields)} meta field(s) for {entity} ID {entity_id}"
+            text=f"Error: Unknown entity type '{entity}'. Valid types: customer, project, activity, timesheet, invoice"
         )]
-        
-    except Exception as e:
-        return [TextContent(type="text", text=f"Error: {str(e)}")]
+
+    # Convert data to MetaFieldForm objects
+    meta_fields = [MetaFieldForm(name=field["name"], value=field["value"]) for field in data]
+
+    if entity == "invoice":
+        # The invoice endpoint accepts all fields in a single request (Kimai 2.56+)
+        await client.update_invoice_meta(entity_id, meta_fields)
+    else:
+        # API accepts one meta field per request - iterate through each field
+        for meta_field in meta_fields:
+            await handler(entity_id, meta_field)
+
+    return [TextContent(
+        type="text",
+        text=f"Updated {len(meta_fields)} meta field(s) for {entity} ID {entity_id}"
+    )]
 
 
 async def handle_user_current(client: KimaiClient, **params) -> List[TextContent]:
     """Handle current user request."""
-    try:
-        user = await client.get_current_user()
-        
-        result = f"Current User: {user.username} (ID: {user.id})\\n"
-        result += f"Name: {user.alias or 'Not set'}\\n"
-        result += f"Title: {user.title or 'Not set'}\\n"
-        result += f"Status: {'Active' if user.enabled else 'Inactive'}\\n"
-        
-        if hasattr(user, 'language') and user.language:
-            result += f"Language: {user.language}\\n"
-        if hasattr(user, 'timezone') and user.timezone:
-            result += f"Timezone: {user.timezone}\\n"
-        if hasattr(user, 'roles') and user.roles:
-            result += f"Roles: {', '.join(user.roles)}\\n"
-        
-        if hasattr(user, "supervisor") and user.supervisor:
-            result += f"Supervisor: {user.supervisor.username}\\n"
-        
-        return [TextContent(type="text", text=result)]
-        
-    except Exception as e:
-        return [TextContent(type="text", text=f"Error: {str(e)}")]
+    # Errors propagate to the central handler in server.py
+    user = await client.get_current_user()
+
+    result = f"Current User: {user.username} (ID: {user.id})\n"
+    result += f"Name: {user.alias or 'Not set'}\n"
+    result += f"Title: {user.title or 'Not set'}\n"
+    result += f"Status: {'Active' if user.enabled else 'Inactive'}\n"
+
+    if hasattr(user, 'language') and user.language:
+        result += f"Language: {user.language}\n"
+    if hasattr(user, 'timezone') and user.timezone:
+        result += f"Timezone: {user.timezone}\n"
+    if hasattr(user, 'roles') and user.roles:
+        result += f"Roles: {', '.join(user.roles)}\n"
+
+    if hasattr(user, "supervisor") and user.supervisor:
+        result += f"Supervisor: {user.supervisor.username}\n"
+
+    return [TextContent(type="text", text=result)]
 
 
 async def _handle_calendar_absences(client: KimaiClient, filters: Dict) -> List[TextContent]:
@@ -227,22 +224,22 @@ async def _handle_calendar_absences(client: KimaiClient, filters: Dict) -> List[
     if not absences:
         result = "No absences found for the specified calendar period"
     else:
-        result = f"Found {len(absences)} absence event(s) in calendar:\\n\\n"
+        result = f"Found {len(absences)} absence event(s) in calendar:\n\n"
         
         for event in absences:
-            result += f"Title: {event.title}\\n"
-            result += f"  Start: {event.start}\\n"
+            result += f"Title: {event.title}\n"
+            result += f"  Start: {event.start}\n"
             
             if event.end:
-                result += f"  End: {event.end}\\n"
+                result += f"  End: {event.end}\n"
             
             if event.all_day:
-                result += "  All Day: Yes\\n"
+                result += "  All Day: Yes\n"
             
             if event.color:
-                result += f"  Color: {event.color}\\n"
+                result += f"  Color: {event.color}\n"
             
-            result += "\\n"
+            result += "\n"
     
     return [TextContent(type="text", text=result)]
 
@@ -264,21 +261,21 @@ async def _handle_calendar_holidays(client: KimaiClient, filters: Dict) -> List[
     if not holidays:
         result = "No holidays found for the specified calendar period"
     else:
-        result = f"Found {len(holidays)} holiday event(s) in calendar:\\n\\n"
+        result = f"Found {len(holidays)} holiday event(s) in calendar:\n\n"
         
         for event in holidays:
-            result += f"Title: {event.title}\\n"
-            result += f"  Start: {event.start}\\n"
+            result += f"Title: {event.title}\n"
+            result += f"  Start: {event.start}\n"
             
             if event.end:
-                result += f"  End: {event.end}\\n"
+                result += f"  End: {event.end}\n"
             
             if event.all_day:
-                result += "  All Day: Yes\\n"
+                result += "  All Day: Yes\n"
             
             if event.color:
-                result += f"  Color: {event.color}\\n"
+                result += f"  Color: {event.color}\n"
             
-            result += "\\n"
+            result += "\n"
     
     return [TextContent(type="text", text=result)]
