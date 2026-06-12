@@ -138,32 +138,34 @@ async def handle_meta(client: KimaiClient, **params) -> List[TextContent]:
     if not data:
         return [TextContent(type="text", text="Error: 'data' parameter is required for update action")]
     
-    # Route to appropriate meta handler
-    # Errors propagate to the central handler in server.py
+    # Adapter for endpoints that accept only one meta field per request.
+    async def _one_field_per_request(method, eid, fields):
+        for meta_field in fields:
+            await method(eid, meta_field)
+
+    # Every handler is called as handler(entity_id, List[MetaFieldForm]). Single-field
+    # endpoints are wrapped so the invoice batch endpoint isn't a special case.
+    # Errors propagate to the central handler in server.py.
     handlers = {
-        "customer": client.update_customer_meta,
-        "project": client.update_project_meta,
-        "activity": client.update_activity_meta,
-        "timesheet": client.update_timesheet_meta
+        "customer": lambda eid, fields: _one_field_per_request(client.update_customer_meta, eid, fields),
+        "project": lambda eid, fields: _one_field_per_request(client.update_project_meta, eid, fields),
+        "activity": lambda eid, fields: _one_field_per_request(client.update_activity_meta, eid, fields),
+        "timesheet": lambda eid, fields: _one_field_per_request(client.update_timesheet_meta, eid, fields),
+        # Invoice accepts all fields in a single request (Kimai 2.56+).
+        "invoice": client.update_invoice_meta,
     }
 
     handler = handlers.get(entity)
-    if not handler and entity != "invoice":
+    if handler is None:
         return [TextContent(
             type="text",
-            text=f"Error: Unknown entity type '{entity}'. Valid types: customer, project, activity, timesheet, invoice"
+            text=f"Error: Unknown entity type '{entity}'. Valid types: {', '.join(handlers)}"
         )]
 
     # Convert data to MetaFieldForm objects
     meta_fields = [MetaFieldForm(name=field["name"], value=field["value"]) for field in data]
 
-    if entity == "invoice":
-        # The invoice endpoint accepts all fields in a single request (Kimai 2.56+)
-        await client.update_invoice_meta(entity_id, meta_fields)
-    else:
-        # API accepts one meta field per request - iterate through each field
-        for meta_field in meta_fields:
-            await handler(entity_id, meta_field)
+    await handler(entity_id, meta_fields)
 
     return [TextContent(
         type="text",

@@ -966,44 +966,25 @@ class KimaiClient:
         data = await self._request("PATCH", f"/invoices/{invoice_id}/custom-fields", json=payload)
         return Invoice(**data)
 
-    # Comment endpoints (requires Kimai 2.57+)
+    # Comment endpoints (requires Kimai 2.57+).
+    # `entity` is "project" or "customer"; the path segment is the plural form.
 
-    async def get_project_comments(self, project_id: int) -> List[Comment]:
-        """Get comments for a project."""
-        data = await self._request("GET", f"/projects/{project_id}/comments")
+    async def get_comments(self, entity: str, entity_id: int) -> List[Comment]:
+        """Get comments for a project or customer."""
+        data = await self._request("GET", f"/{entity}s/{entity_id}/comments")
         return [Comment(**item) for item in data]
 
-    async def create_project_comment(self, project_id: int, form: CommentForm) -> Comment:
-        """Add a comment to a project."""
-        data = await self._request("POST", f"/projects/{project_id}/comments",
+    async def create_comment(self, entity: str, entity_id: int, form: CommentForm) -> Comment:
+        """Add a comment to a project or customer."""
+        data = await self._request("POST", f"/{entity}s/{entity_id}/comments",
                                    json=form.model_dump(exclude_none=True))
         return Comment(**data)
 
-    async def delete_project_comment(self, project_id: int, comment_id: int) -> None:
-        """Delete a project comment."""
-        await self._request("DELETE", f"/projects/{project_id}/comments/{comment_id}")
+    async def delete_comment(self, entity: str, entity_id: int, comment_id: int) -> None:
+        """Delete a project or customer comment."""
+        await self._request("DELETE", f"/{entity}s/{entity_id}/comments/{comment_id}")
 
-    async def pin_project_comment(self, project_id: int, comment_id: int) -> Comment:
-        """Toggle the pinned status of a project comment."""
-        data = await self._request("PATCH", f"/projects/{project_id}/comments/{comment_id}/pin")
-        return Comment(**data)
-
-    async def get_customer_comments(self, customer_id: int) -> List[Comment]:
-        """Get comments for a customer."""
-        data = await self._request("GET", f"/customers/{customer_id}/comments")
-        return [Comment(**item) for item in data]
-
-    async def create_customer_comment(self, customer_id: int, form: CommentForm) -> Comment:
-        """Add a comment to a customer."""
-        data = await self._request("POST", f"/customers/{customer_id}/comments",
-                                   json=form.model_dump(exclude_none=True))
-        return Comment(**data)
-
-    async def delete_customer_comment(self, customer_id: int, comment_id: int) -> None:
-        """Delete a customer comment."""
-        await self._request("DELETE", f"/customers/{customer_id}/comments/{comment_id}")
-
-    async def pin_customer_comment(self, customer_id: int, comment_id: int) -> Comment:
-        """Toggle the pinned status of a customer comment."""
-        data = await self._request("PATCH", f"/customers/{customer_id}/comments/{comment_id}/pin")
+    async def pin_comment(self, entity: str, entity_id: int, comment_id: int) -> Comment:
+        """Toggle the pinned status of a project or customer comment."""
+        data = await self._request("PATCH", f"/{entity}s/{entity_id}/comments/{comment_id}/pin")
         return Comment(**data)

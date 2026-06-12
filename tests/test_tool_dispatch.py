@@ -229,14 +229,10 @@ def make_mock_client() -> AsyncMock:
     client.get_absences_calendar.return_value = [event]
 
     # Comments
-    client.get_project_comments.return_value = [comment]
-    client.create_project_comment.return_value = comment
-    client.delete_project_comment.return_value = None
-    client.pin_project_comment.return_value = comment
-    client.get_customer_comments.return_value = [comment]
-    client.create_customer_comment.return_value = comment
-    client.delete_customer_comment.return_value = None
-    client.pin_customer_comment.return_value = comment
+    client.get_comments.return_value = [comment]
+    client.create_comment.return_value = comment
+    client.delete_comment.return_value = None
+    client.pin_comment.return_value = comment
 
     # Config / system
     client.get_version.return_value = m.Version(
@@ -723,3 +719,33 @@ def test_schema_enums_match_dispatch_coverage(tool_name, tool_factory, prop):
         f"Dispatch smoke tests use '{tool.name}.{prop}' values that are "
         f"not declared in the schema: {sorted(extra)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared tool registry (single source of truth for both servers)
+# ---------------------------------------------------------------------------
+
+from kimai_mcp.tools import registry  # noqa: E402
+
+
+def test_registry_exposes_every_tested_tool():
+    """all_tools() must cover exactly the tools validated above - so a tool can't
+    be added to one server's registry without being schema-checked, and vice versa."""
+    registry_names = {t.name for t in registry.all_tools()}
+    factory_names = {f().name for f in ALL_TOOL_FACTORIES}
+    assert registry_names == factory_names
+    # all_tools() order matches the declared name order, names are unique
+    assert [t.name for t in registry.all_tools()] == registry.tool_names()
+    assert len(registry.tool_names()) == len(set(registry.tool_names()))
+
+
+@pytest.mark.asyncio
+async def test_registry_dispatch_routes_known_and_unknown():
+    client = make_mock_client()
+    # A known tool routes to its handler and returns TextContent.
+    result = await registry.dispatch_tool(client, "user_current", {})
+    assert_valid_result(result)
+    # An unknown tool yields a clear error instead of raising.
+    unknown = await registry.dispatch_tool(client, "does_not_exist", {})
+    assert_valid_result(unknown)
+    assert "Unknown tool" in unknown[0].text

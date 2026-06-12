@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.1] - 2026-06-12
+
+Follow-up patch addressing the points left open in 2.12.0. No breaking changes.
+
+### Fixed
+
+- **OAuth refresh tokens** now preserve their resource/audience binding across rotations (previously dropped to `None` after the first refresh) and are rejected when presented with a mismatched `client_id` (cross-client misuse).
+- **OAuth client store** is no longer unbounded: dynamically registered clients are evicted after 30 days of inactivity (last-seen renewed on use) or once their secret expires; the state file is rewritten once after pruning.
+- **Streamable HTTP server** now (re)initializes a user session on demand. A configured user whose startup init failed (e.g. Kimai briefly unreachable) no longer stays in a permanent error loop until the next restart; the endpoint returns 503 (was 403) while no session can be established.
+
+### Changed (internal, no behavior change)
+
+- Both servers now share a single tool registry (`tools/registry.py`) for the tool list and name→handler dispatch, removing the duplicated dispatch tables that could drift apart.
+- `meta` tool uses a uniform handler map; invoice is no longer a special case.
+- Comment client methods consolidated (8 → 4, parameterized by entity); `user_discovery` reuses the shared `execute_batch` helper.
+
 ## [2.12.0] - 2026-06-12
 
 ### Upgrade Notes

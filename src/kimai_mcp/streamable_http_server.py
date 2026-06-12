@@ -59,17 +59,8 @@ from .security import (
     random_delay,
 )
 
-# Import consolidated tools
-from .tools.entity_manager import entity_tool, handle_entity
-from .tools.timesheet_consolidated import timesheet_tool, timer_tool, handle_timesheet, handle_timer
-from .tools.rate_manager import rate_tool, handle_rate
-from .tools.team_access_manager import team_access_tool, handle_team_access
-from .tools.absence_manager import absence_tool, handle_absence
-from .tools.calendar_meta import calendar_tool, meta_tool, user_current_tool, handle_calendar, handle_meta, \
-    handle_user_current
-from .tools.project_analysis import analyze_project_team_tool, handle_analyze_project_team
-from .tools.config_info import config_tool, handle_config
-from .tools.comment_tool import comment_tool, handle_comment
+# Shared tool registry (single source of truth for both servers)
+from .tools.registry import all_tools, dispatch_tool
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -149,20 +140,7 @@ class UserMCPSession:
 
     async def _list_tools(self) -> List[Tool]:
         """List all available MCP tools."""
-        return [
-            entity_tool(),
-            timesheet_tool(),
-            timer_tool(),
-            rate_tool(),
-            team_access_tool(),
-            absence_tool(),
-            calendar_tool(),
-            meta_tool(),
-            user_current_tool(),
-            analyze_project_team_tool(),
-            config_tool(),
-            comment_tool(),
-        ]
+        return all_tools()
 
     async def _call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
         """Handle tool calls."""
@@ -172,35 +150,7 @@ class UserMCPSession:
         arguments = arguments or {}
 
         try:
-            if name == "entity":
-                return await handle_entity(self.kimai_client, **arguments)
-            elif name == "timesheet":
-                return await handle_timesheet(self.kimai_client, **arguments)
-            elif name == "timer":
-                return await handle_timer(self.kimai_client, **arguments)
-            elif name == "rate":
-                return await handle_rate(self.kimai_client, **arguments)
-            elif name == "team_access":
-                return await handle_team_access(self.kimai_client, **arguments)
-            elif name == "absence":
-                return await handle_absence(self.kimai_client, **arguments)
-            elif name == "calendar":
-                return await handle_calendar(self.kimai_client, **arguments)
-            elif name == "meta":
-                return await handle_meta(self.kimai_client, **arguments)
-            elif name == "user_current":
-                return await handle_user_current(self.kimai_client, **arguments)
-            elif name == "analyze_project_team":
-                return await handle_analyze_project_team(self.kimai_client, arguments)
-            elif name == "config":
-                return await handle_config(self.kimai_client, **arguments)
-            elif name == "comment":
-                return await handle_comment(self.kimai_client, **arguments)
-            else:
-                return [TextContent(
-                    type="text",
-                    text=f"Unknown tool: {name}"
-                )]
+            return await dispatch_tool(self.kimai_client, name, arguments)
 
         except KimaiAPIError as e:
             logger.error(
@@ -368,6 +318,9 @@ class StreamableHTTPMCPServer:
         self.host = host
         self.port = port
         self.user_sessions: Dict[str, UserMCPSession] = {}
+        # Serializes on-demand (re)initialization of sessions for configured users
+        # whose startup init failed (e.g. Kimai was briefly unreachable).
+        self._session_init_lock = asyncio.Lock()
         self.trusted_proxies = list(trusted_proxies) if trusted_proxies else []
         self.legacy_slugs_enabled = not disable_legacy_slugs
 
@@ -522,17 +475,49 @@ class StreamableHTTPMCPServer:
             "documentation": "https://github.com/glazperle/kimai_mcp",
         })
 
+    async def _ensure_session(self, slug: Optional[str]) -> Optional["UserMCPSession"]:
+        """Return an active session for the slug, initializing it on demand.
+
+        Sessions whose startup init failed (e.g. Kimai temporarily unreachable)
+        are not kept in user_sessions; a configured user would otherwise stay in a
+        permanent 403 loop until the next restart. This retries the init once per
+        request under a lock so an outage at boot self-heals.
+        """
+        if not slug:
+            return None
+        session = self.user_sessions.get(slug)
+        if session is not None and session.session_manager is not None:
+            return session
+        if slug not in self.users_config.users:
+            return None
+        async with self._session_init_lock:
+            # Re-check after acquiring the lock (another request may have won).
+            session = self.user_sessions.get(slug)
+            if session is not None and session.session_manager is not None:
+                return session
+            new_session = UserMCPSession(slug, self.users_config.users[slug])
+            try:
+                await new_session.initialize()
+            except Exception as e:
+                logger.error(f"On-demand initialization failed for user '{slug}': {e}")
+                with contextlib.suppress(Exception):
+                    await new_session.cleanup()
+                return None
+            self.user_sessions[slug] = new_session
+            logger.info(f"On-demand initialized session for user '{slug}'")
+            return new_session
+
     async def _handle_oauth_mcp_request(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Serve /mcp for an authenticated user (token subject -> session)."""
         user = scope.get("user")
         access_token = getattr(user, "access_token", None)
         subject = getattr(access_token, "subject", None)
 
-        session = self.user_sessions.get(subject) if subject else None
+        session = await self._ensure_session(subject)
         if session is None or session.session_manager is None:
             response = JSONResponse(
                 {"error": "No active session for the authenticated user"},
-                status_code=403,
+                status_code=503,
             )
             await response(scope, receive, send)
             return

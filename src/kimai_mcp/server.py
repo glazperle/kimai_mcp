@@ -26,17 +26,8 @@ from mcp.server.models import InitializationOptions
 from mcp.types import Tool, TextContent
 from .client import KimaiClient, KimaiAPIError
 
-# Import consolidated tools
-from .tools.entity_manager import entity_tool, handle_entity
-from .tools.timesheet_consolidated import timesheet_tool, timer_tool, handle_timesheet, handle_timer
-from .tools.rate_manager import rate_tool, handle_rate
-from .tools.team_access_manager import team_access_tool, handle_team_access
-from .tools.absence_manager import absence_tool, handle_absence
-from .tools.calendar_meta import calendar_tool, meta_tool, user_current_tool, handle_calendar, handle_meta, \
-    handle_user_current
-from .tools.project_analysis import analyze_project_team_tool, handle_analyze_project_team
-from .tools.config_info import config_tool, handle_config
-from .tools.comment_tool import comment_tool, handle_comment
+# Shared tool registry (single source of truth for both servers)
+from .tools.registry import all_tools, dispatch_tool
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -114,44 +105,8 @@ class KimaiMCPServer:
             self.client = KimaiClient(self.base_url, self.api_token, ssl_verify=self.ssl_verify)
 
     async def _list_tools(self) -> List[Tool]:
-        """List consolidated MCP tools (10 tools instead of 73)."""
-        return [
-            # Universal Entity Manager (replaces 35 tools)
-            entity_tool(),
-
-            # Timesheet Management (replaces 9 tools)
-            timesheet_tool(),
-
-            # Timer Management (replaces 4 tools)
-            timer_tool(),
-
-            # Rate Management (replaces 9 tools)
-            rate_tool(),
-
-            # Team Access Management (replaces 8 tools)
-            team_access_tool(),
-
-            # Absence Management (replaces 6 tools)
-            absence_tool(),
-
-            # Calendar Tool (replaces 2 tools)
-            calendar_tool(),
-
-            # Meta Fields Management (replaces 4 tools)
-            meta_tool(),
-
-            # Current User (specialized tool)
-            user_current_tool(),
-
-            # Project Analysis (specialized tool, kept as-is)
-            analyze_project_team_tool(),
-
-            # Configuration Info (server config, plugins, version)
-            config_tool(),
-
-            # Comments on projects and customers (Kimai 2.57+)
-            comment_tool(),
-        ]
+        """List consolidated MCP tools (12 tools instead of the original 73)."""
+        return all_tools()
 
     async def _call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
         """Handle consolidated tool calls."""
@@ -162,36 +117,8 @@ class KimaiMCPServer:
             arguments = {}
 
         try:
-            # Route to consolidated tool handlers
-            if name == "entity":
-                return await handle_entity(self.client, **arguments)
-            elif name == "timesheet":
-                return await handle_timesheet(self.client, **arguments)
-            elif name == "timer":
-                return await handle_timer(self.client, **arguments)
-            elif name == "rate":
-                return await handle_rate(self.client, **arguments)
-            elif name == "team_access":
-                return await handle_team_access(self.client, **arguments)
-            elif name == "absence":
-                return await handle_absence(self.client, **arguments)
-            elif name == "calendar":
-                return await handle_calendar(self.client, **arguments)
-            elif name == "meta":
-                return await handle_meta(self.client, **arguments)
-            elif name == "user_current":
-                return await handle_user_current(self.client, **arguments)
-            elif name == "analyze_project_team":
-                return await handle_analyze_project_team(self.client, arguments)
-            elif name == "config":
-                return await handle_config(self.client, **arguments)
-            elif name == "comment":
-                return await handle_comment(self.client, **arguments)
-            else:
-                return [TextContent(
-                    type="text",
-                    text=f"Unknown tool: {name}. Available tools: entity, timesheet, timer, rate, team_access, absence, calendar, meta, user_current, analyze_project_team, config, comment"
-                )]
+            # Route to the shared tool registry
+            return await dispatch_tool(self.client, name, arguments)
 
         except KimaiAPIError as e:
             logger.error(f"Kimai API Error in tool {name}: {e.message} (Status: {e.status_code})")

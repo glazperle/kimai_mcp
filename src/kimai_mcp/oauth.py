@@ -31,6 +31,7 @@ from mcp.server.auth.provider import (
     AuthorizationParams,
     OAuthAuthorizationServerProvider,
     RefreshToken,
+    TokenError,
     construct_redirect_uri,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
@@ -44,6 +45,10 @@ ACCESS_TOKEN_TTL_SECONDS = 3600  # 1 hour
 REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 3600  # 30 days
 AUTH_CODE_TTL_SECONDS = 600  # 10 minutes
 LOGIN_TXN_TTL_SECONDS = 600  # 10 minutes
+
+# Registered DCR clients are kept around so long as they keep being used.
+# A client that has not been seen for this long is pruned by cleanup_expired().
+CLIENT_TTL_SECONDS = 30 * 24 * 3600  # 30 days
 
 LOGIN_PATH = "/oauth/login"
 
@@ -129,10 +134,17 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         self.state_file = Path(state_file) if state_file else None
 
         self._clients: Dict[str, OAuthClientInformationFull] = {}
+        # Last time each client was seen (registered or looked up). Used to
+        # expire idle DCR clients in cleanup_expired() so the store can't grow
+        # without bound.
+        self._client_last_seen: Dict[str, float] = {}
         self._pending: Dict[str, PendingAuthorization] = {}
         self._auth_codes: Dict[str, AuthorizationCode] = {}
         self._access_tokens: Dict[str, AccessToken] = {}
         self._refresh_tokens: Dict[str, RefreshToken] = {}
+        # The SDK RefreshToken model has no `resource` field, so we keep the
+        # RFC 8707 audience binding for refresh tokens in a side mapping.
+        self._refresh_token_resource: Dict[str, Optional[str]] = {}
         # Pairing for revocation/rotation: access <-> refresh
         self._access_to_refresh: Dict[str, str] = {}
         self._refresh_to_access: Dict[str, str] = {}
@@ -150,8 +162,12 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         try:
             with open(self.state_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            now = time.time()
             for client_id, client_data in data.get("clients", {}).items():
                 self._clients[client_id] = OAuthClientInformationFull.model_validate(client_data)
+                # Treat a freshly loaded client as just-seen so a restart does
+                # not immediately expire still-valid clients.
+                self._client_last_seen[client_id] = now
             logger.info(f"Loaded {len(self._clients)} OAuth client(s) from {self.state_file}")
         except Exception as e:
             logger.error(f"Failed to load OAuth state file {self.state_file}: {e}")
@@ -176,12 +192,17 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             logger.error(f"Failed to persist OAuth state file {self.state_file}: {e}")
 
     async def get_client(self, client_id: str) -> Optional[OAuthClientInformationFull]:
-        return self._clients.get(client_id)
+        client = self._clients.get(client_id)
+        if client is not None:
+            # Renew last-seen on every use so actively used clients never expire.
+            self._client_last_seen[client_id] = time.time()
+        return client
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         if client_info.client_id is None:
             raise ValueError("client_id must be set for registration")
         self._clients[client_info.client_id] = client_info
+        self._client_last_seen[client_info.client_id] = time.time()
         # Persist off the event loop so a registration storm can't block other requests.
         await asyncio.to_thread(self._persist_clients)
         logger.info(
@@ -329,6 +350,9 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             expires_at=now + REFRESH_TOKEN_TTL_SECONDS,
             subject=subject,
         )
+        # Preserve the RFC 8707 audience binding for the refresh token; the SDK
+        # RefreshToken model has no `resource` field, so we keep it on the side.
+        self._refresh_token_resource[refresh_token_str] = resource
         self._access_to_refresh[access_token_str] = refresh_token_str
         self._refresh_to_access[refresh_token_str] = access_token_str
 
@@ -380,13 +404,25 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         refresh_token: RefreshToken,
         scopes: list,
     ) -> OAuthToken:
+        # Client binding: a public client must not be able to redeem a refresh
+        # token that was issued to a different client. The SDK token handler
+        # already compares against the request's client_id, but we defend in
+        # depth against the authenticated client here as well.
+        if refresh_token.client_id != client.client_id:
+            raise TokenError(
+                error="invalid_grant",
+                error_description="refresh token was not issued to this client",
+            )
+        # Preserve the RFC 8707 audience binding across rotation. Read it before
+        # removing the old token, which clears the side mapping.
+        resource = self._refresh_token_resource.get(refresh_token.token)
         # Rotate: revoke the old pair, issue a new one.
         self._remove_refresh_token(refresh_token.token)
         return self._issue_token_pair(
             client_id=refresh_token.client_id,
             scopes=scopes or refresh_token.scopes,
             subject=refresh_token.subject,
-            resource=None,
+            resource=resource,
         )
 
     async def load_access_token(self, token: str) -> Optional[AccessToken]:
@@ -410,6 +446,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
 
     def _remove_refresh_token(self, token: str) -> None:
         self._refresh_tokens.pop(token, None)
+        self._refresh_token_resource.pop(token, None)
         access = self._refresh_to_access.pop(token, None)
         if access:
             self._access_to_refresh.pop(access, None)
@@ -421,6 +458,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             self._remove_access_token(token.token)
             if refresh:
                 self._refresh_tokens.pop(refresh, None)
+                self._refresh_token_resource.pop(refresh, None)
         elif isinstance(token, RefreshToken):
             access = self._refresh_to_access.get(token.token)
             self._remove_refresh_token(token.token)
@@ -455,6 +493,29 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         ]:
             self._remove_refresh_token(token)
             removed += 1
+
+        # Prune idle / expired DCR clients so the client store (and its state
+        # file) can't grow without bound. A client is removed when it has not
+        # been seen for CLIENT_TTL_SECONDS, or when its client_secret has a
+        # defined expiry that already lies in the past. Last-seen is renewed on
+        # every get_client()/register_client(), so active clients never expire.
+        stale_clients = []
+        for client_id, client in self._clients.items():
+            last_seen = self._client_last_seen.get(client_id, 0.0)
+            idle_expired = now - last_seen > CLIENT_TTL_SECONDS
+            secret_expires_at = client.client_secret_expires_at
+            secret_expired = secret_expires_at is not None and 0 < secret_expires_at < now
+            if idle_expired or secret_expired:
+                stale_clients.append(client_id)
+
+        for client_id in stale_clients:
+            del self._clients[client_id]
+            self._client_last_seen.pop(client_id, None)
+            removed += 1
+
+        # Persist once after pruning so the state file reflects the removals.
+        if stale_clients:
+            self._persist_clients()
 
         if removed:
             logger.debug(f"OAuth cleanup removed {removed} expired entries")

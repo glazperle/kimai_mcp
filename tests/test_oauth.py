@@ -4,10 +4,12 @@ All tests run against the Starlette ASGI app in-process (no real network
 server); Kimai API calls are mocked out.
 """
 
+import asyncio
 import base64
 import contextlib
 import hashlib
 import secrets
+import time
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -386,6 +388,31 @@ def test_mcp_with_valid_token_reaches_user_session(make_client):
     assert "mcp-session-id" in {k.lower() for k in resp.headers}
 
 
+@pytest.mark.asyncio
+async def test_session_initialized_on_demand(users_config, monkeypatch):
+    """A configured user whose startup init failed (no active session) is
+    (re)initialized on demand instead of staying in a permanent 403/503 loop."""
+    monkeypatch.setattr(
+        "kimai_mcp.streamable_http_server.KimaiClient", FakeKimaiClient
+    )
+    server = StreamableHTTPMCPServer(
+        users_config=users_config, public_url=PUBLIC_URL, rate_limit_rpm=0
+    )
+    # No sessions initialized yet (initialize_users was not run).
+    assert USER_SLUG not in server.user_sessions
+
+    session = await server._ensure_session(USER_SLUG)
+    assert session is not None
+    assert session.session_manager is not None
+    assert server.user_sessions[USER_SLUG] is session
+
+    # A second call returns the same (now active) session.
+    assert await server._ensure_session(USER_SLUG) is session
+
+    # An unknown slug is never initialized.
+    assert await server._ensure_session("unconfigured-slug") is None
+
+
 # ---------------------------------------------------------------------------
 # Legacy slug routes
 # ---------------------------------------------------------------------------
@@ -431,3 +458,174 @@ def test_client_registration_is_persisted_to_state_file(make_client, tmp_path):
         users_config=UsersConfig(users={}), public_url=PUBLIC_URL, state_file=state_file
     )
     assert client_info["client_id"] in provider._clients
+
+
+# ---------------------------------------------------------------------------
+# Provider-level: refresh token resource/audience binding & client binding
+# ---------------------------------------------------------------------------
+
+
+def _make_provider(users_config, **kwargs):
+    from kimai_mcp.oauth import KimaiOAuthProvider
+
+    return KimaiOAuthProvider(
+        users_config=users_config, public_url=PUBLIC_URL, **kwargs
+    )
+
+
+def _register_full_client(provider, client_id="client-A"):
+    """Register a client directly on the provider and return it."""
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    client = OAuthClientInformationFull(
+        client_id=client_id,
+        redirect_uris=[REDIRECT_URI],
+        token_endpoint_auth_method="none",
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+    )
+    asyncio.run(provider.register_client(client))
+    return client
+
+
+def test_refresh_preserves_resource_binding(users_config):
+    """After a refresh, the new access token keeps the original resource (RFC 8707)."""
+    provider = _make_provider(users_config)
+    client = _register_full_client(provider)
+    resource = f"{PUBLIC_URL}/mcp"
+
+    # Issue an initial token pair carrying a resource binding.
+    initial = provider._issue_token_pair(
+        client_id=client.client_id,
+        scopes=["mcp"],
+        subject=USER_SLUG,
+        resource=resource,
+    )
+    first_access = provider._access_tokens[initial.access_token]
+    assert first_access.resource == resource
+    # The side mapping carries the resource for the refresh token.
+    assert provider._refresh_token_resource[initial.refresh_token] == resource
+
+    # First refresh.
+    refresh_tok = provider._refresh_tokens[initial.refresh_token]
+    refreshed = asyncio.run(
+        provider.exchange_refresh_token(client, refresh_tok, ["mcp"])
+    )
+    new_access = provider._access_tokens[refreshed.access_token]
+    assert new_access.resource == resource, "resource binding lost on first refresh"
+
+    # Second refresh: binding must still be preserved (the original bug surfaced
+    # only after the first rotation dropped the resource).
+    refresh_tok2 = provider._refresh_tokens[refreshed.refresh_token]
+    refreshed2 = asyncio.run(
+        provider.exchange_refresh_token(client, refresh_tok2, ["mcp"])
+    )
+    new_access2 = provider._access_tokens[refreshed2.access_token]
+    assert new_access2.resource == resource, "resource binding lost on second refresh"
+
+
+def test_refresh_with_foreign_client_is_rejected(users_config):
+    """A refresh token issued to client A must not be redeemable by client B."""
+    from mcp.server.auth.provider import TokenError
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    provider = _make_provider(users_config)
+    client_a = _register_full_client(provider, client_id="client-A")
+
+    issued = provider._issue_token_pair(
+        client_id=client_a.client_id,
+        scopes=["mcp"],
+        subject=USER_SLUG,
+        resource=None,
+    )
+    refresh_tok = provider._refresh_tokens[issued.refresh_token]
+
+    # A different (attacker) client attempts to use the refresh token.
+    client_b = OAuthClientInformationFull(
+        client_id="client-B",
+        redirect_uris=[REDIRECT_URI],
+        token_endpoint_auth_method="none",
+    )
+
+    with pytest.raises(TokenError) as exc_info:
+        asyncio.run(provider.exchange_refresh_token(client_b, refresh_tok, ["mcp"]))
+    assert exc_info.value.error == "invalid_grant"
+
+    # The original refresh token must remain valid for its real client.
+    assert issued.refresh_token in provider._refresh_tokens
+    refreshed = asyncio.run(
+        provider.exchange_refresh_token(client_a, refresh_tok, ["mcp"])
+    )
+    assert refreshed.access_token
+
+
+# ---------------------------------------------------------------------------
+# Provider-level: client store cleanup (idle TTL)
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_removes_idle_client_but_keeps_active_one(users_config):
+    from kimai_mcp.oauth import CLIENT_TTL_SECONDS
+
+    provider = _make_provider(users_config)
+    _register_full_client(provider, client_id="stale-client")
+    _register_full_client(provider, client_id="fresh-client")
+
+    now = time.time()
+    # Simulate the stale client not being seen for longer than the TTL, while
+    # the fresh client was just used. No real sleeping involved.
+    provider._client_last_seen["stale-client"] = now - CLIENT_TTL_SECONDS - 100
+    provider._client_last_seen["fresh-client"] = now
+
+    removed = provider.cleanup_expired()
+
+    assert removed >= 1
+    assert "stale-client" not in provider._clients
+    assert "stale-client" not in provider._client_last_seen
+    assert "fresh-client" in provider._clients
+    assert "fresh-client" in provider._client_last_seen
+
+
+def test_cleanup_persists_client_store_after_pruning(users_config, tmp_path):
+    from kimai_mcp.oauth import CLIENT_TTL_SECONDS
+
+    state_file = tmp_path / "oauth_clients.json"
+    provider = _make_provider(users_config, state_file=state_file)
+    _register_full_client(provider, client_id="stale-client")
+    _register_full_client(provider, client_id="fresh-client")
+
+    provider._client_last_seen["stale-client"] = time.time() - CLIENT_TTL_SECONDS - 100
+
+    provider.cleanup_expired()
+
+    # The persisted state file must no longer contain the pruned client.
+    fresh = _make_provider(users_config, state_file=state_file)
+    assert "stale-client" not in fresh._clients
+    assert "fresh-client" in fresh._clients
+
+
+def test_get_client_renews_last_seen(users_config):
+    from kimai_mcp.oauth import CLIENT_TTL_SECONDS
+
+    provider = _make_provider(users_config)
+    _register_full_client(provider, client_id="some-client")
+
+    # Make it look idle, then touch it via get_client -> last-seen renewed.
+    provider._client_last_seen["some-client"] = time.time() - CLIENT_TTL_SECONDS - 100
+    found = asyncio.run(provider.get_client("some-client"))
+    assert found is not None
+
+    removed = provider.cleanup_expired()
+    assert "some-client" in provider._clients
+    assert removed == 0
+
+
+def test_cleanup_removes_client_with_expired_secret(users_config):
+    provider = _make_provider(users_config)
+    client = _register_full_client(provider, client_id="secret-client")
+    # Secret already expired in the past; last-seen is recent.
+    client.client_secret_expires_at = int(time.time()) - 10
+    provider._client_last_seen["secret-client"] = time.time()
+
+    provider.cleanup_expired()
+    assert "secret-client" not in provider._clients

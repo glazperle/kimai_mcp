@@ -68,24 +68,18 @@ async def handle_comment(client: KimaiClient, **params) -> List[TextContent]:
             type="text",
             text=f"Error: Unknown entity type '{entity}'. Valid types: project, customer"
         )]
-    if not entity_id:
+    if entity_id is None:
         return [TextContent(type="text", text="Error: 'entity_id' parameter is required")]
 
     if action == "list":
-        if entity == "project":
-            comments = await client.get_project_comments(entity_id)
-        else:
-            comments = await client.get_customer_comments(entity_id)
+        comments = await client.get_comments(entity, entity_id)
         return [TextContent(type="text", text=_format_comment_list(comments, entity, entity_id))]
 
     elif action == "create":
         if not data.get("message"):
             return [TextContent(type="text", text="Error: 'data.message' is required for create action")]
         form = CommentForm(message=data["message"], pinned=data.get("pinned"))
-        if entity == "project":
-            comment = await client.create_project_comment(entity_id, form)
-        else:
-            comment = await client.create_customer_comment(entity_id, form)
+        comment = await client.create_comment(entity, entity_id, form)
         pinned_info = " (pinned)" if comment.pinned else ""
         return [TextContent(
             type="text",
@@ -93,21 +87,15 @@ async def handle_comment(client: KimaiClient, **params) -> List[TextContent]:
         )]
 
     elif action == "delete":
-        if not comment_id:
+        if comment_id is None:
             return [TextContent(type="text", text="Error: 'comment_id' parameter is required for delete action")]
-        if entity == "project":
-            await client.delete_project_comment(entity_id, comment_id)
-        else:
-            await client.delete_customer_comment(entity_id, comment_id)
+        await client.delete_comment(entity, entity_id, comment_id)
         return [TextContent(type="text", text=f"Deleted comment ID {comment_id} from {entity} ID {entity_id}")]
 
     elif action == "pin":
-        if not comment_id:
+        if comment_id is None:
             return [TextContent(type="text", text="Error: 'comment_id' parameter is required for pin action")]
-        if entity == "project":
-            comment = await client.pin_project_comment(entity_id, comment_id)
-        else:
-            comment = await client.pin_customer_comment(entity_id, comment_id)
+        comment = await client.pin_comment(entity, entity_id, comment_id)
         status = "pinned" if comment.pinned else "unpinned"
         return [TextContent(type="text", text=f"Comment ID {comment_id} is now {status}")]
 
