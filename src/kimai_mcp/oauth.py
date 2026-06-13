@@ -36,6 +36,7 @@ from mcp.server.auth.provider import (
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
+from .oidc import OIDCClient, OIDCConfig, OIDCError, OIDCLoginState
 from .user_config import UsersConfig, _env_key_for_slug
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ LOGIN_TXN_TTL_SECONDS = 600  # 10 minutes
 CLIENT_TTL_SECONDS = 30 * 24 * 3600  # 30 days
 
 LOGIN_PATH = "/oauth/login"
+OIDC_CALLBACK_PATH = "/oauth/oidc/callback"
 
 
 @dataclass
@@ -120,6 +122,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         users_config: UsersConfig,
         public_url: str,
         state_file: Optional[Union[str, Path]] = None,
+        oidc_config: Optional[OIDCConfig] = None,
     ):
         """Initialize the provider.
 
@@ -128,10 +131,17 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             public_url: Public base URL of the server (issuer), no trailing slash.
             state_file: Optional path to a JSON file used to persist registered
                 OAuth clients across restarts (tokens are always in-memory).
+            oidc_config: Optional OIDC relying-party config. When set, users
+                authenticate against an external OIDC provider instead of the
+                built-in slug + auth_secret login form.
         """
         self.users_config = users_config
         self.public_url = public_url.rstrip("/")
         self.state_file = Path(state_file) if state_file else None
+        # Federated OIDC login backend (None -> built-in local login form).
+        self.oidc: Optional[OIDCClient] = OIDCClient(oidc_config) if oidc_config else None
+        # Pending federated logins keyed by the OIDC `state` we sent to the IdP.
+        self._oidc_logins: Dict[str, OIDCLoginState] = {}
 
         self._clients: Dict[str, OAuthClientInformationFull] = {}
         # Last time each client was seen (registered or looked up). Used to
@@ -215,10 +225,27 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
     # ------------------------------------------------------------------
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
-        """Store the request and redirect the user agent to the login form."""
+        """Store the request and redirect the user agent to the login step.
+
+        Local backend -> the built-in HTML login form. OIDC backend -> the
+        external identity provider's authorization endpoint.
+        """
         txn = secrets.token_urlsafe(32)
         self._pending[txn] = PendingAuthorization(client_id=client.client_id or "", params=params)
-        return f"{self.public_url}{LOGIN_PATH}?txn={txn}"
+
+        if self.oidc is None:
+            return f"{self.public_url}{LOGIN_PATH}?txn={txn}"
+
+        # Federated OIDC: create per-login state/nonce/PKCE, then redirect to the IdP.
+        oidc_state = secrets.token_urlsafe(32)
+        login_state, code_challenge = self.oidc.make_login_state(txn)
+        self._oidc_logins[oidc_state] = login_state
+        return await self.oidc.build_authorization_url(
+            state=oidc_state,
+            nonce=login_state.nonce,
+            code_challenge=code_challenge,
+            redirect_uri=f"{self.public_url}{OIDC_CALLBACK_PATH}",
+        )
 
     # ------------------------------------------------------------------
     # Login form (HTML)
@@ -243,6 +270,27 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             del self._pending[txn]
             return None
         return pending
+
+    def _issue_auth_code(self, pending: PendingAuthorization, subject: str) -> RedirectResponse:
+        """Issue a single-use authorization code for an authenticated subject and
+        redirect back to the client. The caller must have already removed the
+        pending transaction. The redirect target is the SDK-validated client
+        redirect_uri from the stored request (open-redirect safe)."""
+        params = pending.params
+        code = secrets.token_urlsafe(32)
+        self._auth_codes[code] = AuthorizationCode(
+            code=code,
+            scopes=params.scopes or [],
+            expires_at=time.time() + AUTH_CODE_TTL_SECONDS,
+            client_id=pending.client_id,
+            code_challenge=params.code_challenge,
+            redirect_uri=params.redirect_uri,
+            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
+            resource=params.resource,
+            subject=subject,
+        )
+        redirect_url = construct_redirect_uri(str(params.redirect_uri), code=code, state=params.state)
+        return RedirectResponse(redirect_url, status_code=302, headers={"Cache-Control": "no-store"})
 
     async def handle_login_page(self, request: Request) -> Response:
         """GET /oauth/login - render the login form."""
@@ -296,28 +344,88 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
 
         # Success: consume the transaction and issue an authorization code.
         del self._pending[txn]
-        params = pending.params
+        logger.info(f"OAuth login successful for user '{username}' (client {pending.client_id})")
+        return self._issue_auth_code(pending, username)
 
-        code = secrets.token_urlsafe(32)
-        self._auth_codes[code] = AuthorizationCode(
-            code=code,
-            scopes=params.scopes or [],
-            expires_at=time.time() + AUTH_CODE_TTL_SECONDS,
-            client_id=pending.client_id,
-            code_challenge=params.code_challenge,
-            redirect_uri=params.redirect_uri,
-            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
-            resource=params.resource,
-            subject=username,
+    # ------------------------------------------------------------------
+    # Federated OIDC callback
+    # ------------------------------------------------------------------
+
+    def _get_oidc_login(self, state: Optional[str]) -> Optional[OIDCLoginState]:
+        """Pop a pending OIDC login by state (single-use); None if missing/expired."""
+        if not state:
+            return None
+        login = self._oidc_logins.pop(state, None)
+        if login is None or login.expired:
+            return None
+        return login
+
+    @staticmethod
+    def _oidc_error(message: str, status_code: int) -> Response:
+        return HTMLResponse(
+            f"<h1>Sign-in failed</h1><p>{html.escape(message)}</p>"
+            "<p>Please restart the authorization flow from your client.</p>",
+            status_code=status_code,
         )
 
-        logger.info(f"OAuth login successful for user '{username}' (client {pending.client_id})")
+    async def handle_oidc_callback(self, request: Request) -> Response:
+        """GET /oauth/oidc/callback - complete the federated login and issue an auth code."""
+        params = request.query_params
+        if params.get("error"):
+            # The IdP rejected the login; do not echo provider internals to the user.
+            logger.warning(f"OIDC provider returned error: {params.get('error')}")
+            return self._oidc_error("The identity provider denied the sign-in request.", 400)
 
-        redirect_url = construct_redirect_uri(str(params.redirect_uri), code=code, state=params.state)
-        return RedirectResponse(redirect_url, status_code=302, headers={"Cache-Control": "no-store"})
+        login = self._get_oidc_login(params.get("state"))
+        if login is None:
+            return self._oidc_error("Invalid or expired sign-in state.", 400)
+
+        pending = self._get_pending(login.txn)
+        if pending is None:
+            return self._oidc_error("Invalid or expired authorization request.", 400)
+
+        code = params.get("code")
+        if not code:
+            return self._oidc_error("Missing authorization code from the identity provider.", 400)
+
+        assert self.oidc is not None  # routes() only mounts this handler when OIDC is enabled
+        try:
+            tokens = await self.oidc.exchange_code(
+                code=code,
+                code_verifier=login.code_verifier,
+                redirect_uri=f"{self.public_url}{OIDC_CALLBACK_PATH}",
+            )
+            id_token = tokens.get("id_token")
+            if not id_token:
+                raise OIDCError("token response did not contain an id_token")
+            claims = await self.oidc.validate_id_token(id_token, expected_nonce=login.nonce)
+        except OIDCError as e:
+            logger.warning(f"OIDC sign-in failed: {e}")
+            return self._oidc_error("Could not verify your identity with the identity provider.", 401)
+
+        identity = self.oidc.extract_identity(claims)
+        if not identity:
+            logger.warning("OIDC id_token had no usable identity claim")
+            return self._oidc_error("The identity provider did not return a usable identity.", 401)
+
+        match = self.users_config.get_user_by_oidc_identity(identity)
+        if match is None:
+            # Detailed reason is logged server-side only; the response stays generic
+            # (consistent with the local login form's deliberate non-disclosure).
+            logger.warning(f"OIDC login: no Kimai user linked to identity '{identity}'")
+            return self._oidc_error("Your account is not authorized for this application.", 403)
+        slug, _user = match
+
+        # Success: consume the transaction and issue an authorization code (same
+        # path as the local login form, with the OIDC-resolved slug as subject).
+        del self._pending[login.txn]
+        logger.info(f"OIDC login successful for user '{slug}' (client {pending.client_id})")
+        return self._issue_auth_code(pending, slug)
 
     def routes(self) -> list:
-        """Starlette routes for the login form."""
+        """Starlette routes for the active login backend."""
+        if self.oidc is not None:
+            return [Route(OIDC_CALLBACK_PATH, endpoint=self.handle_oidc_callback, methods=["GET"])]
         return [
             Route(LOGIN_PATH, endpoint=self.handle_login_page, methods=["GET"]),
             Route(LOGIN_PATH, endpoint=self.handle_login_submit, methods=["POST"]),
@@ -478,6 +586,10 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             del self._pending[txn]
             removed += 1
 
+        for state in [s for s, login in self._oidc_logins.items() if login.expired]:
+            del self._oidc_logins[state]
+            removed += 1
+
         for code in [c for c, ac in self._auth_codes.items() if ac.expires_at < now]:
             del self._auth_codes[code]
             removed += 1
@@ -520,3 +632,8 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         if removed:
             logger.debug(f"OAuth cleanup removed {removed} expired entries")
         return removed
+
+    async def aclose(self) -> None:
+        """Release resources held by the OIDC client (if any)."""
+        if self.oidc is not None:
+            await self.oidc.aclose()

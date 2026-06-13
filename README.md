@@ -85,6 +85,36 @@ Access tokens are valid for 1 hour and refreshed automatically (refresh tokens u
 
 **Legacy endpoints:** The previous per-user URLs `/mcp/{slug}` still work but are deprecated. Migrate to the OAuth endpoint `/mcp` and start the server with `--disable-legacy-slugs`.
 
+#### OIDC federated login (optional)
+
+Instead of the built-in slug + `auth_secret` form, the Streamable HTTP server can delegate user authentication to any standard **OpenID Connect** provider (Microsoft Entra ID / Azure AD, Keycloak, Auth0, Google, Okta, …). The server stays the OAuth 2.1 authorization server toward Claude.ai (same opaque tokens, DCR and PKCE); it only federates the login step: `/authorize` redirects to your OIDC provider, the `id_token` is verified (signature via JWKS, `iss`/`aud`/`exp`/`nonce`), and the resulting identity is mapped to a configured user.
+
+```bash
+kimai-mcp-streamable \
+  --users-config ./config/users.json \
+  --public-url https://mcp.example.com \
+  --auth-backend oidc \
+  --oidc-issuer https://login.microsoftonline.com/<tenant-id>/v2.0 \
+  --oidc-client-id <client-id>
+# Confidential clients: set KIMAI_MCP_OIDC_CLIENT_SECRET (env preferred over the CLI flag).
+```
+
+Map each OIDC identity to a Kimai user by adding the `oidc_identity` field (matched case-insensitively against `--oidc-identity-claim`, default `email`):
+
+```json
+{
+  "x7Kp2mQ9wL4r": {
+    "kimai_url": "https://kimai.example.com",
+    "kimai_token": "api_token_for_alice",
+    "oidc_identity": "alice@example.com"
+  }
+}
+```
+
+Register **`<public-url>/oauth/oidc/callback`** as the redirect URI at your OIDC provider. Requires the `[server]` extra (`pip install "kimai-mcp[server]"`, which pulls in `PyJWT[crypto]`). The built-in slug login form is not exposed while the OIDC backend is active.
+
+When mapping by `email`, the `id_token` must also assert `email_verified: true`, otherwise the email claim is ignored — so a provider that lets users self-assert an unverified address cannot impersonate a mapped user. For providers that do not emit `email_verified` but are trusted to only issue verified emails, pass `--oidc-allow-unverified-email` (or `KIMAI_MCP_OIDC_ALLOW_UNVERIFIED_EMAIL=true`).
+
 📖 **[See full deployment guide →](DEPLOYMENT.md)**
 
 ## Command Line Options
@@ -113,6 +143,13 @@ Options for the Streamable HTTP server (`kimai-mcp-streamable`):
 | `--disable-legacy-slugs` | `KIMAI_MCP_DISABLE_LEGACY_SLUGS` | Disable the deprecated `/mcp/{slug}` endpoints |
 | `--trusted-proxy IP` | `KIMAI_MCP_TRUSTED_PROXIES` (comma-separated) | Reverse proxy IPs whose `X-Forwarded-For`/`X-Real-IP` headers are honored; may be given multiple times |
 | `--rate-limit-rpm N` | `RATE_LIMIT_RPM` | Maximum requests per minute per IP (default: 60, 0 to disable) |
+| `--auth-backend {local,oidc}` | `KIMAI_MCP_AUTH_BACKEND` | Login backend: `local` (built-in slug form, default) or `oidc` (federate to an external OIDC provider) |
+| `--oidc-issuer URL` | `KIMAI_MCP_OIDC_ISSUER` | OIDC issuer URL (required for `--auth-backend oidc`) |
+| `--oidc-client-id ID` | `KIMAI_MCP_OIDC_CLIENT_ID` | OIDC client ID (required for `--auth-backend oidc`) |
+| `--oidc-client-secret SECRET` | `KIMAI_MCP_OIDC_CLIENT_SECRET` | OIDC client secret (optional; public/PKCE-only if omitted — prefer the env var) |
+| `--oidc-scopes SCOPES` | `KIMAI_MCP_OIDC_SCOPES` | Requested scopes (default: `openid email profile`) |
+| `--oidc-identity-claim CLAIM` | `KIMAI_MCP_OIDC_IDENTITY_CLAIM` | id_token claim mapped to a user's `oidc_identity` (default: `email`) |
+| `--oidc-discovery-url URL` | `KIMAI_MCP_OIDC_DISCOVERY_URL` | Override the discovery URL (default: `<issuer>/.well-known/openid-configuration`) |
 
 ## 🛠️ Available Tools
 

@@ -629,3 +629,176 @@ def test_cleanup_removes_client_with_expired_secret(users_config):
 
     provider.cleanup_expired()
     assert "secret-client" not in provider._clients
+
+
+# ---------------------------------------------------------------------------
+# OIDC federated login backend (integration)
+# ---------------------------------------------------------------------------
+
+from kimai_mcp.oidc import OIDCConfig, OIDCLoginState  # noqa: E402
+
+OIDC_EMAIL = "alice@firma.de"
+
+
+def _make_fake_oidc(email: str):
+    """Build a network-free fake OIDCClient that resolves to ``email``."""
+
+    class _FakeOIDC:
+        def __init__(self, config):
+            self.config = config
+
+        def make_login_state(self, txn):
+            return OIDCLoginState(txn=txn, nonce="fixed-nonce", code_verifier="oidc-verifier"), "oidc-challenge"
+
+        async def build_authorization_url(self, *, state, nonce, code_challenge, redirect_uri):
+            return f"https://idp.test/authorize?state={state}&nonce={nonce}&code_challenge={code_challenge}"
+
+        async def exchange_code(self, *, code, code_verifier, redirect_uri):
+            return {"id_token": "fake-id-token", "access_token": "fake"}
+
+        async def validate_id_token(self, id_token, *, expected_nonce):
+            return {"email": email, "nonce": expected_nonce}
+
+        def extract_identity(self, claims):
+            return claims.get("email")
+
+        async def aclose(self):
+            pass
+
+    return _FakeOIDC
+
+
+@pytest.fixture
+def oidc_users_config() -> UsersConfig:
+    return UsersConfig(
+        users={
+            USER_SLUG: UserConfig(
+                kimai_url="https://kimai.example.com",
+                kimai_token="token-1",
+                oidc_identity=OIDC_EMAIL,
+            )
+        }
+    )
+
+
+def _oidc_authorize(http: TestClient, client_id: str, challenge: str, state: str = "st4te") -> str:
+    """GET /authorize on an OIDC-backed server; return the state sent to the IdP."""
+    resp = http.get(
+        "/authorize",
+        params={
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": REDIRECT_URI,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": state,
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302, resp.text
+    location = resp.headers["location"]
+    assert location.startswith("https://idp.test/authorize"), location
+    return parse_qs(urlparse(location).query)["state"][0]
+
+
+def test_oidc_full_flow_end_to_end(make_client, oidc_users_config, monkeypatch):
+    monkeypatch.setattr("kimai_mcp.oauth.OIDCClient", _make_fake_oidc(OIDC_EMAIL))
+    http = make_client(
+        users_config=oidc_users_config,
+        oidc_config=OIDCConfig(issuer="https://idp.test", client_id="cid"),
+    )
+    client_info = register_client(http)
+    verifier, challenge = pkce_pair()
+    oidc_state = _oidc_authorize(http, client_info["client_id"], challenge)
+
+    resp = http.get(
+        "/oauth/oidc/callback",
+        params={"code": "idp-code", "state": oidc_state},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302, resp.text
+    location = resp.headers["location"]
+    assert location.startswith(REDIRECT_URI)
+    query = parse_qs(urlparse(location).query)
+    assert query["state"][0] == "st4te"
+    code = query["code"][0]
+
+    resp = http.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT_URI,
+            "client_id": client_info["client_id"],
+            "code_verifier": verifier,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    access_token = resp.json()["access_token"]
+
+    # The opaque-token path is unchanged: an OIDC-authenticated user reaches /mcp.
+    resp = http.post(
+        "/mcp",
+        json=INIT_PAYLOAD,
+        headers={**MCP_HEADERS, "Authorization": f"Bearer {access_token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "mcp-session-id" in {k.lower() for k in resp.headers}
+
+
+def test_oidc_local_login_form_not_mounted(make_client, oidc_users_config, monkeypatch):
+    monkeypatch.setattr("kimai_mcp.oauth.OIDCClient", _make_fake_oidc(OIDC_EMAIL))
+    http = make_client(
+        users_config=oidc_users_config,
+        oidc_config=OIDCConfig(issuer="https://idp.test", client_id="cid"),
+    )
+    # In OIDC mode the slug+secret form is not exposed.
+    resp = http.get("/oauth/login?txn=whatever", follow_redirects=False)
+    assert resp.status_code == 404
+
+
+def test_oidc_callback_unmatched_identity_is_forbidden(make_client, oidc_users_config, monkeypatch):
+    monkeypatch.setattr("kimai_mcp.oauth.OIDCClient", _make_fake_oidc("stranger@elsewhere.de"))
+    http = make_client(
+        users_config=oidc_users_config,
+        oidc_config=OIDCConfig(issuer="https://idp.test", client_id="cid"),
+    )
+    client_info = register_client(http)
+    _, challenge = pkce_pair()
+    oidc_state = _oidc_authorize(http, client_info["client_id"], challenge)
+
+    resp = http.get(
+        "/oauth/oidc/callback",
+        params={"code": "idp-code", "state": oidc_state},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403, resp.text
+    assert "location" not in resp.headers
+
+
+def test_oidc_callback_invalid_state_rejected(make_client, oidc_users_config, monkeypatch):
+    monkeypatch.setattr("kimai_mcp.oauth.OIDCClient", _make_fake_oidc(OIDC_EMAIL))
+    http = make_client(
+        users_config=oidc_users_config,
+        oidc_config=OIDCConfig(issuer="https://idp.test", client_id="cid"),
+    )
+    resp = http.get(
+        "/oauth/oidc/callback",
+        params={"code": "idp-code", "state": "never-issued-state"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_oidc_callback_provider_error_rejected(make_client, oidc_users_config, monkeypatch):
+    monkeypatch.setattr("kimai_mcp.oauth.OIDCClient", _make_fake_oidc(OIDC_EMAIL))
+    http = make_client(
+        users_config=oidc_users_config,
+        oidc_config=OIDCConfig(issuer="https://idp.test", client_id="cid"),
+    )
+    resp = http.get(
+        "/oauth/oidc/callback",
+        params={"error": "access_denied", "error_description": "user cancelled"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400, resp.text
