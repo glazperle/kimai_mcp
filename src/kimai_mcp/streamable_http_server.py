@@ -48,6 +48,7 @@ from mcp.types import Tool, TextContent
 
 from .client import KimaiClient, KimaiAPIError
 from .oauth import KimaiOAuthProvider
+from .oidc import OIDCConfig
 from .server import __version__, format_api_error
 from .user_config import UsersConfig, UserConfig
 from .security import (
@@ -298,6 +299,7 @@ class StreamableHTTPMCPServer:
         trusted_proxies: Optional[List[str]] = None,
         disable_legacy_slugs: bool = False,
         oauth_state_file: Optional[str] = None,
+        oidc_config: Optional[OIDCConfig] = None,
     ):
         """Initialize the server.
 
@@ -313,6 +315,9 @@ class StreamableHTTPMCPServer:
                 X-Real-IP headers may be trusted.
             disable_legacy_slugs: Disable the deprecated /mcp/{user_slug} routes.
             oauth_state_file: Optional JSON file to persist registered OAuth clients.
+            oidc_config: Optional OIDC relying-party config. When set, the OAuth
+                login step federates to an external OIDC provider instead of the
+                built-in slug + auth_secret form.
         """
         self.users_config = users_config
         self.host = host
@@ -338,6 +343,7 @@ class StreamableHTTPMCPServer:
             users_config=users_config,
             public_url=self.public_url,
             state_file=oauth_state_file,
+            oidc_config=oidc_config,
         )
 
         # Rate limiting configuration
@@ -660,6 +666,54 @@ def create_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # OIDC federated login backend (optional; default is the built-in slug login)
+    parser.add_argument(
+        "--auth-backend",
+        choices=["local", "oidc"],
+        default=None,
+        help=(
+            "Login backend: 'local' (built-in slug + auth_secret form, default) or "
+            "'oidc' (federate to an external OIDC provider). "
+            "Or set KIMAI_MCP_AUTH_BACKEND."
+        ),
+    )
+    parser.add_argument(
+        "--oidc-issuer",
+        metavar="URL",
+        help="OIDC issuer URL (required for --auth-backend oidc; or KIMAI_MCP_OIDC_ISSUER)",
+    )
+    parser.add_argument(
+        "--oidc-client-id",
+        metavar="ID",
+        help="OIDC client ID (required for --auth-backend oidc; or KIMAI_MCP_OIDC_CLIENT_ID)",
+    )
+    parser.add_argument(
+        "--oidc-client-secret",
+        metavar="SECRET",
+        help=(
+            "OIDC client secret for confidential clients (optional; public/PKCE-only if omitted). "
+            "Prefer the KIMAI_MCP_OIDC_CLIENT_SECRET env var over the CLI flag."
+        ),
+    )
+    parser.add_argument(
+        "--oidc-scopes",
+        metavar="SCOPES",
+        help="OIDC scopes, space- or comma-separated (default: 'openid email profile'; or KIMAI_MCP_OIDC_SCOPES)",
+    )
+    parser.add_argument(
+        "--oidc-identity-claim",
+        metavar="CLAIM",
+        help=(
+            "id_token claim used to map to a user's oidc_identity (default: email; "
+            "or KIMAI_MCP_OIDC_IDENTITY_CLAIM)"
+        ),
+    )
+    parser.add_argument(
+        "--oidc-discovery-url",
+        metavar="URL",
+        help="Override the OIDC discovery URL (default: <issuer>/.well-known/openid-configuration)",
+    )
+
     # Security settings
     parser.add_argument(
         "--rate-limit-rpm",
@@ -689,6 +743,49 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def _build_oidc_config(args: argparse.Namespace) -> Optional[OIDCConfig]:
+    """Build an OIDCConfig from CLI/env if the oidc backend is selected, else None.
+
+    Raises ValueError on a misconfigured oidc backend (handled by main()).
+    """
+    backend = (args.auth_backend or os.getenv("KIMAI_MCP_AUTH_BACKEND") or "local").lower()
+    if backend != "oidc":
+        return None
+
+    issuer = args.oidc_issuer or os.getenv("KIMAI_MCP_OIDC_ISSUER")
+    client_id = args.oidc_client_id or os.getenv("KIMAI_MCP_OIDC_CLIENT_ID")
+    missing = [
+        name for name, val in (("--oidc-issuer", issuer), ("--oidc-client-id", client_id)) if not val
+    ]
+    if missing:
+        raise ValueError(
+            f"--auth-backend oidc requires {', '.join(missing)} "
+            f"(or the corresponding KIMAI_MCP_OIDC_* environment variables)"
+        )
+
+    client_secret = args.oidc_client_secret or os.getenv("KIMAI_MCP_OIDC_CLIENT_SECRET")
+    discovery_url = args.oidc_discovery_url or os.getenv("KIMAI_MCP_OIDC_DISCOVERY_URL")
+    identity_claim = args.oidc_identity_claim or os.getenv("KIMAI_MCP_OIDC_IDENTITY_CLAIM")
+    scopes_raw = args.oidc_scopes or os.getenv("KIMAI_MCP_OIDC_SCOPES")
+
+    kwargs: Dict[str, object] = {"issuer": issuer, "client_id": client_id}
+    if client_secret:
+        kwargs["client_secret"] = client_secret
+    if discovery_url:
+        kwargs["discovery_url"] = discovery_url
+    if scopes_raw:
+        scopes = [s for s in re.split(r"[,\s]+", scopes_raw.strip()) if s]
+        if scopes:
+            kwargs["scopes"] = scopes
+    if identity_claim:
+        # The configured claim leads the fallback list (email/preferred_username/upn).
+        fallbacks = [c for c in ["email", "preferred_username", "upn"] if c != identity_claim]
+        kwargs["identity_claims"] = [identity_claim, *fallbacks]
+
+    logger.info(f"OIDC auth backend enabled (issuer: {issuer})")
+    return OIDCConfig(**kwargs)
 
 
 def main() -> int:
@@ -721,6 +818,8 @@ def main() -> int:
     )
 
     try:
+        oidc_config = _build_oidc_config(args)
+
         # Load users config
         users_config = UsersConfig.load(args.users_config)
         logger.info(f"Loaded configuration for {len(users_config.users)} user(s)")
@@ -735,6 +834,7 @@ def main() -> int:
             trusted_proxies=trusted_proxies,
             disable_legacy_slugs=disable_legacy_slugs,
             oauth_state_file=oauth_state_file,
+            oidc_config=oidc_config,
         )
         server.run()
         return 0

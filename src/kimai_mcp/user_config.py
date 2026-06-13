@@ -36,6 +36,14 @@ class UserConfig(BaseModel):
             "auth_secret cannot authenticate via OAuth."
         ),
     )
+    oidc_identity: Optional[str] = Field(
+        None,
+        description=(
+            "Identity value from the OIDC provider (e.g. the user's email) that "
+            "maps to this user when --auth-backend=oidc. Matched case-insensitively "
+            "against the configured --oidc-identity-claim."
+        ),
+    )
 
     @field_validator("kimai_url")
     @classmethod
@@ -84,8 +92,9 @@ class UsersConfig(BaseModel):
         return v
 
     @staticmethod
-    def _apply_env_auth_secrets(users: Dict[str, UserConfig]) -> None:
-        """Apply per-user auth secrets from KIMAI_USER_<NAME>_AUTH_SECRET env vars.
+    def _apply_env_overrides(users: Dict[str, UserConfig]) -> None:
+        """Apply per-user env-var overrides (KIMAI_USER_<NAME>_AUTH_SECRET /
+        KIMAI_USER_<NAME>_OIDC_IDENTITY).
 
         Environment variables take precedence over values from the config file.
         """
@@ -94,6 +103,10 @@ class UsersConfig(BaseModel):
             if env_secret:
                 config.auth_secret = env_secret
                 logger.info(f"Loaded auth_secret for user '{slug}' from environment")
+            env_identity = os.getenv(_env_key_for_slug(slug, "OIDC_IDENTITY"))
+            if env_identity:
+                config.oidc_identity = env_identity
+                logger.info(f"Loaded oidc_identity for user '{slug}' from environment")
 
     @classmethod
     def from_file(cls, path: Union[str, Path]) -> "UsersConfig":
@@ -144,7 +157,7 @@ class UsersConfig(BaseModel):
         if not users:
             raise ValueError("No users configured in config file")
 
-        cls._apply_env_auth_secrets(users)
+        cls._apply_env_overrides(users)
         return cls(users=users)
 
     @classmethod
@@ -181,7 +194,7 @@ class UsersConfig(BaseModel):
                     logger.info(f"Loaded config for user '{slug}' from USERS_CONFIG")
                 if not users:
                     raise ValueError("No valid users configured in USERS_CONFIG")
-                cls._apply_env_auth_secrets(users)
+                cls._apply_env_overrides(users)
                 return cls(users=users)
             except json.JSONDecodeError as e:
                 raise ValueError(f"Invalid JSON in USERS_CONFIG: {e}") from e
@@ -205,12 +218,14 @@ class UsersConfig(BaseModel):
 
                 ssl_key = f"{prefix}{slug.upper()}_SSL_VERIFY"
                 auth_secret_key = f"{prefix}{slug.upper()}_AUTH_SECRET"
+                oidc_identity_key = f"{prefix}{slug.upper()}_OIDC_IDENTITY"
 
                 users[slug] = UserConfig(
                     kimai_url=value,
                     kimai_token=token,
                     ssl_verify=os.getenv(ssl_key, "true"),
                     auth_secret=os.getenv(auth_secret_key),
+                    oidc_identity=os.getenv(oidc_identity_key),
                 )
                 logger.info(f"Loaded config for user '{slug}' from env vars")
 
@@ -250,6 +265,16 @@ class UsersConfig(BaseModel):
     def get_user(self, slug: str) -> Optional[UserConfig]:
         """Get configuration for a specific user."""
         return self.users.get(slug)
+
+    def get_user_by_oidc_identity(self, value: str) -> Optional[tuple[str, UserConfig]]:
+        """Return (slug, UserConfig) whose oidc_identity matches value (case-insensitive)."""
+        if not value:
+            return None
+        norm = value.strip().lower()
+        for slug, config in self.users.items():
+            if config.oidc_identity and config.oidc_identity.strip().lower() == norm:
+                return slug, config
+        return None
 
     def list_users(self) -> list[str]:
         """List all configured user slugs."""
