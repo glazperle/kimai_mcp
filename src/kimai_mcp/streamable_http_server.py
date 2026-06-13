@@ -454,6 +454,8 @@ class StreamableHTTPMCPServer:
             with contextlib.suppress(asyncio.CancelledError):
                 await cleanup_task
             await self.cleanup_users()
+            with contextlib.suppress(Exception):
+                await self.oauth_provider.aclose()
 
     async def health_check(self, request: Request) -> JSONResponse:
         """Health check endpoint.
@@ -713,6 +715,15 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="URL",
         help="Override the OIDC discovery URL (default: <issuer>/.well-known/openid-configuration)",
     )
+    parser.add_argument(
+        "--oidc-allow-unverified-email",
+        action="store_true",
+        help=(
+            "Accept the OIDC 'email' claim even when 'email_verified' is not true. "
+            "Only enable for providers that do not emit email_verified but are trusted "
+            "to assert verified emails (or set KIMAI_MCP_OIDC_ALLOW_UNVERIFIED_EMAIL=true)"
+        ),
+    )
 
     # Security settings
     parser.add_argument(
@@ -770,6 +781,10 @@ def _build_oidc_config(args: argparse.Namespace) -> Optional[OIDCConfig]:
     identity_claim = args.oidc_identity_claim or os.getenv("KIMAI_MCP_OIDC_IDENTITY_CLAIM")
     scopes_raw = args.oidc_scopes or os.getenv("KIMAI_MCP_OIDC_SCOPES")
 
+    allow_unverified_email = args.oidc_allow_unverified_email or (
+        os.getenv("KIMAI_MCP_OIDC_ALLOW_UNVERIFIED_EMAIL", "").lower() in ("1", "true", "yes")
+    )
+
     kwargs: Dict[str, object] = {"issuer": issuer, "client_id": client_id}
     if client_secret:
         kwargs["client_secret"] = client_secret
@@ -780,9 +795,12 @@ def _build_oidc_config(args: argparse.Namespace) -> Optional[OIDCConfig]:
         if scopes:
             kwargs["scopes"] = scopes
     if identity_claim:
-        # The configured claim leads the fallback list (email/preferred_username/upn).
-        fallbacks = [c for c in ["email", "preferred_username", "upn"] if c != identity_claim]
+        # The configured claim leads OIDCConfig's default fallback list.
+        default_claims = OIDCConfig.model_fields["identity_claims"].default_factory()
+        fallbacks = [c for c in default_claims if c != identity_claim]
         kwargs["identity_claims"] = [identity_claim, *fallbacks]
+    if allow_unverified_email:
+        kwargs["require_verified_email"] = False
 
     logger.info(f"OIDC auth backend enabled (issuer: {issuer})")
     return OIDCConfig(**kwargs)

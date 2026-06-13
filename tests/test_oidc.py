@@ -114,10 +114,26 @@ def test_pkce_pair_is_s256():
     assert challenge == expected
 
 
-def test_extract_identity_prefers_email():
+def test_extract_identity_prefers_verified_email():
     cfg = OIDCConfig(issuer=ISSUER, client_id=CLIENT_ID)
     cl = OIDCClient(cfg)
-    assert cl.extract_identity({"email": "a@b.de", "preferred_username": "x"}) == "a@b.de"
+    claims = {"email": "a@b.de", "email_verified": True, "preferred_username": "x@y.de"}
+    assert cl.extract_identity(claims) == "a@b.de"
+
+
+def test_extract_identity_skips_unverified_email():
+    cfg = OIDCConfig(issuer=ISSUER, client_id=CLIENT_ID)
+    cl = OIDCClient(cfg)
+    # email_verified missing -> email ignored; preferred_username (no @) skipped -> None
+    assert cl.extract_identity({"email": "a@b.de", "preferred_username": "plain"}) is None
+    # email_verified false -> email ignored, falls back to upn (has @)
+    assert cl.extract_identity({"email": "a@b.de", "email_verified": False, "upn": "u@b.de"}) == "u@b.de"
+
+
+def test_extract_identity_allows_unverified_email_when_disabled():
+    cfg = OIDCConfig(issuer=ISSUER, client_id=CLIENT_ID, require_verified_email=False)
+    cl = OIDCClient(cfg)
+    assert cl.extract_identity({"email": "a@b.de"}) == "a@b.de"
 
 
 def test_extract_identity_username_fallback_requires_at():
@@ -206,6 +222,20 @@ async def test_exchange_code_error_status(httpx_mock):
     await cl.aclose()
 
 
+@pytest.mark.asyncio
+async def test_exchange_code_non_json_200_is_wrapped(httpx_mock):
+    # A 200 with a non-JSON body (e.g. a misconfigured proxy) must raise
+    # OIDCTokenExchangeError, not an unhandled JSONDecodeError.
+    cl = make_client(httpx_mock, add_jwks=False)
+    httpx_mock.add_response(
+        url=TOKEN_ENDPOINT, method="POST", status_code=200,
+        content=b"<html>not json</html>", headers={"content-type": "text/html"},
+    )
+    with pytest.raises(OIDCTokenExchangeError):
+        await cl.exchange_code(code="abc", code_verifier="ver", redirect_uri="https://m/cb")
+    await cl.aclose()
+
+
 # ---------------------------------------------------------------------------
 # id_token validation
 # ---------------------------------------------------------------------------
@@ -216,6 +246,24 @@ async def test_validate_id_token_happy_path(httpx_mock):
     cl = make_client(httpx_mock)
     claims = await cl.validate_id_token(make_id_token(), expected_nonce="the-nonce")
     assert claims["email"] == "alice@firma.de"
+    await cl.aclose()
+
+
+@pytest.mark.asyncio
+async def test_validate_rejects_azp_mismatch(httpx_mock):
+    cl = make_client(httpx_mock)
+    token = make_id_token(extra={"azp": "some-other-client"})
+    with pytest.raises(OIDCValidationError):
+        await cl.validate_id_token(token, expected_nonce="the-nonce")
+    await cl.aclose()
+
+
+@pytest.mark.asyncio
+async def test_validate_accepts_matching_azp(httpx_mock):
+    cl = make_client(httpx_mock)
+    token = make_id_token(extra={"azp": CLIENT_ID})
+    claims = await cl.validate_id_token(token, expected_nonce="the-nonce")
+    assert claims["azp"] == CLIENT_ID
     await cl.aclose()
 
 

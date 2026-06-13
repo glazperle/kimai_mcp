@@ -271,6 +271,27 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             return None
         return pending
 
+    def _issue_auth_code(self, pending: PendingAuthorization, subject: str) -> RedirectResponse:
+        """Issue a single-use authorization code for an authenticated subject and
+        redirect back to the client. The caller must have already removed the
+        pending transaction. The redirect target is the SDK-validated client
+        redirect_uri from the stored request (open-redirect safe)."""
+        params = pending.params
+        code = secrets.token_urlsafe(32)
+        self._auth_codes[code] = AuthorizationCode(
+            code=code,
+            scopes=params.scopes or [],
+            expires_at=time.time() + AUTH_CODE_TTL_SECONDS,
+            client_id=pending.client_id,
+            code_challenge=params.code_challenge,
+            redirect_uri=params.redirect_uri,
+            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
+            resource=params.resource,
+            subject=subject,
+        )
+        redirect_url = construct_redirect_uri(str(params.redirect_uri), code=code, state=params.state)
+        return RedirectResponse(redirect_url, status_code=302, headers={"Cache-Control": "no-store"})
+
     async def handle_login_page(self, request: Request) -> Response:
         """GET /oauth/login - render the login form."""
         txn = request.query_params.get("txn")
@@ -323,25 +344,8 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
 
         # Success: consume the transaction and issue an authorization code.
         del self._pending[txn]
-        params = pending.params
-
-        code = secrets.token_urlsafe(32)
-        self._auth_codes[code] = AuthorizationCode(
-            code=code,
-            scopes=params.scopes or [],
-            expires_at=time.time() + AUTH_CODE_TTL_SECONDS,
-            client_id=pending.client_id,
-            code_challenge=params.code_challenge,
-            redirect_uri=params.redirect_uri,
-            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
-            resource=params.resource,
-            subject=username,
-        )
-
         logger.info(f"OAuth login successful for user '{username}' (client {pending.client_id})")
-
-        redirect_url = construct_redirect_uri(str(params.redirect_uri), code=code, state=params.state)
-        return RedirectResponse(redirect_url, status_code=302, headers={"Cache-Control": "no-store"})
+        return self._issue_auth_code(pending, username)
 
     # ------------------------------------------------------------------
     # Federated OIDC callback
@@ -406,36 +410,17 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
 
         match = self.users_config.get_user_by_oidc_identity(identity)
         if match is None:
+            # Detailed reason is logged server-side only; the response stays generic
+            # (consistent with the local login form's deliberate non-disclosure).
             logger.warning(f"OIDC login: no Kimai user linked to identity '{identity}'")
-            return self._oidc_error("No Kimai account is linked to this identity.", 403)
+            return self._oidc_error("Your account is not authorized for this application.", 403)
         slug, _user = match
 
-        # Success: consume the transaction and issue an authorization code, exactly
-        # as the local login form does, but with the OIDC-resolved slug as subject.
+        # Success: consume the transaction and issue an authorization code (same
+        # path as the local login form, with the OIDC-resolved slug as subject).
         del self._pending[login.txn]
-        auth_params = pending.params
-
-        auth_code = secrets.token_urlsafe(32)
-        self._auth_codes[auth_code] = AuthorizationCode(
-            code=auth_code,
-            scopes=auth_params.scopes or [],
-            expires_at=time.time() + AUTH_CODE_TTL_SECONDS,
-            client_id=pending.client_id,
-            code_challenge=auth_params.code_challenge,
-            redirect_uri=auth_params.redirect_uri,
-            redirect_uri_provided_explicitly=auth_params.redirect_uri_provided_explicitly,
-            resource=auth_params.resource,
-            subject=slug,
-        )
-
         logger.info(f"OIDC login successful for user '{slug}' (client {pending.client_id})")
-
-        # Open-redirect defense: redirect ONLY to the client redirect_uri the SDK
-        # already validated against the registered client during /authorize.
-        redirect_url = construct_redirect_uri(
-            str(auth_params.redirect_uri), code=auth_code, state=auth_params.state
-        )
-        return RedirectResponse(redirect_url, status_code=302, headers={"Cache-Control": "no-store"})
+        return self._issue_auth_code(pending, slug)
 
     def routes(self) -> list:
         """Starlette routes for the active login backend."""
@@ -647,3 +632,8 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         if removed:
             logger.debug(f"OAuth cleanup removed {removed} expired entries")
         return removed
+
+    async def aclose(self) -> None:
+        """Release resources held by the OIDC client (if any)."""
+        if self.oidc is not None:
+            await self.oidc.aclose()

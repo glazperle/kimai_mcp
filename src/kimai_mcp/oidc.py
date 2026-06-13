@@ -99,6 +99,14 @@ class OIDCConfig(BaseModel):
         default_factory=lambda: ["email", "preferred_username", "upn"],
         description="Ordered id_token claims to try when resolving the user identity",
     )
+    require_verified_email: bool = Field(
+        True,
+        description=(
+            "When the matched identity claim is 'email', require the id_token's "
+            "'email_verified' claim to be true. Disable only for providers that "
+            "do not emit email_verified but are trusted to assert verified emails."
+        ),
+    )
     allowed_algorithms: List[str] = Field(
         default_factory=lambda: list(DEFAULT_ALLOWED_ALGS),
         description="Permitted id_token signing algorithms (never 'none'/HS*)",
@@ -265,7 +273,10 @@ class OIDCClient:
         if resp.status_code != 200:
             # Do not log the response body verbatim (may echo the code); log status only.
             raise OIDCTokenExchangeError(f"Token endpoint returned HTTP {resp.status_code}")
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as e:  # non-JSON body on a 200 (e.g. a misconfigured proxy)
+            raise OIDCTokenExchangeError("Token endpoint returned a non-JSON response") from e
 
     async def validate_id_token(self, id_token: str, *, expected_nonce: str) -> Dict[str, Any]:
         """Verify the id_token signature and claims; return the validated claims.
@@ -299,6 +310,13 @@ class OIDCClient:
             )
         except jwt.InvalidTokenError as e:
             raise OIDCValidationError(f"id_token validation failed: {e}") from e
+
+        # azp (authorized party): per OIDC Core 3.1.3.7, if present it MUST equal
+        # our client_id. PyJWT only checks that client_id is contained in `aud`,
+        # which is insufficient for multi-audience tokens.
+        azp = claims.get("azp")
+        if azp is not None and azp != self.config.client_id:
+            raise OIDCValidationError("id_token azp does not match client_id")
 
         # PyJWT does not check the OIDC nonce; do it here, constant-time.
         token_nonce = claims.get("nonce", "")
@@ -337,6 +355,11 @@ class OIDCClient:
         For username-style fallback claims (``preferred_username``/``upn``) a value
         is only accepted if it looks like an email (contains ``@``), to avoid
         matching an opaque username against an email-keyed user mapping.
+
+        The ``email`` claim is only honored when the id_token also asserts
+        ``email_verified`` is true (unless ``require_verified_email`` is disabled),
+        so an IdP that lets users self-assert an unverified address cannot be used
+        to impersonate a user mapped by email.
         """
         for claim in self.config.identity_claims:
             value = claims.get(claim)
@@ -345,5 +368,12 @@ class OIDCClient:
             value = value.strip()
             if claim in ("preferred_username", "upn") and "@" not in value:
                 continue
+            if claim == "email" and self.config.require_verified_email:
+                if claims.get("email_verified") is not True:
+                    logger.warning(
+                        "OIDC: ignoring 'email' claim because 'email_verified' is not true "
+                        "(set require_verified_email=false / --oidc-allow-unverified-email to override)"
+                    )
+                    continue
             return value
         return None

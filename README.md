@@ -113,6 +113,8 @@ Map each OIDC identity to a Kimai user by adding the `oidc_identity` field (matc
 
 Register **`<public-url>/oauth/oidc/callback`** as the redirect URI at your OIDC provider. Requires the `[server]` extra (`pip install "kimai-mcp[server]"`, which pulls in `PyJWT[crypto]`). The built-in slug login form is not exposed while the OIDC backend is active.
 
+When mapping by `email`, the `id_token` must also assert `email_verified: true`, otherwise the email claim is ignored — so a provider that lets users self-assert an unverified address cannot impersonate a mapped user. For providers that do not emit `email_verified` but are trusted to only issue verified emails, pass `--oidc-allow-unverified-email` (or `KIMAI_MCP_OIDC_ALLOW_UNVERIFIED_EMAIL=true`).
+
 📖 **[See full deployment guide →](DEPLOYMENT.md)**
 
 ## Command Line Options
