@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] - 2026-06-19
+
+Adds an optional OIDC federated-login backend for the Streamable HTTP server (#14) and refines the Work Contract setup guidance ([kimai/kimai#5751](https://github.com/kimai/kimai/issues/5751)). No breaking changes; the default `local` login behavior is unchanged.
+
+### Added
+
+- **Optional OIDC federated login for the Streamable HTTP server.** The server stays the OAuth 2.1 authorization server toward Claude.ai (same opaque tokens, DCR, PKCE) but can delegate the **login step** to any standard OpenID Connect provider (Microsoft Entra ID / Azure AD, Keycloak, Auth0, Google, Okta, …): `/authorize` redirects to the provider, the returned `id_token` is verified (JWKS signature, `iss`/`aud`/`exp`/`nonce`) and mapped to a configured user.
+  - Enabled with `--auth-backend oidc`; configured via `--oidc-issuer`, `--oidc-client-id`, optional `--oidc-client-secret` (prefer `KIMAI_MCP_OIDC_CLIENT_SECRET`), `--oidc-scopes` (default `openid email profile`), `--oidc-identity-claim` (default `email`), `--oidc-discovery-url`. All have `KIMAI_MCP_OIDC_*` env equivalents.
+  - Map each identity to a Kimai user via the new `oidc_identity` field in `users.json` (or `KIMAI_USER_<SLUG>_OIDC_IDENTITY`), matched case-insensitively against the identity claim.
+  - Redirect URI to register at the provider: `<public-url>/oauth/oidc/callback`. Requires the `[server]` extra (pulls in `PyJWT[crypto]`). While OIDC is active, the built-in slug login form is not exposed.
+  - When mapping by `email`, the `id_token` must assert `email_verified: true` (override with `--oidc-allow-unverified-email` for providers that only issue verified emails).
+
+### Changed
+
+- **`entity` `set_preferences` 404 hint** now leads with the real fix: upgrade Kimai to the release containing the work-contract auto-init fix (**≥ 2.61.0**, [kimai/kimai#5894](https://github.com/kimai/kimai/pull/5894)), which initializes work-contract preferences automatically. The Kimai-UI workaround is kept as a fallback for older servers (< 2.61.0). When the failing request includes `hours_per_week`, the hint adds that this preference is not auto-initialized (set `work_contract_type="week"` first).
+- **Docs** (`CLAUDE.md`, `examples/usage_examples.md`) note that on Kimai ≥ 2.61.0 `set_preferences` works without configuring the work contract in the UI first, including the `hours_per_week` caveat.
+
 ## [2.12.1] - 2026-06-12
 
 Follow-up patch addressing the points left open in 2.12.0. No breaking changes.

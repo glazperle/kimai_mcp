@@ -241,6 +241,10 @@ entity type=user action=set_preferences id=5 preferences=[
 ]
 ```
 
+**Work Contract auto-initialization (Kimai ≥ 2.61.0):** As of Kimai server [PR #5894](https://github.com/kimai/kimai/pull/5894) (fixes issue [#5751](https://github.com/kimai/kimai/issues/5751)), the API auto-initializes work-contract preferences for users who never configured one in the UI. `set_preferences` now works out of the box — **no UI pre-configuration required**.
+- On older Kimai (**< 2.61.0**), `set_preferences` returns 404 for un-configured users; configure the work contract once in the UI first (the tool returns a hint with the exact URL).
+- Caveat: auto-init covers `work_contract_type`, `work_monday`..`work_sunday`, `public_holiday_group`, `holidays`, `work_start_day`, `work_last_day` — but **not** `hours_per_week`. For a week-based contract, set `work_contract_type="week"` first (separate request), then set `hours_per_week`.
+
 See `examples/usage_examples.md` for more detailed examples.
 
 #### 🔧 Remaining Limitations

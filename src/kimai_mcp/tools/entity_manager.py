@@ -990,8 +990,10 @@ class UserEntityHandler(BaseEntityHandler):
             user = await self.client.update_user_preferences(user_id, normalized_preferences)
         except KimaiAPIError as e:
             if e.status_code == 404:
-                # Work Contract not configured for this user
-                # Fetch user to get username for the URL
+                # Work Contract not configured for this user.
+                # Kimai >= 2.61.0 (PR #5894) auto-initializes work-contract preferences via
+                # the API, so this 404 should only occur on older servers (< 2.61.0).
+                # Fetch user to get username for the UI fallback URL.
                 try:
                     from urllib.parse import quote
                     user_info = await self.client.get_user_extended(user_id)
@@ -1001,14 +1003,31 @@ class UserEntityHandler(BaseEntityHandler):
                     username_encoded = f"user-{user_id}"
 
                 base_url = str(self.client.base_url).removesuffix('/api')
+
+                # Note if the request included hours_per_week: auto-init (PR #5894) does NOT
+                # register this preference, so a week-based contract may still 404 until the
+                # contract mode is set to "week" first.
+                pref_names = {p.get("name") for p in normalized_preferences}
+                hours_per_week_hint = ""
+                if "hours_per_week" in pref_names:
+                    hours_per_week_hint = (
+                        "\nNote: 'hours_per_week' is not auto-initialized. For a week-based "
+                        "contract, set work_contract_type=\"week\" first (in its own request), "
+                        "then set hours_per_week.\n"
+                    )
+
                 return [TextContent(
                     type="text",
                     text=f"Error: Work Contract not configured for user {user_id}.\n\n"
                          f"The user preferences endpoint returned 404, which means the Work Contract "
                          f"has not been set up for this user in Kimai.\n\n"
-                         f"Please configure it first in the Kimai UI:\n"
-                         f"  {base_url}/de/profile/{username_encoded}/contract\n\n"
-                         f"After setting initial values there, the API will work."
+                         f"Recommended fix: upgrade Kimai to the release with the work-contract "
+                         f"auto-init fix (>= 2.61.0, PR #5894). The API then initializes "
+                         f"work-contract preferences automatically and this call will succeed.\n\n"
+                         f"Workaround for older Kimai (< 2.61.0): configure the work contract "
+                         f"once in the Kimai UI, then retry via the API:\n"
+                         f"  {base_url}/de/profile/{username_encoded}/contract\n"
+                         f"{hours_per_week_hint}"
                 )]
             raise  # Re-raise other errors
 

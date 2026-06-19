@@ -312,6 +312,15 @@ Parameters: {
 
 Configure user work contracts including working hours, vacation days, and contract periods.
 
+> **Auto-initialization (Kimai ≥ 2.61.0):** Since Kimai server [PR #5894](https://github.com/kimai/kimai/pull/5894)
+> (fixes [#5751](https://github.com/kimai/kimai/issues/5751)), `set_preferences` works for users who never
+> set up a work contract in the UI — the API initializes the preferences automatically.
+> On **older Kimai (< 2.61.0)**, the same call returns 404 for un-configured users; configure the work contract
+> once in the UI first (the tool returns a hint with the exact URL).
+>
+> **Caveat:** auto-init does **not** cover `hours_per_week`. For the week-based example below on a fresh user,
+> set `work_contract_type: "week"` in a first request, then send `hours_per_week` in a follow-up.
+
 ### Set Weekly Hours Contract (40h/week)
 
 ```
