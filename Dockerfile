@@ -1,5 +1,5 @@
 # Multi-stage build for Kimai MCP Remote Server
-FROM python:3.11-slim as builder
+FROM python:3.14-slim AS builder
 
 # Set working directory
 WORKDIR /app
@@ -18,14 +18,16 @@ RUN pip install --no-cache-dir -e ".[server]"
 
 
 # Production stage
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 # Set working directory
 WORKDIR /app
 
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Copy the whole /usr/local from the builder (installed packages + console
+# scripts). Copying /usr/local wholesale is version-agnostic, so a future
+# base-image bump (e.g. python:3.x-slim) no longer breaks this COPY, unlike a
+# hardcoded .../python3.NN/site-packages path.
+COPY --from=builder /usr/local /usr/local
 COPY --from=builder /app /app
 
 # Create config directory

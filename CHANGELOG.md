@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.1] - 2026-06-19
+
+Build and CI maintenance only; no functional or API changes.
+
+### Fixed
+
+- **Dockerfile is now resilient to Python base-image bumps.** The production stage copied installed packages from a hardcoded `/usr/local/lib/python3.11/site-packages` path, so any base-image bump (e.g. the Dependabot `python:3.11-slim` → `python:3.14-slim` update) broke the build with `"/usr/local/lib/python3.11/site-packages": not found`. The stage now copies `/usr/local` wholesale, which is version-agnostic, and the base image is bumped to `python:3.14-slim`.
+
+### Changed
+
+- **CI/CD action versions bumped** via Dependabot (#16): `actions/checkout` v4 → v7, `actions/setup-python` v5 → v6, `actions/upload-artifact` v4 → v7, `actions/download-artifact` v4 → v8, `docker/setup-buildx-action` v3 → v4, `docker/login-action` v3 → v4, `docker/metadata-action` v5 → v6, `docker/build-push-action` v5 → v7.
+
 ## [2.13.0] - 2026-06-19
 
 Adds an optional OIDC federated-login backend for the Streamable HTTP server (#14) and refines the Work Contract setup guidance ([kimai/kimai#5751](https://github.com/kimai/kimai/issues/5751)). No breaking changes; the default `local` login behavior is unchanged.
