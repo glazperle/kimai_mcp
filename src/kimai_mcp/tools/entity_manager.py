@@ -603,8 +603,8 @@ class ProjectEntityHandler(BaseEntityHandler):
         if getattr(project, 'meta_fields', None):
             result += "Meta Fields:\n"
             for mf in project.meta_fields:
-                name = mf.get('name', mf.name) if hasattr(mf, 'name') else mf.get('name', 'Unknown')
-                value = mf.get('value', mf.value) if hasattr(mf, 'value') else mf.get('value', '')
+                name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
+                value = mf.value if hasattr(mf, 'value') else mf.get('value', '')
                 result += f"  - {name}: {value}\n"
         result += "\n"
         return result
@@ -675,8 +675,8 @@ class ActivityEntityHandler(BaseEntityHandler):
         if getattr(activity, 'meta_fields', None):
             result += "Meta Fields:\n"
             for mf in activity.meta_fields:
-                name = mf.get('name', mf.name) if hasattr(mf, 'name') else mf.get('name', 'Unknown')
-                value = mf.get('value', mf.value) if hasattr(mf, 'value') else mf.get('value', '')
+                name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
+                value = mf.value if hasattr(mf, 'value') else mf.get('value', '')
                 result += f"  - {name}: {value}\n"
         result += "\n"
         return result
@@ -765,8 +765,8 @@ class CustomerEntityHandler(BaseEntityHandler):
         if getattr(customer, 'meta_fields', None):
             result += "Meta Fields:\n"
             for mf in customer.meta_fields:
-                name = mf.get('name', mf.name) if hasattr(mf, 'name') else mf.get('name', 'Unknown')
-                value = mf.get('value', mf.value) if hasattr(mf, 'value') else mf.get('value', '')
+                name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
+                value = mf.value if hasattr(mf, 'value') else mf.get('value', '')
                 result += f"  - {name}: {value}\n"
         result += "\n"
 
