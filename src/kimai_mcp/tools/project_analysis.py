@@ -8,6 +8,7 @@ from collections import defaultdict
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient, KimaiAPIError
 from ..models import TimesheetFilter, ProjectFilter
+from .errors import ToolError
 
 # Safety limit: stop fetching timesheets once this many entries were collected
 MAX_ANALYSIS_RESULTS = 10000
@@ -53,18 +54,16 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
         if not matching_projects:
             # Load all projects only to present available options
             all_projects = await client.get_projects()
-            return [TextContent(
-                type="text",
-                text=f"❌ No project found matching '{project_name}'. Available projects:\n" +
-                     "\n".join([f"• {p.name}" for p in all_projects[:10]])
-            )]
-        
+            raise ToolError(
+                f"❌ No project found matching '{project_name}'. Available projects:\n" +
+                "\n".join([f"• {p.name}" for p in all_projects[:10]])
+            )
+
         if len(matching_projects) > 1:
             project_list = "\n".join([f"• {p.name} (ID: {p.id})" for p in matching_projects])
-            return [TextContent(
-                type="text", 
-                text=f"⚠️ Multiple projects found matching '{project_name}':\n{project_list}\n\nPlease be more specific."
-            )]
+            raise ToolError(
+                f"⚠️ Multiple projects found matching '{project_name}':\n{project_list}\n\nPlease be more specific."
+            )
         
         project = matching_projects[0]
         
@@ -77,33 +76,29 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
             user_filter = None
         elif user_scope == 'specific':
             if 'user' not in arguments:
-                return [TextContent(
-                    type="text", 
-                    text="❌ Error: When user_scope is 'specific', you must provide a 'user' parameter."
-                )]
+                raise ToolError(
+                    "❌ Error: When user_scope is 'specific', you must provide a 'user' parameter."
+                )
             user_filter = arguments['user']
         elif user_scope == 'team':
             if 'team' not in arguments:
-                return [TextContent(
-                    type="text", 
-                    text="❌ Error: When user_scope is 'team', you must provide a 'team' parameter. Use team_list to see available teams."
-                )]
+                raise ToolError(
+                    "❌ Error: When user_scope is 'team', you must provide a 'team' parameter. Use team_list to see available teams."
+                )
             # For team scope, we'll need to get team members first
             try:
                 team = await client.get_team(arguments['team'])
                 team_user_ids = [str(member.user.id) for member in team.members]
                 if not team_user_ids:
-                    return [TextContent(
-                        type="text", 
-                        text=f"❌ Team ID {arguments['team']} has no members."
-                    )]
+                    raise ToolError(f"❌ Team ID {arguments['team']} has no members.")
                 # Note: Kimai API doesn't support multiple user IDs in filter, so we'll filter post-processing
                 user_filter = 'all'  # Get all and filter later
+            except ToolError:
+                raise
             except Exception as e:
-                return [TextContent(
-                    type="text", 
-                    text=f"❌ Error accessing team {arguments['team']}: {str(e)}"
-                )]
+                raise ToolError(
+                    f"❌ Error accessing team {arguments['team']}: {str(e)}"
+                )
         
         # 3. Get timesheets for this project with user filtering
         filters = TimesheetFilter(
@@ -130,21 +125,18 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
                 timesheets = [ts for ts in timesheets if ts.user in team_user_ids_int]
         except KimaiAPIError as e:
             if e.status_code in (401, 403):
-                return [TextContent(
-                    type="text",
-                    text=f"❌ Insufficient permissions to access project '{project.name}' data.\n\n**Required permissions:**\n• `view_other_timesheet` - to see all team members\n• `view_user` - to access user information\n\n**Tip:** Try asking your Kimai admin to grant these permissions or use `user_scope: 'self'` to see only your own data."
-                )]
+                raise ToolError(
+                    f"❌ Insufficient permissions to access project '{project.name}' data.\n\n**Required permissions:**\n• `view_other_timesheet` - to see all team members\n• `view_user` - to access user information\n\n**Tip:** Try asking your Kimai admin to grant these permissions or use `user_scope: 'self'` to see only your own data."
+                )
             elif e.status_code == 404:
-                return [TextContent(
-                    type="text",
-                    text=f"❌ Project '{project.name}' was found but some related data is not accessible. This might indicate deleted/archived data."
-                )]
+                raise ToolError(
+                    f"❌ Project '{project.name}' was found but some related data is not accessible. This might indicate deleted/archived data."
+                )
             else:
-                # Re-raise unexpected errors with more context
-                return [TextContent(
-                    type="text",
-                    text=f"❌ API Error while analyzing project '{project.name}': {str(e)}\n\nPlease check your Kimai connection and try again."
-                )]
+                # Surface unexpected API errors with more context
+                raise ToolError(
+                    f"❌ API Error while analyzing project '{project.name}': {str(e)}\n\nPlease check your Kimai connection and try again."
+                )
 
         if not timesheets:
             return [TextContent(
@@ -154,10 +146,9 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
 
         # Safety check: fetch was aborted because the dataset exceeds the limit
         if len(timesheets) >= MAX_ANALYSIS_RESULTS:
-            return [TextContent(
-                type="text",
-                text=f"⚠️ Dataset too large: more than {MAX_ANALYSIS_RESULTS} entries found for project '{project.name}' (fetch stopped at {len(timesheets)}).\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
-            )]
+            raise ToolError(
+                f"⚠️ Dataset too large: more than {MAX_ANALYSIS_RESULTS} entries found for project '{project.name}' (fetch stopped at {len(timesheets)}).\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
+            )
         
         # Create lookup dictionaries
         user_lookup = {}
@@ -253,6 +244,12 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
 **Project Status:** Active with {len(timesheets)} logged entries""")
         
         return [TextContent(type="text", text="\n".join(result_parts))]
-        
+
+    except ToolError:
+        # Already a clean, client-facing error; let the central handler mark isError.
+        raise
+    except KimaiAPIError:
+        # Let the central handler format it via format_api_error (with isError).
+        raise
     except Exception as e:
-        return [TextContent(type="text", text=f"❌ Error during analysis: {str(e)}")]
+        raise ToolError(f"❌ Error during analysis: {str(e)}")

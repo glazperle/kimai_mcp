@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.0] - 2026-06-30
+
+### Changed
+
+- **In-handler tool errors are now reported with `isError=true`.** v2.14.0 only marked caught exceptions; this extends the same behavior to the validation, unknown-action/type, and unsupported-operation conditions that handlers previously returned as a normal `Error: ...` `TextContent` (e.g. missing required parameters, invalid date formats, "Invoice creation is not supported", "Users cannot be deleted", unknown tool). Handlers now `raise ToolError` (new `tools/errors.py`), which both transports' `_call_tool` convert to a `CallToolResult(isError=True)` via the shared `error_result()` helper. The error message text is unchanged. (#18)
+- Batch operations that partially succeed (the `✓ Succeeded / ✗ Failed` summaries) and informational output (e.g. the timesheet `user_guide`, "No absences found") remain successful results, since they are not tool failures.
+
 ## [2.14.0] - 2026-06-30
 
 ### Fixed

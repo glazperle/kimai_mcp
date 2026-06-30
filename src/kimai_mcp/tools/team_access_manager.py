@@ -3,6 +3,7 @@
 from typing import List, Optional
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
+from .errors import ToolError
 
 
 def team_access_tool() -> Tool:
@@ -50,7 +51,7 @@ async def handle_team_access(client: KimaiClient, **params) -> List[TextContent]
     target_id = params.get("target_id")
     
     if not team_id:
-        return [TextContent(type="text", text="Error: 'team_id' parameter is required")]
+        raise ToolError("Error: 'team_id' parameter is required")
 
     # Errors propagate to the central handler in server.py
     if action == "add_member":
@@ -62,17 +63,16 @@ async def handle_team_access(client: KimaiClient, **params) -> List[TextContent]
     elif action == "revoke":
         return await _handle_revoke_access(client, team_id, target, target_id)
     else:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown action '{action}'. Valid actions: add_member, remove_member, grant, revoke"
-        )]
+        raise ToolError(
+            f"Error: Unknown action '{action}'. Valid actions: add_member, remove_member, grant, revoke"
+        )
 
 
 async def _handle_add_member(client: KimaiClient, team_id: int, user_id: Optional[int]) -> List[TextContent]:
     """Handle adding a member to a team."""
     if not user_id:
-        return [TextContent(type="text", text="Error: 'user_id' parameter is required for add_member action")]
-    
+        raise ToolError("Error: 'user_id' parameter is required for add_member action")
+
     await client.add_team_member(team_id, user_id)
     
     return [TextContent(
@@ -84,8 +84,8 @@ async def _handle_add_member(client: KimaiClient, team_id: int, user_id: Optiona
 async def _handle_remove_member(client: KimaiClient, team_id: int, user_id: Optional[int]) -> List[TextContent]:
     """Handle removing a member from a team."""
     if not user_id:
-        return [TextContent(type="text", text="Error: 'user_id' parameter is required for remove_member action")]
-    
+        raise ToolError("Error: 'user_id' parameter is required for remove_member action")
+
     await client.remove_team_member(team_id, user_id)
     
     return [TextContent(
@@ -97,10 +97,10 @@ async def _handle_remove_member(client: KimaiClient, team_id: int, user_id: Opti
 async def _handle_grant_access(client: KimaiClient, team_id: int, target: Optional[str], target_id: Optional[int]) -> List[TextContent]:
     """Handle granting access to a team."""
     if not target:
-        return [TextContent(type="text", text="Error: 'target' parameter is required for grant action")]
+        raise ToolError("Error: 'target' parameter is required for grant action")
     if not target_id:
-        return [TextContent(type="text", text="Error: 'target_id' parameter is required for grant action")]
-    
+        raise ToolError("Error: 'target_id' parameter is required for grant action")
+
     if target == "customer":
         await client.grant_team_customer_access(team_id, target_id)
         entity_type = "customer"
@@ -111,10 +111,9 @@ async def _handle_grant_access(client: KimaiClient, team_id: int, target: Option
         await client.grant_team_activity_access(team_id, target_id)
         entity_type = "activity"
     else:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown target type '{target}'. Valid types: customer, project, activity"
-        )]
+        raise ToolError(
+            f"Error: Unknown target type '{target}'. Valid types: customer, project, activity"
+        )
     
     return [TextContent(
         type="text",
@@ -125,10 +124,10 @@ async def _handle_grant_access(client: KimaiClient, team_id: int, target: Option
 async def _handle_revoke_access(client: KimaiClient, team_id: int, target: Optional[str], target_id: Optional[int]) -> List[TextContent]:
     """Handle revoking access from a team."""
     if not target:
-        return [TextContent(type="text", text="Error: 'target' parameter is required for revoke action")]
+        raise ToolError("Error: 'target' parameter is required for revoke action")
     if not target_id:
-        return [TextContent(type="text", text="Error: 'target_id' parameter is required for revoke action")]
-    
+        raise ToolError("Error: 'target_id' parameter is required for revoke action")
+
     if target == "customer":
         await client.revoke_team_customer_access(team_id, target_id)
         entity_type = "customer"
@@ -139,10 +138,9 @@ async def _handle_revoke_access(client: KimaiClient, team_id: int, target: Optio
         await client.revoke_team_activity_access(team_id, target_id)
         entity_type = "activity"
     else:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown target type '{target}'. Valid types: customer, project, activity"
-        )]
+        raise ToolError(
+            f"Error: Unknown target type '{target}'. Valid types: customer, project, activity"
+        )
     
     return [TextContent(
         type="text",

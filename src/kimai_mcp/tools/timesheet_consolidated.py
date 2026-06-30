@@ -9,6 +9,7 @@ from ..models import TimesheetEditForm, TimesheetFilter, MetaFieldForm
 from .timesheet_analytics import TimesheetAnalytics
 from .batch_utils import execute_batch, format_batch_result
 from .user_discovery import resolve_accessible_users
+from .errors import ToolError
 
 
 def timesheet_tool() -> Tool:
@@ -206,10 +207,9 @@ async def handle_timesheet(client: KimaiClient, **params) -> List[TextContent]:
     elif action == "batch_export":
         return await _handle_batch_export(client, params.get("ids", []))
     else:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, duplicate, export_toggle, meta_update, user_guide, batch_delete, batch_export"
-        )]
+        raise ToolError(
+            f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, duplicate, export_toggle, meta_update, user_guide, batch_delete, batch_export"
+        )
 
 
 async def handle_timer(client: KimaiClient, **params) -> List[TextContent]:
@@ -227,10 +227,9 @@ async def handle_timer(client: KimaiClient, **params) -> List[TextContent]:
     elif action == "recent":
         return await _handle_timer_recent(client, params.get("size", 10), params.get("begin"))
     else:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown action '{action}'. Valid actions: start, stop, restart, active, recent"
-        )]
+        raise ToolError(
+            f"Error: Unknown action '{action}'. Valid actions: start, stop, restart, active, recent"
+        )
 
 
 # Timesheet action handlers
@@ -248,7 +247,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
     elif user_scope == "specific":
         user_filter = filters.get("user")
         if not user_filter:
-            return [TextContent(type="text", text="Error: 'user' parameter required when user_scope is 'specific'")]
+            raise ToolError("Error: 'user' parameter required when user_scope is 'specific'")
     elif user_scope == "all":
         user_filter = "all"  # API requires explicit "all" to return all users' timesheets
 
@@ -257,16 +256,16 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
         try:
             begin_datetime = datetime.fromisoformat(filters["begin"])
         except ValueError:
-            return [TextContent(type="text",
-                                text=f"Error: Invalid date time format for field begin '{filters['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+            raise ToolError(
+                f"Error: Invalid date time format for field begin '{filters['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
 
     end_datetime = None
     if "end" in filters:
         try:
             end_datetime = datetime.fromisoformat(filters["end"])
         except ValueError:
-            return [TextContent(type="text",
-                                text=f"Error: Invalid date time format for field end '{filters['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+            raise ToolError(
+                f"Error: Invalid date time format for field end '{filters['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
 
 
     if (
@@ -413,7 +412,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
 async def _handle_timesheet_get(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
     """Handle timesheet get action."""
     if not id:
-        return [TextContent(type="text", text="Error: 'id' parameter is required for get action")]
+        raise ToolError("Error: 'id' parameter is required for get action")
     
     ts = await client.get_timesheet(id)
     
@@ -455,8 +454,8 @@ async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[Text
     from datetime import datetime
 
     if not data.get("project") or not data.get("activity"):
-        return [TextContent(type="text", text="Error: 'project' and 'activity' are required for create action")]
-    
+        raise ToolError("Error: 'project' and 'activity' are required for create action")
+
     # Keep tags as string - model expects comma-separated string
     tags_str = data.get("tags", "")
 
@@ -464,8 +463,8 @@ async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[Text
         try:
             begin_datetime = datetime.fromisoformat(data["begin"])
         except ValueError:
-            return [TextContent(type="text",
-                                text=f"Error: Invalid date format for field begin '{data['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+            raise ToolError(
+                f"Error: Invalid date format for field begin '{data['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
     else:
         begin_datetime = datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -474,8 +473,8 @@ async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[Text
         try:
             end_datetime = datetime.fromisoformat(data["end"])
         except ValueError:
-            return [TextContent(type="text",
-                                text=f"Error: Invalid date format for field end '{data['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+            raise ToolError(
+                f"Error: Invalid date format for field end '{data['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
     
     form = TimesheetEditForm(
         project=data["project"],
@@ -503,9 +502,9 @@ async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[Text
 async def _handle_timesheet_update(client: KimaiClient, id: Optional[int], data: Dict) -> List[TextContent]:
     """Handle timesheet update action."""
     if not id:
-        return [TextContent(type="text", text="Error: 'id' parameter is required for update action")]
+        raise ToolError("Error: 'id' parameter is required for update action")
     if not data:
-        return [TextContent(type="text", text="Error: 'data' parameter is required for update action")]
+        raise ToolError("Error: 'data' parameter is required for update action")
     
     # Parse tags if provided
     if "tags" in data:
@@ -525,7 +524,7 @@ async def _handle_timesheet_update(client: KimaiClient, id: Optional[int], data:
 async def _handle_timesheet_delete(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
     """Handle timesheet delete action."""
     if not id:
-        return [TextContent(type="text", text="Error: 'id' parameter is required for delete action")]
+        raise ToolError("Error: 'id' parameter is required for delete action")
     
     await client.delete_timesheet(id)
     return [TextContent(type="text", text=f"Deleted timesheet ID {id}")]
@@ -534,7 +533,7 @@ async def _handle_timesheet_delete(client: KimaiClient, id: Optional[int]) -> Li
 async def _handle_timesheet_duplicate(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
     """Handle timesheet duplicate action."""
     if not id:
-        return [TextContent(type="text", text="Error: 'id' parameter is required for duplicate action")]
+        raise ToolError("Error: 'id' parameter is required for duplicate action")
     
     ts = await client.duplicate_timesheet(id)
     return [TextContent(
@@ -546,7 +545,7 @@ async def _handle_timesheet_duplicate(client: KimaiClient, id: Optional[int]) ->
 async def _handle_timesheet_export_toggle(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
     """Handle timesheet export toggle action."""
     if not id:
-        return [TextContent(type="text", text="Error: 'id' parameter is required for export_toggle action")]
+        raise ToolError("Error: 'id' parameter is required for export_toggle action")
     
     ts = await client.toggle_timesheet_export(id)
     status = "exported" if ts.exported else "not exported"
@@ -559,9 +558,9 @@ async def _handle_timesheet_export_toggle(client: KimaiClient, id: Optional[int]
 async def _handle_timesheet_meta_update(client: KimaiClient, id: Optional[int], meta: List[Dict]) -> List[TextContent]:
     """Handle timesheet meta update action."""
     if not id:
-        return [TextContent(type="text", text="Error: 'id' parameter is required for meta_update action")]
+        raise ToolError("Error: 'id' parameter is required for meta_update action")
     if not meta:
-        return [TextContent(type="text", text="Error: 'meta' parameter is required for meta_update action")]
+        raise ToolError("Error: 'meta' parameter is required for meta_update action")
     
     # API accepts one meta field per request - iterate through each field
     updated_count = 0
@@ -660,7 +659,7 @@ When using the timesheet tool with action='list', you can control which users' t
 async def _handle_timer_start(client: KimaiClient, data: Dict) -> List[TextContent]:
     """Handle timer start action."""
     if not data.get("project") or not data.get("activity"):
-        return [TextContent(type="text", text="Error: 'project' and 'activity' are required in data for start action")]
+        raise ToolError("Error: 'project' and 'activity' are required in data for start action")
     
     # Keep tags as string - model expects comma-separated string
     tags_str = data.get("tags", "")
@@ -684,7 +683,7 @@ async def _handle_timer_start(client: KimaiClient, data: Dict) -> List[TextConte
 async def _handle_timer_stop(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
     """Handle timer stop action."""
     if not id:
-        return [TextContent(type="text", text="Error: 'id' parameter is required for stop action")]
+        raise ToolError("Error: 'id' parameter is required for stop action")
     
     ts = await client.stop_timesheet(id)
     
@@ -698,7 +697,7 @@ async def _handle_timer_stop(client: KimaiClient, id: Optional[int]) -> List[Tex
 async def _handle_timer_restart(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
     """Handle timer restart action."""
     if not id:
-        return [TextContent(type="text", text="Error: 'id' parameter is required for restart action")]
+        raise ToolError("Error: 'id' parameter is required for restart action")
     
     ts = await client.restart_timesheet(id)
     
@@ -743,7 +742,7 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: Optional[s
         try:
             begin_datetime = datetime.fromisoformat(begin)
         except ValueError:
-            return [TextContent(type="text", text=f"Error: Invalid date format '{begin}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")]
+            raise ToolError(f"Error: Invalid date format '{begin}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
     
     # Use regular timesheet list with recent parameters
     filter_params = TimesheetFilter(
@@ -778,7 +777,7 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: Optional[s
 async def _handle_batch_delete(client: KimaiClient, ids: List[int]) -> List[TextContent]:
     """Batch delete multiple timesheets."""
     if not ids:
-        return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_delete action")]
+        raise ToolError("Error: 'ids' parameter is required for batch_delete action")
 
     async def delete_one(id: int) -> int:
         await client.delete_timesheet(id)
@@ -792,7 +791,7 @@ async def _handle_batch_delete(client: KimaiClient, ids: List[int]) -> List[Text
 async def _handle_batch_export(client: KimaiClient, ids: List[int]) -> List[TextContent]:
     """Batch mark multiple timesheets as exported."""
     if not ids:
-        return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_export action")]
+        raise ToolError("Error: 'ids' parameter is required for batch_export action")
 
     async def export_one(id: int) -> int:
         await client.toggle_timesheet_export(id)

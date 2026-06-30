@@ -12,12 +12,15 @@ is equivalent to asserting on what the client receives.
 """
 
 import pytest
+from unittest.mock import AsyncMock
 from mcp.types import CallToolResult
 
-from kimai_mcp.client import KimaiAPIError
+from kimai_mcp.client import KimaiAPIError, KimaiClient
 from kimai_mcp.server import KimaiMCPServer
 from kimai_mcp.streamable_http_server import UserMCPSession
 from kimai_mcp.user_config import UserConfig
+from kimai_mcp.tools.errors import ToolError
+from kimai_mcp.tools import entity_manager, rate_manager
 
 
 def _assert_error(result, *expected_substrings):
@@ -114,3 +117,63 @@ async def test_streamable_generic_exception_sets_iserror(monkeypatch):
     result = await session._call_tool("entity", {"type": "project", "action": "list"})
 
     _assert_error(result, "Error: boom")
+
+
+# ---------------------------------------------------------------------------
+# ToolError (in-handler validation / unsupported operations) -> isError=True
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_local_tool_error_sets_iserror(local_server, monkeypatch):
+    monkeypatch.setattr(
+        "kimai_mcp.server.dispatch_tool", _raise(ToolError("Error: bad input"))
+    )
+
+    result = await local_server._call_tool(
+        "entity", {"type": "project", "action": "list"}
+    )
+
+    _assert_error(result, "Error: bad input")
+
+
+@pytest.mark.asyncio
+async def test_streamable_tool_error_sets_iserror(monkeypatch):
+    session = _make_session()
+    session.kimai_client = object()  # sentinel so the not-initialized guard is skipped
+    monkeypatch.setattr(
+        "kimai_mcp.streamable_http_server.dispatch_tool",
+        _raise(ToolError("Error: bad input")),
+    )
+
+    result = await session._call_tool("entity", {"type": "project", "action": "list"})
+
+    _assert_error(result, "Error: bad input")
+
+
+# ---------------------------------------------------------------------------
+# Representative handlers raise ToolError (rather than returning "Error:" text)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_entity_unknown_action_raises_tool_error():
+    client = AsyncMock(spec=KimaiClient)
+    with pytest.raises(ToolError, match="Unknown action"):
+        await entity_manager.handle_entity(client, type="project", action="frobnicate")
+
+
+@pytest.mark.asyncio
+async def test_entity_unsupported_operation_raises_tool_error():
+    client = AsyncMock(spec=KimaiClient)
+    with pytest.raises(ToolError, match="Invoice creation is not supported"):
+        await entity_manager.handle_entity(
+            client, type="invoice", action="create", data={"name": "x"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_rate_missing_entity_id_raises_tool_error():
+    client = AsyncMock(spec=KimaiClient)
+    with pytest.raises(ToolError, match="'entity_id' parameter is required"):
+        await rate_manager.handle_rate(client, entity="project", action="list")

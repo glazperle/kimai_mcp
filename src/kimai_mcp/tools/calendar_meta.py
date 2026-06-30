@@ -4,6 +4,7 @@ from typing import List, Dict
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import MetaFieldForm
+from .errors import ToolError
 
 
 def calendar_tool() -> Tool:
@@ -113,10 +114,9 @@ async def handle_calendar(client: KimaiClient, **params) -> List[TextContent]:
     elif calendar_type == "holidays":
         return await _handle_calendar_holidays(client, filters)
     else:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown calendar type '{calendar_type}'. Valid types: absences, holidays"
-        )]
+        raise ToolError(
+            f"Error: Unknown calendar type '{calendar_type}'. Valid types: absences, holidays"
+        )
 
 
 async def handle_meta(client: KimaiClient, **params) -> List[TextContent]:
@@ -127,16 +127,15 @@ async def handle_meta(client: KimaiClient, **params) -> List[TextContent]:
     data = params.get("data", [])
     
     if not entity_id:
-        return [TextContent(type="text", text="Error: 'entity_id' parameter is required")]
-    
+        raise ToolError("Error: 'entity_id' parameter is required")
+
     if action != "update":
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown action '{action}'. Currently only 'update' is supported"
-        )]
-    
+        raise ToolError(
+            f"Error: Unknown action '{action}'. Currently only 'update' is supported"
+        )
+
     if not data:
-        return [TextContent(type="text", text="Error: 'data' parameter is required for update action")]
+        raise ToolError("Error: 'data' parameter is required for update action")
     
     # Adapter for endpoints that accept only one meta field per request.
     async def _one_field_per_request(method, eid, fields):
@@ -157,10 +156,9 @@ async def handle_meta(client: KimaiClient, **params) -> List[TextContent]:
 
     handler = handlers.get(entity)
     if handler is None:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown entity type '{entity}'. Valid types: {', '.join(handlers)}"
-        )]
+        raise ToolError(
+            f"Error: Unknown entity type '{entity}'. Valid types: {', '.join(handlers)}"
+        )
 
     # Convert data to MetaFieldForm objects
     meta_fields = [MetaFieldForm(name=field["name"], value=field["value"]) for field in data]

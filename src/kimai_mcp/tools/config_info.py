@@ -4,6 +4,7 @@ import asyncio
 from typing import List
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
+from .errors import ToolError
 
 
 def config_tool() -> Tool:
@@ -47,10 +48,9 @@ async def handle_config(client: KimaiClient, **params) -> List[TextContent]:
     elif config_type == "all":
         return await _handle_all_config(client)
     else:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown config type '{config_type}'. Valid types: timesheet, colors, plugins, version, all"
-        )]
+        raise ToolError(
+            f"Error: Unknown config type '{config_type}'. Valid types: timesheet, colors, plugins, version, all"
+        )
 
 
 async def _handle_timesheet_config(client: KimaiClient) -> List[TextContent]:

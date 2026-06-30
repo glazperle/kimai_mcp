@@ -24,6 +24,7 @@ from mcp.types import TextContent, Tool
 
 from kimai_mcp import models as m
 from kimai_mcp.client import KimaiClient
+from kimai_mcp.tools.errors import ToolError
 from kimai_mcp.tools import (
     absence_manager,
     calendar_meta,
@@ -259,11 +260,27 @@ CASES = []
 _TRACKED_KEYS = ("action", "type", "entity", "target")
 
 
-def _case(tool_name, handler, params, case_id):
+def _case(tool_name, handler, params, case_id, expect_error=False):
     for key in _TRACKED_KEYS:
         if key in params:
             EXERCISED[(tool_name, key)].add(params[key])
-    CASES.append(pytest.param(handler, params, id=case_id))
+    CASES.append(pytest.param(handler, params, expect_error, id=case_id))
+
+
+# (entity_type, action) combinations whose handler now raises ToolError instead
+# of returning an "Error: ..." TextContent (unsupported operations / hard API
+# limitations). The central _call_tool converts these to isError=True results.
+ENTITY_ERROR_CASES = {
+    ("user", "delete"),
+    ("tag", "get"),
+    ("tag", "update"),
+    ("invoice", "create"),
+    ("invoice", "update"),
+    ("invoice", "delete"),
+    ("holiday", "get"),
+    ("holiday", "create"),
+    ("holiday", "update"),
+}
 
 
 # --- entity tool -----------------------------------------------------------
@@ -319,28 +336,33 @@ for entity_type in ENTITY_TYPES:
         "entity", entity_manager.handle_entity,
         {"type": entity_type, "action": "list"},
         f"entity-{entity_type}-list",
+        expect_error=(entity_type, "list") in ENTITY_ERROR_CASES,
     )
     _case(
         "entity", entity_manager.handle_entity,
         {"type": entity_type, "action": "get", "id": 1},
         f"entity-{entity_type}-get",
+        expect_error=(entity_type, "get") in ENTITY_ERROR_CASES,
     )
     _case(
         "entity", entity_manager.handle_entity,
         {"type": entity_type, "action": "create",
          "data": ENTITY_CREATE_DATA[entity_type]},
         f"entity-{entity_type}-create",
+        expect_error=(entity_type, "create") in ENTITY_ERROR_CASES,
     )
     _case(
         "entity", entity_manager.handle_entity,
         {"type": entity_type, "action": "update", "id": 1,
          "data": ENTITY_UPDATE_DATA[entity_type]},
         f"entity-{entity_type}-update",
+        expect_error=(entity_type, "update") in ENTITY_ERROR_CASES,
     )
     _case(
         "entity", entity_manager.handle_entity,
         {"type": entity_type, "action": "delete", "id": 1},
         f"entity-{entity_type}-delete",
+        expect_error=(entity_type, "delete") in ENTITY_ERROR_CASES,
     )
 
 # user-only actions
@@ -381,6 +403,7 @@ _case(
     "entity", entity_manager.handle_entity,
     {"type": "user", "action": "batch_delete", "ids": [1, 2]},
     "entity-user-batch_delete",
+    expect_error=True,
 )
 
 # --- timesheet tool --------------------------------------------------------
@@ -609,17 +632,31 @@ def assert_valid_result(result):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("handler,params", CASES)
-async def test_dispatch_smoke(handler, params):
+@pytest.mark.parametrize("handler,params,expect_error", CASES)
+async def test_dispatch_smoke(handler, params, expect_error):
     """Dispatch every action of every tool handler against a specced mock.
 
     A call to a non-existent KimaiClient method raises AttributeError and
     fails the test (this exact bug class occurred 5 times in the past).
+
+    Cases marked ``expect_error`` exercise unsupported operations / hard API
+    limitations, which now raise ``ToolError`` (the central _call_tool turns
+    these into ``isError=True`` results).
     """
     client = make_mock_client()
 
-    if handler is project_analysis.handle_analyze_project_team:
-        # This handler takes the arguments dict positionally (see server.py)
+    is_positional = handler is project_analysis.handle_analyze_project_team
+
+    if expect_error:
+        with pytest.raises(ToolError):
+            if is_positional:
+                # This handler takes the arguments dict positionally (see server.py)
+                await handler(client, params)
+            else:
+                await handler(client, **params)
+        return
+
+    if is_positional:
         result = await handler(client, params)
     else:
         result = await handler(client, **params)
@@ -745,7 +782,7 @@ async def test_registry_dispatch_routes_known_and_unknown():
     # A known tool routes to its handler and returns TextContent.
     result = await registry.dispatch_tool(client, "user_current", {})
     assert_valid_result(result)
-    # An unknown tool yields a clear error instead of raising.
-    unknown = await registry.dispatch_tool(client, "does_not_exist", {})
-    assert_valid_result(unknown)
-    assert "Unknown tool" in unknown[0].text
+    # An unknown tool raises ToolError, which the servers convert to an
+    # isError=True result.
+    with pytest.raises(ToolError, match="Unknown tool"):
+        await registry.dispatch_tool(client, "does_not_exist", {})

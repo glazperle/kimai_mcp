@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from mcp.types import Tool, TextContent
 
 from ..client import KimaiClient
+from .errors import ToolError
 from .entity_manager import entity_tool, handle_entity
 from .timesheet_consolidated import timesheet_tool, timer_tool, handle_timesheet, handle_timer
 from .rate_manager import rate_tool, handle_rate
@@ -69,12 +70,11 @@ async def dispatch_tool(
     client: KimaiClient, name: str, arguments: Optional[Dict[str, Any]]
 ) -> List[TextContent]:
     """Route a tool call to its handler. Exceptions propagate to the caller's
-    error handling (KimaiAPIError -> format_api_error)."""
+    error handling (ToolError / KimaiAPIError -> error_result)."""
     entry = _REGISTRY.get(name)
     if entry is None:
-        return [TextContent(
-            type="text",
-            text=f"Unknown tool: {name}. Available tools: {', '.join(_REGISTRY)}",
-        )]
+        raise ToolError(
+            f"Unknown tool: {name}. Available tools: {', '.join(_REGISTRY)}"
+        )
     _, run = entry
     return await run(client, arguments or {})
