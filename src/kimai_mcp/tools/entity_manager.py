@@ -13,6 +13,7 @@ from ..models import (
 )
 from .batch_utils import execute_batch, format_batch_result
 from .user_discovery import resolve_accessible_users
+from .errors import ToolError
 
 logger = logging.getLogger(__name__)
 
@@ -430,39 +431,37 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
 
     handler = handlers.get(entity_type)
     if not handler:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown entity type '{entity_type}'. Valid types: {', '.join(handlers.keys())}"
-        )]
+        raise ToolError(
+            f"Error: Unknown entity type '{entity_type}'. Valid types: {', '.join(handlers.keys())}"
+        )
 
     # Execute action - errors propagate to the central handler in server.py
     if action == "list":
         return await handler.list(filters)
     elif action == "get":
         if not entity_id:
-            return [TextContent(type="text", text="Error: 'id' parameter is required for get action")]
+            raise ToolError("Error: 'id' parameter is required for get action")
         return await handler.get(entity_id)
     elif action == "create":
         if not data:
-            return [TextContent(type="text", text="Error: 'data' parameter is required for create action")]
+            raise ToolError("Error: 'data' parameter is required for create action")
         return await handler.create(data)
     elif action == "update":
         if not entity_id:
-            return [TextContent(type="text", text="Error: 'id' parameter is required for update action")]
+            raise ToolError("Error: 'id' parameter is required for update action")
         if not data:
-            return [TextContent(type="text", text="Error: 'data' parameter is required for update action")]
+            raise ToolError("Error: 'data' parameter is required for update action")
         return await handler.update(entity_id, data)
     elif action == "delete":
         if not entity_id:
-            return [TextContent(type="text", text="Error: 'id' parameter is required for delete action")]
+            raise ToolError("Error: 'id' parameter is required for delete action")
         return await handler.delete(entity_id)
     elif action == "lock_month":
         if entity_type != "user":
-            return [
-                TextContent(type="text", text="Error: 'lock_month' action is only available for user entities")]
+            raise ToolError("Error: 'lock_month' action is only available for user entities")
         month = params.get("month")
         if not month:
-            return [TextContent(type="text", text="Error: 'month' parameter is required for lock_month action")]
+            raise ToolError("Error: 'month' parameter is required for lock_month action")
 
         # Determine user IDs to process
         user_ids = params.get("ids", [])
@@ -475,14 +474,13 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
         elif entity_id:
             return await handler.lock_month(entity_id, month)
         else:
-            return [TextContent(type="text", text="Error: 'id', 'ids', or 'user_scope=all' is required for lock_month action")]
+            raise ToolError("Error: 'id', 'ids', or 'user_scope=all' is required for lock_month action")
     elif action == "unlock_month":
         if entity_type != "user":
-            return [
-                TextContent(type="text", text="Error: 'unlock_month' action is only available for user entities")]
+            raise ToolError("Error: 'unlock_month' action is only available for user entities")
         month = params.get("month")
         if not month:
-            return [TextContent(type="text", text="Error: 'month' parameter is required for unlock_month action")]
+            raise ToolError("Error: 'month' parameter is required for unlock_month action")
 
         # Determine user IDs to process
         user_ids = params.get("ids", [])
@@ -495,35 +493,25 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
         elif entity_id:
             return await handler.unlock_month(entity_id, month)
         else:
-            return [TextContent(type="text", text="Error: 'id', 'ids', or 'user_scope=all' is required for unlock_month action")]
+            raise ToolError("Error: 'id', 'ids', or 'user_scope=all' is required for unlock_month action")
     elif action == "batch_delete":
         ids = params.get("ids", [])
         if not ids:
-            return [TextContent(type="text", text="Error: 'ids' parameter is required for batch_delete action")]
+            raise ToolError("Error: 'ids' parameter is required for batch_delete action")
         return await _handle_batch_delete(handler, entity_type, ids)
     elif action == "set_preferences":
         if entity_type != "user":
-            return [TextContent(
-                type="text",
-                text="Error: 'set_preferences' action is only available for user entities"
-            )]
+            raise ToolError("Error: 'set_preferences' action is only available for user entities")
         preferences = params.get("preferences", [])
         if not preferences:
-            return [TextContent(
-                type="text",
-                text="Error: 'preferences' parameter is required for set_preferences action"
-            )]
+            raise ToolError("Error: 'preferences' parameter is required for set_preferences action")
         if not entity_id:
-            return [TextContent(
-                type="text",
-                text="Error: 'id' parameter is required for set_preferences action"
-            )]
+            raise ToolError("Error: 'id' parameter is required for set_preferences action")
         return await handler.set_preferences(entity_id, preferences)
     else:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, lock_month, unlock_month, batch_delete, set_preferences"
-        )]
+        raise ToolError(
+            f"Error: Unknown action '{action}'. Valid actions: list, get, create, update, delete, lock_month, unlock_month, batch_delete, set_preferences"
+        )
 
 
 async def _handle_batch_delete(handler: 'BaseEntityHandler', entity_type: str, ids: List[int]) -> List[TextContent]:
@@ -531,10 +519,9 @@ async def _handle_batch_delete(handler: 'BaseEntityHandler', entity_type: str, i
     # Check if entity type supports deletion
     non_deletable = ["user", "invoice"]
     if entity_type in non_deletable:
-        return [TextContent(
-            type="text",
-            text=f"Error: batch_delete is not supported for {entity_type} entities"
-        )]
+        raise ToolError(
+            f"Error: batch_delete is not supported for {entity_type} entities"
+        )
 
     # Map entity types to client delete methods
     delete_methods = {
@@ -548,10 +535,9 @@ async def _handle_batch_delete(handler: 'BaseEntityHandler', entity_type: str, i
 
     delete_method = delete_methods.get(entity_type)
     if not delete_method:
-        return [TextContent(
-            type="text",
-            text=f"Error: batch_delete is not supported for {entity_type} entities"
-        )]
+        raise ToolError(
+            f"Error: batch_delete is not supported for {entity_type} entities"
+        )
 
     async def delete_one(id: int) -> int:
         await delete_method(id)
@@ -637,10 +623,9 @@ class ProjectEntityHandler(BaseEntityHandler):
         required_fields = ["name", "customer"]
         missing = [field for field in required_fields if not data.get(field)]
         if missing:
-            return [TextContent(
-                type="text",
-                text=f"Error: Missing required project fields: {', '.join(missing)}"
-            )]
+            raise ToolError(
+                f"Error: Missing required project fields: {', '.join(missing)}"
+            )
         form = ProjectEditForm(**data)
         project = await self.client.create_project(form)
         return [TextContent(
@@ -799,10 +784,9 @@ class CustomerEntityHandler(BaseEntityHandler):
         required_fields = ["name", "country", "currency", "timezone"]
         missing = [field for field in required_fields if not data.get(field)]
         if missing:
-            return [TextContent(
-                type="text",
-                text=f"Error: Missing required customer fields: {', '.join(missing)}"
-            )]
+            raise ToolError(
+                f"Error: Missing required customer fields: {', '.join(missing)}"
+            )
 
         form = CustomerEditForm(**data)
         customer = await self.client.create_customer(form)
@@ -873,10 +857,9 @@ class UserEntityHandler(BaseEntityHandler):
         )]
 
     async def delete(self, id: int) -> List[TextContent]:
-        return [TextContent(
-            type="text",
-            text="Error: Users cannot be deleted. Use update with enabled=false to deactivate."
-        )]
+        raise ToolError(
+            "Error: Users cannot be deleted. Use update with enabled=false to deactivate."
+        )
 
     async def lock_month(self, user_id: int, month: str) -> List[TextContent]:
         """Lock working time months for a user."""
@@ -898,14 +881,13 @@ class UserEntityHandler(BaseEntityHandler):
                 user_ids = await self._resolve_all_user_ids()
             except Exception as e:
                 if isinstance(e, KimaiAPIError) and e.status_code == 403:
-                    return [TextContent(
-                        type="text",
-                        text="Error: You don't have permission to access all users.\n\n"
-                             "This requires either:\n"
-                             "- System Administrator role, or\n"
-                             "- Being a team lead (to access team members)\n\n"
-                             "Use 'ids' parameter to specify specific user IDs instead."
-                    )]
+                    raise ToolError(
+                        "Error: You don't have permission to access all users.\n\n"
+                        "This requires either:\n"
+                        "- System Administrator role, or\n"
+                        "- Being a team lead (to access team members)\n\n"
+                        "Use 'ids' parameter to specify specific user IDs instead."
+                    )
                 raise
 
         async def lock_one(uid: int) -> int:
@@ -937,14 +919,13 @@ class UserEntityHandler(BaseEntityHandler):
                 user_ids = await self._resolve_all_user_ids()
             except Exception as e:
                 if isinstance(e, KimaiAPIError) and e.status_code == 403:
-                    return [TextContent(
-                        type="text",
-                        text="Error: You don't have permission to access all users.\n\n"
-                             "This requires either:\n"
-                             "- System Administrator role, or\n"
-                             "- Being a team lead (to access team members)\n\n"
-                             "Use 'ids' parameter to specify specific user IDs instead."
-                    )]
+                    raise ToolError(
+                        "Error: You don't have permission to access all users.\n\n"
+                        "This requires either:\n"
+                        "- System Administrator role, or\n"
+                        "- Being a team lead (to access team members)\n\n"
+                        "Use 'ids' parameter to specify specific user IDs instead."
+                    )
                 raise
 
         async def unlock_one(uid: int) -> int:
@@ -1016,19 +997,18 @@ class UserEntityHandler(BaseEntityHandler):
                         "then set hours_per_week.\n"
                     )
 
-                return [TextContent(
-                    type="text",
-                    text=f"Error: Work Contract not configured for user {user_id}.\n\n"
-                         f"The user preferences endpoint returned 404, which means the Work Contract "
-                         f"has not been set up for this user in Kimai.\n\n"
-                         f"Recommended fix: upgrade Kimai to the release with the work-contract "
-                         f"auto-init fix (>= 2.61.0, PR #5894). The API then initializes "
-                         f"work-contract preferences automatically and this call will succeed.\n\n"
-                         f"Workaround for older Kimai (< 2.61.0): configure the work contract "
-                         f"once in the Kimai UI, then retry via the API:\n"
-                         f"  {base_url}/de/profile/{username_encoded}/contract\n"
-                         f"{hours_per_week_hint}"
-                )]
+                raise ToolError(
+                    f"Error: Work Contract not configured for user {user_id}.\n\n"
+                    f"The user preferences endpoint returned 404, which means the Work Contract "
+                    f"has not been set up for this user in Kimai.\n\n"
+                    f"Recommended fix: upgrade Kimai to the release with the work-contract "
+                    f"auto-init fix (>= 2.61.0, PR #5894). The API then initializes "
+                    f"work-contract preferences automatically and this call will succeed.\n\n"
+                    f"Workaround for older Kimai (< 2.61.0): configure the work contract "
+                    f"once in the Kimai UI, then retry via the API:\n"
+                    f"  {base_url}/de/profile/{username_encoded}/contract\n"
+                    f"{hours_per_week_hint}"
+                )
             raise  # Re-raise other errors
 
         result = f"Updated preferences for {user.username} (ID: {user.id})\n\n"
@@ -1122,10 +1102,9 @@ class TagEntityHandler(BaseEntityHandler):
         return [TextContent(type="text", text=result)]
 
     async def get(self, id: int) -> List[TextContent]:
-        return [TextContent(
-            type="text",
-            text="Error: Tags don't support individual retrieval. Use list instead."
-        )]
+        raise ToolError(
+            "Error: Tags don't support individual retrieval. Use list instead."
+        )
 
     async def create(self, data: Dict) -> List[TextContent]:
         form = TagEditForm(**data)
@@ -1136,10 +1115,9 @@ class TagEntityHandler(BaseEntityHandler):
         )]
 
     async def update(self, id: int, data: Dict) -> List[TextContent]:
-        return [TextContent(
-            type="text",
-            text="Error: Tags cannot be updated. Delete and recreate if needed."
-        )]
+        raise ToolError(
+            "Error: Tags cannot be updated. Delete and recreate if needed."
+        )
 
     async def delete(self, id: int) -> List[TextContent]:
         await self.client.delete_tag(id)
@@ -1194,22 +1172,19 @@ class InvoiceEntityHandler(BaseEntityHandler):
         return [TextContent(type="text", text=result)]
 
     async def create(self, data: Dict) -> List[TextContent]:
-        return [TextContent(
-            type="text",
-            text="Error: Invoice creation is not supported through this API."
-        )]
+        raise ToolError(
+            "Error: Invoice creation is not supported through this API."
+        )
 
     async def update(self, id: int, data: Dict) -> List[TextContent]:
-        return [TextContent(
-            type="text",
-            text="Error: Invoice updates are not supported through this API."
-        )]
+        raise ToolError(
+            "Error: Invoice updates are not supported through this API."
+        )
 
     async def delete(self, id: int) -> List[TextContent]:
-        return [TextContent(
-            type="text",
-            text="Error: Invoice deletion is not supported through this API."
-        )]
+        raise ToolError(
+            "Error: Invoice deletion is not supported through this API."
+        )
 
 
 class HolidayEntityHandler(BaseEntityHandler):
@@ -1232,22 +1207,19 @@ class HolidayEntityHandler(BaseEntityHandler):
         return [TextContent(type="text", text=result)]
 
     async def get(self, id: int) -> List[TextContent]:
-        return [TextContent(
-            type="text",
-            text="Error: Holidays don't support individual retrieval. Use list instead."
-        )]
+        raise ToolError(
+            "Error: Holidays don't support individual retrieval. Use list instead."
+        )
 
     async def create(self, data: Dict) -> List[TextContent]:
-        return [TextContent(
-            type="text",
-            text="Error: Holiday creation is managed by administrators."
-        )]
+        raise ToolError(
+            "Error: Holiday creation is managed by administrators."
+        )
 
     async def update(self, id: int, data: Dict) -> List[TextContent]:
-        return [TextContent(
-            type="text",
-            text="Error: Holiday updates are not supported through this API."
-        )]
+        raise ToolError(
+            "Error: Holiday updates are not supported through this API."
+        )
 
     async def delete(self, id: int) -> List[TextContent]:
         await self.client.delete_public_holiday(id)

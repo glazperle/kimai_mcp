@@ -4,6 +4,7 @@ from typing import List, Dict
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import RateForm
+from .errors import ToolError
 
 
 def rate_tool() -> Tool:
@@ -63,38 +64,36 @@ async def handle_rate(client: KimaiClient, **params) -> List[TextContent]:
     data = params.get("data", {})
     
     if not entity_id:
-        return [TextContent(type="text", text="Error: 'entity_id' parameter is required")]
-    
+        raise ToolError("Error: 'entity_id' parameter is required")
+
     # Route to appropriate handler
     handlers = {
         "customer": CustomerRateHandler(client),
         "project": ProjectRateHandler(client),
         "activity": ActivityRateHandler(client)
     }
-    
+
     handler = handlers.get(entity)
     if not handler:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown entity type '{entity}'. Valid types: customer, project, activity"
-        )]
-    
+        raise ToolError(
+            f"Error: Unknown entity type '{entity}'. Valid types: customer, project, activity"
+        )
+
     # Execute action - errors propagate to the central handler in server.py
     if action == "list":
         return await handler.list(entity_id)
     elif action == "add":
         if not data:
-            return [TextContent(type="text", text="Error: 'data' parameter is required for add action")]
+            raise ToolError("Error: 'data' parameter is required for add action")
         return await handler.add(entity_id, data)
     elif action == "delete":
         if not rate_id:
-            return [TextContent(type="text", text="Error: 'rate_id' parameter is required for delete action")]
+            raise ToolError("Error: 'rate_id' parameter is required for delete action")
         return await handler.delete(entity_id, rate_id)
     else:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown action '{action}'. Valid actions: list, add, delete"
-        )]
+        raise ToolError(
+            f"Error: Unknown action '{action}'. Valid actions: list, add, delete"
+        )
 
 
 class BaseRateHandler:

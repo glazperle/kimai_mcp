@@ -28,6 +28,7 @@ from .client import KimaiClient, KimaiAPIError
 
 # Shared tool registry (single source of truth for both servers)
 from .tools.registry import all_tools, dispatch_tool
+from .tools.errors import ToolError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -136,6 +137,10 @@ class KimaiMCPServer:
             # Route to the shared tool registry
             return await dispatch_tool(self.client, name, arguments)
 
+        except ToolError as e:
+            # Tool could not fulfill the request (bad input, unsupported op, etc.)
+            logger.info(f"Tool error in {name}: {e}")
+            return error_result(str(e))
         except KimaiAPIError as e:
             logger.error(f"Kimai API Error in tool {name}: {e.message} (Status: {e.status_code})")
             logger.error(f"Arguments were: {arguments}")

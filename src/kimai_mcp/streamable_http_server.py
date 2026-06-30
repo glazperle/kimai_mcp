@@ -50,6 +50,7 @@ from .client import KimaiClient, KimaiAPIError
 from .oauth import KimaiOAuthProvider
 from .oidc import OIDCConfig
 from .server import __version__, format_api_error, error_result
+from .tools.errors import ToolError
 from .user_config import UsersConfig, UserConfig
 from .security import (
     EnumerationProtection,
@@ -155,6 +156,10 @@ class UserMCPSession:
         try:
             return await dispatch_tool(self.kimai_client, name, arguments)
 
+        except ToolError as e:
+            # Tool could not fulfill the request (bad input, unsupported op, etc.)
+            logger.info(f"Tool error for user '{self.user_slug}' in {name}: {e}")
+            return error_result(str(e))
         except KimaiAPIError as e:
             logger.error(
                 f"Kimai API Error for user '{self.user_slug}' in tool {name}: "

@@ -4,6 +4,7 @@ from typing import List
 from mcp.types import Tool, TextContent
 from ..client import KimaiClient
 from ..models import CommentForm
+from .errors import ToolError
 
 
 def comment_tool() -> Tool:
@@ -64,12 +65,11 @@ async def handle_comment(client: KimaiClient, **params) -> List[TextContent]:
     data = params.get("data", {})
 
     if entity not in ("project", "customer"):
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown entity type '{entity}'. Valid types: project, customer"
-        )]
+        raise ToolError(
+            f"Error: Unknown entity type '{entity}'. Valid types: project, customer"
+        )
     if entity_id is None:
-        return [TextContent(type="text", text="Error: 'entity_id' parameter is required")]
+        raise ToolError("Error: 'entity_id' parameter is required")
 
     if action == "list":
         comments = await client.get_comments(entity, entity_id)
@@ -77,7 +77,7 @@ async def handle_comment(client: KimaiClient, **params) -> List[TextContent]:
 
     elif action == "create":
         if not data.get("message"):
-            return [TextContent(type="text", text="Error: 'data.message' is required for create action")]
+            raise ToolError("Error: 'data.message' is required for create action")
         form = CommentForm(message=data["message"], pinned=data.get("pinned"))
         comment = await client.create_comment(entity, entity_id, form)
         pinned_info = " (pinned)" if comment.pinned else ""
@@ -88,22 +88,21 @@ async def handle_comment(client: KimaiClient, **params) -> List[TextContent]:
 
     elif action == "delete":
         if comment_id is None:
-            return [TextContent(type="text", text="Error: 'comment_id' parameter is required for delete action")]
+            raise ToolError("Error: 'comment_id' parameter is required for delete action")
         await client.delete_comment(entity, entity_id, comment_id)
         return [TextContent(type="text", text=f"Deleted comment ID {comment_id} from {entity} ID {entity_id}")]
 
     elif action == "pin":
         if comment_id is None:
-            return [TextContent(type="text", text="Error: 'comment_id' parameter is required for pin action")]
+            raise ToolError("Error: 'comment_id' parameter is required for pin action")
         comment = await client.pin_comment(entity, entity_id, comment_id)
         status = "pinned" if comment.pinned else "unpinned"
         return [TextContent(type="text", text=f"Comment ID {comment_id} is now {status}")]
 
     else:
-        return [TextContent(
-            type="text",
-            text=f"Error: Unknown action '{action}'. Valid actions: list, create, delete, pin"
-        )]
+        raise ToolError(
+            f"Error: Unknown action '{action}'. Valid actions: list, create, delete, pin"
+        )
 
 
 def _format_comment_list(comments: List, entity: str, entity_id: int) -> str:
