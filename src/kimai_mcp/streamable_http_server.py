@@ -24,7 +24,7 @@ import logging
 import os
 import re
 from collections.abc import AsyncIterator
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import AnyHttpUrl
 from starlette.applications import Starlette
@@ -44,12 +44,12 @@ from mcp.server.auth.routes import (
 )
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, CallToolResult
 
 from .client import KimaiClient, KimaiAPIError
 from .oauth import KimaiOAuthProvider
 from .oidc import OIDCConfig
-from .server import __version__, format_api_error
+from .server import __version__, format_api_error, error_result
 from .user_config import UsersConfig, UserConfig
 from .security import (
     EnumerationProtection,
@@ -143,10 +143,12 @@ class UserMCPSession:
         """List all available MCP tools."""
         return all_tools()
 
-    async def _call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
+    async def _call_tool(
+        self, name: str, arguments: Optional[Dict[str, Any]] = None
+    ) -> Union[List[TextContent], CallToolResult]:
         """Handle tool calls."""
         if self.kimai_client is None:
-            return [TextContent(type="text", text="Error: Kimai client not initialized")]
+            return error_result("Error: Kimai client not initialized")
 
         arguments = arguments or {}
 
@@ -158,11 +160,11 @@ class UserMCPSession:
                 f"Kimai API Error for user '{self.user_slug}' in tool {name}: "
                 f"{e.message} (Status: {e.status_code}), Details: {e.details}"
             )
-            # Use the shared formatter so stdio and remote transports stay identical
-            return [TextContent(type="text", text=format_api_error(e))]
+            # Use the shared helpers so stdio and remote transports stay identical
+            return error_result(format_api_error(e))
         except Exception as e:
             logger.error(f"Error for user '{self.user_slug}' calling tool {name}: {e}", exc_info=True)
-            return [TextContent(type="text", text=f"Error: {str(e)}")]
+            return error_result(f"Error: {str(e)}")
 
 
 class MCPRoutingMiddleware:

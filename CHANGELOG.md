@@ -5,11 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.14.0] - 2026-06-30
 
 ### Fixed
 
-- **`entity` create/update raised `'MetaField' object has no attribute 'get'`** for projects, customers, and activities with custom meta fields. `create`/`update` return the `*Extended` models, whose `meta_fields` holds `MetaField` objects rather than dicts; the `serialize_*` branch was inverted and called dict's `.get()` on them. The entity is created before serialization, so the write succeeded despite the error. `list`/`get` were unaffected.
+- **`entity` create/update raised `'MetaField' object has no attribute 'get'`** for projects, customers, and activities with custom meta fields. `create`/`update` return the `*Extended` models, whose `meta_fields` holds `MetaField` objects rather than dicts; the `serialize_*` branch was inverted and called dict's `.get()` on them. The entity is created before serialization, so the write succeeded despite the error. `list`/`get` were unaffected. (#17)
+- **Tool execution errors are now reported with `isError=true`** so programmatic MCP clients can detect failures. Both transports (`server.py` and `streamable_http_server.py`) previously caught exceptions into a plain `TextContent` and returned a successful `CallToolResult` (`isError` unset), so a proxying gateway could not distinguish a `404`/crash from a normal payload. A shared `error_result()` helper now returns `CallToolResult(isError=True)` from the caught-exception paths and the streamable "client not initialized" guard, preserving the existing `format_api_error` message. (#18)
 
 ## [2.13.1] - 2026-06-19
 

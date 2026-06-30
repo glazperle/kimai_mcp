@@ -23,7 +23,7 @@ except ImportError:
 
 from mcp.server import Server, NotificationOptions
 from mcp.server.models import InitializationOptions
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, CallToolResult
 from .client import KimaiClient, KimaiAPIError
 
 # Shared tool registry (single source of truth for both servers)
@@ -42,6 +42,20 @@ def format_api_error(e: KimaiAPIError) -> str:
     if e.details:
         text += f"\nDetails: {json.dumps(e.details, ensure_ascii=False, default=str)}"
     return text
+
+
+def error_result(text: str) -> CallToolResult:
+    """Wrap an error message so MCP clients can detect the failure.
+
+    Returns a CallToolResult with isError=True. The MCP SDK passes a
+    handler-supplied CallToolResult through unchanged, so this lets tool
+    execution errors be reported per the MCP spec (distinct from a normal
+    successful result that merely contains the word "Error").
+    """
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)],
+        isError=True,
+    )
 
 
 class KimaiMCPServer:
@@ -108,7 +122,9 @@ class KimaiMCPServer:
         """List consolidated MCP tools (12 tools instead of the original 73)."""
         return all_tools()
 
-    async def _call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> List[TextContent]:
+    async def _call_tool(
+        self, name: str, arguments: Optional[Dict[str, Any]] = None
+    ) -> Union[List[TextContent], CallToolResult]:
         """Handle consolidated tool calls."""
         await self._ensure_client()
 
@@ -123,17 +139,11 @@ class KimaiMCPServer:
         except KimaiAPIError as e:
             logger.error(f"Kimai API Error in tool {name}: {e.message} (Status: {e.status_code})")
             logger.error(f"Arguments were: {arguments}")
-            return [TextContent(
-                type="text",
-                text=format_api_error(e)
-            )]
+            return error_result(format_api_error(e))
         except Exception as e:
             logger.error(f"Error calling tool {name}: {str(e)}", exc_info=True)
             logger.error(f"Arguments were: {arguments}")
-            return [TextContent(
-                type="text",
-                text=f"Error: {str(e)}"
-            )]
+            return error_result(f"Error: {str(e)}")
 
     async def run(self):
         """Run the consolidated MCP server."""
