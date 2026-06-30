@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`entity` create/update raised `'MetaField' object has no attribute 'get'`** for projects, customers, and activities with custom meta fields. `create`/`update` return the `*Extended` models, whose `meta_fields` holds `MetaField` objects rather than dicts; the `serialize_*` branch was inverted and called dict's `.get()` on them. The entity is created before serialization, so the write succeeded despite the error. `list`/`get` were unaffected.
+
 ## [2.13.1] - 2026-06-19
 
 Build and CI maintenance only; no functional or API changes.
