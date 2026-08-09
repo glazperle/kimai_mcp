@@ -16,6 +16,10 @@ updates:
       prefix: "deps"
     # Bundle minor/patch bumps into one PR to cut noise; majors stay separate.
     groups:
+      sicherheit:
+        applies-to: security-updates
+        patterns:
+          - "*"
       python-minor-patch:
         update-types:
           - "minor"
@@ -32,6 +36,10 @@ updates:
     commit-message:
       prefix: "ci"
     groups:
+      sicherheit:
+        applies-to: security-updates
+        patterns:
+          - "*"
       github-actions:
         patterns:
           - "*"
@@ -46,3 +54,11 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "docker"
+    # Sammelt alle Security-Fixes dieses Ecosystems in EINEN PR.
+    # Ohne diese Gruppe kommt jeder Fix einzeln, und Security-PRs
+    # unterliegen keinem open-pull-requests-limit.
+    groups:
+      sicherheit:
+        applies-to: security-updates
+        patterns:
+          - "*"
