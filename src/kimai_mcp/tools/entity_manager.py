@@ -1,19 +1,29 @@
 """Consolidated Entity Manager tool for all CRUD operations."""
+import builtins
 import logging
-from typing import List, Dict
 
-from mcp.types import Tool, TextContent
+from mcp.types import TextContent, Tool
 
-from ..client import KimaiClient, KimaiAPIError
+from ..client import KimaiAPIError, KimaiClient
 from ..models import (
-    ProjectEditForm, ActivityEditForm, CustomerEditForm,
-    UserCreateForm, UserEditForm, TeamEditForm, TagEditForm,
-    ProjectFilter, ActivityFilter, CustomerFilter, Customer,
-    InvoiceFilter, PublicHolidayFilter, TagFilter
+    ActivityEditForm,
+    ActivityFilter,
+    Customer,
+    CustomerEditForm,
+    CustomerFilter,
+    InvoiceFilter,
+    ProjectEditForm,
+    ProjectFilter,
+    PublicHolidayFilter,
+    TagEditForm,
+    TagFilter,
+    TeamEditForm,
+    UserCreateForm,
+    UserEditForm,
 )
 from .batch_utils import execute_batch, format_batch_result
-from .user_discovery import resolve_accessible_users
 from .errors import ToolError
+from .user_discovery import resolve_accessible_users
 
 logger = logging.getLogger(__name__)
 
@@ -409,7 +419,7 @@ OTHER:
     )
 
 
-async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_entity(client: KimaiClient, **params) -> list[TextContent]:
     """Handle consolidated entity operations."""
     entity_type = params.get("type")
     action = params.get("action")
@@ -514,7 +524,7 @@ async def handle_entity(client: KimaiClient, **params) -> List[TextContent]:
         )
 
 
-async def _handle_batch_delete(handler: 'BaseEntityHandler', entity_type: str, ids: List[int]) -> List[TextContent]:
+async def _handle_batch_delete(handler: 'BaseEntityHandler', entity_type: str, ids: list[int]) -> list[TextContent]:
     """Batch delete multiple entities."""
     # Check if entity type supports deletion
     non_deletable = ["user", "invoice"]
@@ -554,19 +564,19 @@ class BaseEntityHandler:
     def __init__(self, client: KimaiClient):
         self.client = client
 
-    async def list(self, filters: Dict) -> List[TextContent]:
+    async def list(self, filters: dict) -> list[TextContent]:
         raise NotImplementedError
 
-    async def get(self, id: int) -> List[TextContent]:
+    async def get(self, id: int) -> builtins.list[TextContent]:
         raise NotImplementedError
 
-    async def create(self, data: Dict) -> List[TextContent]:
+    async def create(self, data: dict) -> builtins.list[TextContent]:
         raise NotImplementedError
 
-    async def update(self, id: int, data: Dict) -> List[TextContent]:
+    async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         raise NotImplementedError
 
-    async def delete(self, id: int) -> List[TextContent]:
+    async def delete(self, id: int) -> builtins.list[TextContent]:
         raise NotImplementedError
 
 
@@ -595,7 +605,7 @@ class ProjectEntityHandler(BaseEntityHandler):
         result += "\n"
         return result
 
-    async def list(self, filters: Dict) -> List[TextContent]:
+    async def list(self, filters: dict) -> list[TextContent]:
         project_filter = ProjectFilter(
             customer=filters.get("customer"),
             term=filters.get("term"),
@@ -611,14 +621,14 @@ class ProjectEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def get(self, id: int) -> List[TextContent]:
+    async def get(self, id: int) -> builtins.list[TextContent]:
         project = await self.client.get_project(id)
 
         result = self.serialize_project(project)
 
         return [TextContent(type="text", text=result)]
 
-    async def create(self, data: Dict) -> List[TextContent]:
+    async def create(self, data: dict) -> builtins.list[TextContent]:
         # Validate required fields explicitly to provide a clear error before calling the API
         required_fields = ["name", "customer"]
         missing = [field for field in required_fields if not data.get(field)]
@@ -633,7 +643,7 @@ class ProjectEntityHandler(BaseEntityHandler):
             text="Created " + self.serialize_project(project)
         )]
 
-    async def update(self, id: int, data: Dict) -> List[TextContent]:
+    async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         form = ProjectEditForm(**data)
         project = await self.client.update_project(id, form)
         return [TextContent(
@@ -641,7 +651,7 @@ class ProjectEntityHandler(BaseEntityHandler):
             text="Updated " + self.serialize_project(project)
         )]
 
-    async def delete(self, id: int) -> List[TextContent]:
+    async def delete(self, id: int) -> builtins.list[TextContent]:
         await self.client.delete_project(id)
         return [TextContent(type="text", text=f"Deleted project ID {id}")]
 
@@ -666,7 +676,7 @@ class ActivityEntityHandler(BaseEntityHandler):
         result += "\n"
         return result
 
-    async def list(self, filters: Dict) -> List[TextContent]:
+    async def list(self, filters: dict) -> list[TextContent]:
         activity_filter = ActivityFilter(
             project=filters.get("project"),
             visible=filters.get("visible", 1),
@@ -683,14 +693,14 @@ class ActivityEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def get(self, id: int) -> List[TextContent]:
+    async def get(self, id: int) -> builtins.list[TextContent]:
         activity = await self.client.get_activity(id)
 
         result = self.serialize_activity(activity)
 
         return [TextContent(type="text", text=result)]
 
-    async def create(self, data: Dict) -> List[TextContent]:
+    async def create(self, data: dict) -> builtins.list[TextContent]:
         form = ActivityEditForm(**data)
         activity = await self.client.create_activity(form)
         return [TextContent(
@@ -698,7 +708,7 @@ class ActivityEntityHandler(BaseEntityHandler):
             text="Created " + self.serialize_activity(activity)
         )]
 
-    async def update(self, id: int, data: Dict) -> List[TextContent]:
+    async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         form = ActivityEditForm(**data)
         activity = await self.client.update_activity(id, form)
         return [TextContent(
@@ -706,7 +716,7 @@ class ActivityEntityHandler(BaseEntityHandler):
             text="Updated " + self.serialize_activity(activity)
         )]
 
-    async def delete(self, id: int) -> List[TextContent]:
+    async def delete(self, id: int) -> builtins.list[TextContent]:
         await self.client.delete_activity(id)
         return [TextContent(type="text", text=f"Deleted activity ID {id}")]
 
@@ -757,7 +767,7 @@ class CustomerEntityHandler(BaseEntityHandler):
 
         return result
 
-    async def list(self, filters: Dict) -> List[TextContent]:
+    async def list(self, filters: dict) -> list[TextContent]:
         customer_filter = CustomerFilter(
             visible=filters.get("visible", 1),
             term=filters.get("term"),
@@ -772,14 +782,14 @@ class CustomerEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def get(self, id: int) -> List[TextContent]:
+    async def get(self, id: int) -> builtins.list[TextContent]:
         customer = await self.client.get_customer(id)
 
         result = self.serialize_customer(customer)
 
         return [TextContent(type="text", text=result)]
 
-    async def create(self, data: Dict) -> List[TextContent]:
+    async def create(self, data: dict) -> builtins.list[TextContent]:
         # Validate required fields explicitly to provide a clear error before calling the API
         required_fields = ["name", "country", "currency", "timezone"]
         missing = [field for field in required_fields if not data.get(field)]
@@ -795,7 +805,7 @@ class CustomerEntityHandler(BaseEntityHandler):
             text="Created " + self.serialize_customer(customer)
         )]
 
-    async def update(self, id: int, data: Dict) -> List[TextContent]:
+    async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         form = CustomerEditForm(**data)
         customer = await self.client.update_customer(id, form)
         return [TextContent(
@@ -803,7 +813,7 @@ class CustomerEntityHandler(BaseEntityHandler):
             text="Updated " + self.serialize_customer(customer)
         )]
 
-    async def delete(self, id: int) -> List[TextContent]:
+    async def delete(self, id: int) -> builtins.list[TextContent]:
         await self.client.delete_customer(id)
         return [TextContent(type="text", text=f"Deleted customer ID {id}")]
 
@@ -821,7 +831,7 @@ class UserEntityHandler(BaseEntityHandler):
         result += "\n"
         return result
 
-    async def list(self, filters: Dict) -> List[TextContent]:
+    async def list(self, filters: dict) -> list[TextContent]:
         users = await self.client.get_users(
             visible=filters.get("visible", 1),
             term=filters.get("term")
@@ -833,14 +843,14 @@ class UserEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def get(self, id: int) -> List[TextContent]:
+    async def get(self, id: int) -> builtins.list[TextContent]:
         user = await self.client.get_user_extended(id)
 
         result = self.serialize_user(user)
 
         return [TextContent(type="text", text=result)]
 
-    async def create(self, data: Dict) -> List[TextContent]:
+    async def create(self, data: dict) -> builtins.list[TextContent]:
         form = UserCreateForm(**data)
         user = await self.client.create_user(form)
         return [TextContent(
@@ -848,7 +858,7 @@ class UserEntityHandler(BaseEntityHandler):
             text="Created " + self.serialize_user(user)
         )]
 
-    async def update(self, id: int, data: Dict) -> List[TextContent]:
+    async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         form = UserEditForm(**data)
         user = await self.client.update_user(id, form)
         return [TextContent(
@@ -856,12 +866,12 @@ class UserEntityHandler(BaseEntityHandler):
             text="Updated " + self.serialize_user(user)
         )]
 
-    async def delete(self, id: int) -> List[TextContent]:
+    async def delete(self, id: int) -> builtins.list[TextContent]:
         raise ToolError(
             "Error: Users cannot be deleted. Use update with enabled=false to deactivate."
         )
 
-    async def lock_month(self, user_id: int, month: str) -> List[TextContent]:
+    async def lock_month(self, user_id: int, month: str) -> builtins.list[TextContent]:
         """Lock working time months for a user."""
         await self.client.lock_work_contract_month(user_id, month)
         return [TextContent(
@@ -869,12 +879,12 @@ class UserEntityHandler(BaseEntityHandler):
             text=f"Locked working time months up to and including {month} for user ID {user_id}"
         )]
 
-    async def _resolve_all_user_ids(self) -> List[int]:
+    async def _resolve_all_user_ids(self) -> builtins.list[int]:
         """Resolve IDs of all accessible active users (teams first, get_users fallback)."""
         users = await resolve_accessible_users(self.client)
         return [u.id for u in users if getattr(u, 'enabled', True)]
 
-    async def lock_month_bulk(self, user_ids: List[int], month: str, all_users: bool = False) -> List[TextContent]:
+    async def lock_month_bulk(self, user_ids: builtins.list[int], month: str, all_users: bool = False) -> builtins.list[TextContent]:
         """Lock working time months for multiple users."""
         if all_users:
             try:
@@ -904,7 +914,7 @@ class UserEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def unlock_month(self, user_id: int, month: str) -> List[TextContent]:
+    async def unlock_month(self, user_id: int, month: str) -> builtins.list[TextContent]:
         """Unlock working time months for a user."""
         await self.client.unlock_work_contract_month(user_id, month)
         return [TextContent(
@@ -912,7 +922,7 @@ class UserEntityHandler(BaseEntityHandler):
             text=f"Unlocked working time months from {month} onwards for user ID {user_id}"
         )]
 
-    async def unlock_month_bulk(self, user_ids: List[int], month: str, all_users: bool = False) -> List[TextContent]:
+    async def unlock_month_bulk(self, user_ids: builtins.list[int], month: str, all_users: bool = False) -> builtins.list[TextContent]:
         """Unlock working time months for multiple users."""
         if all_users:
             try:
@@ -942,7 +952,7 @@ class UserEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def set_preferences(self, user_id: int, preferences: List[Dict]) -> List[TextContent]:
+    async def set_preferences(self, user_id: int, preferences: builtins.list[dict]) -> builtins.list[TextContent]:
         """Set user preferences (e.g., work contract settings).
 
         Args:
@@ -980,7 +990,8 @@ class UserEntityHandler(BaseEntityHandler):
                     user_info = await self.client.get_user_extended(user_id)
                     username = user_info.username if user_info else f"user-{user_id}"
                     username_encoded = quote(username, safe='')
-                except Exception:
+                # Only used to build a nicer hint URL; a placeholder is fine.
+                except Exception:  # noqa: BLE001
                     username_encoded = f"user-{user_id}"
 
                 base_url = str(self.client.base_url).removesuffix('/api')
@@ -1041,7 +1052,7 @@ class TeamEntityHandler(BaseEntityHandler):
         result += "\n"
         return result
 
-    async def list(self, filters: Dict) -> List[TextContent]:
+    async def list(self, filters: dict) -> list[TextContent]:
         teams = await self.client.get_teams()
 
         result = f"Found {len(teams)} teams\n\n"
@@ -1050,14 +1061,14 @@ class TeamEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def get(self, id: int) -> List[TextContent]:
+    async def get(self, id: int) -> builtins.list[TextContent]:
         team = await self.client.get_team(id)
 
         result = self.serialize_team(team)
 
         return [TextContent(type="text", text=result)]
 
-    async def create(self, data: Dict) -> List[TextContent]:
+    async def create(self, data: dict) -> builtins.list[TextContent]:
         form = TeamEditForm(**data)
         team = await self.client.create_team(form)
         return [TextContent(
@@ -1065,7 +1076,7 @@ class TeamEntityHandler(BaseEntityHandler):
             text="Created " + self.serialize_team(team)
         )]
 
-    async def update(self, id: int, data: Dict) -> List[TextContent]:
+    async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         form = TeamEditForm(**data)
         team = await self.client.update_team(id, form)
         return [TextContent(
@@ -1073,7 +1084,7 @@ class TeamEntityHandler(BaseEntityHandler):
             text="Updated " + self.serialize_team(team)
         )]
 
-    async def delete(self, id: int) -> List[TextContent]:
+    async def delete(self, id: int) -> builtins.list[TextContent]:
         await self.client.delete_team(id)
         return [TextContent(type="text", text=f"Deleted team ID {id}")]
 
@@ -1090,7 +1101,7 @@ class TagEntityHandler(BaseEntityHandler):
         result += "\n"
         return result
 
-    async def list(self, filters: Dict) -> List[TextContent]:
+    async def list(self, filters: dict) -> list[TextContent]:
         # Pass the name filter through to the API (server-side filtering)
         tag_filter = TagFilter(name=filters["name"]) if filters.get("name") else None
         tags = await self.client.get_tags_full(tag_filter)
@@ -1101,12 +1112,12 @@ class TagEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def get(self, id: int) -> List[TextContent]:
+    async def get(self, id: int) -> builtins.list[TextContent]:
         raise ToolError(
             "Error: Tags don't support individual retrieval. Use list instead."
         )
 
-    async def create(self, data: Dict) -> List[TextContent]:
+    async def create(self, data: dict) -> builtins.list[TextContent]:
         form = TagEditForm(**data)
         tag = await self.client.create_tag(form)
         return [TextContent(
@@ -1114,12 +1125,12 @@ class TagEntityHandler(BaseEntityHandler):
             text="Created " + self.serialize_tag(tag)
         )]
 
-    async def update(self, id: int, data: Dict) -> List[TextContent]:
+    async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         raise ToolError(
             "Error: Tags cannot be updated. Delete and recreate if needed."
         )
 
-    async def delete(self, id: int) -> List[TextContent]:
+    async def delete(self, id: int) -> builtins.list[TextContent]:
         await self.client.delete_tag(id)
         return [TextContent(type="text", text=f"Deleted tag ID {id}")]
 
@@ -1127,7 +1138,7 @@ class TagEntityHandler(BaseEntityHandler):
 class InvoiceEntityHandler(BaseEntityHandler):
     """Handler for invoice operations."""
 
-    async def list(self, filters: Dict) -> List[TextContent]:
+    async def list(self, filters: dict) -> list[TextContent]:
         invoices = await self.client.get_invoices(InvoiceFilter(
             begin=filters.get("begin"),
             end=filters.get("end"),
@@ -1150,7 +1161,7 @@ class InvoiceEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def get(self, id: int) -> List[TextContent]:
+    async def get(self, id: int) -> builtins.list[TextContent]:
         invoice = await self.client.get_invoice(id)
 
         result = f"Invoice: {invoice.invoice_number} (ID: {invoice.id})\n"
@@ -1171,17 +1182,17 @@ class InvoiceEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def create(self, data: Dict) -> List[TextContent]:
+    async def create(self, data: dict) -> builtins.list[TextContent]:
         raise ToolError(
             "Error: Invoice creation is not supported through this API."
         )
 
-    async def update(self, id: int, data: Dict) -> List[TextContent]:
+    async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         raise ToolError(
             "Error: Invoice updates are not supported through this API."
         )
 
-    async def delete(self, id: int) -> List[TextContent]:
+    async def delete(self, id: int) -> builtins.list[TextContent]:
         raise ToolError(
             "Error: Invoice deletion is not supported through this API."
         )
@@ -1190,7 +1201,7 @@ class InvoiceEntityHandler(BaseEntityHandler):
 class HolidayEntityHandler(BaseEntityHandler):
     """Handler for holiday operations."""
 
-    async def list(self, filters: Dict) -> List[TextContent]:
+    async def list(self, filters: dict) -> list[TextContent]:
         holidays = await self.client.get_public_holidays(PublicHolidayFilter(
             begin=filters.get("begin"),
             end=filters.get("end")
@@ -1206,21 +1217,21 @@ class HolidayEntityHandler(BaseEntityHandler):
 
         return [TextContent(type="text", text=result)]
 
-    async def get(self, id: int) -> List[TextContent]:
+    async def get(self, id: int) -> builtins.list[TextContent]:
         raise ToolError(
             "Error: Holidays don't support individual retrieval. Use list instead."
         )
 
-    async def create(self, data: Dict) -> List[TextContent]:
+    async def create(self, data: dict) -> builtins.list[TextContent]:
         raise ToolError(
             "Error: Holiday creation is managed by administrators."
         )
 
-    async def update(self, id: int, data: Dict) -> List[TextContent]:
+    async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         raise ToolError(
             "Error: Holiday updates are not supported through this API."
         )
 
-    async def delete(self, id: int) -> List[TextContent]:
+    async def delete(self, id: int) -> builtins.list[TextContent]:
         await self.client.delete_public_holiday(id)
         return [TextContent(type="text", text=f"Deleted holiday ID {id}")]

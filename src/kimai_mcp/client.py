@@ -1,23 +1,53 @@
 """Kimai API client wrapper."""
 
-from typing import Dict, List, Optional, Any, Union, Tuple
 import logging
 from datetime import datetime
+from typing import Any
+
 import httpx
 
 from .models import (
-    TimesheetEntity, TimesheetEditForm, TimesheetFilter,
-    Project, ProjectFilter, ProjectEditForm, ProjectExtended,
-    Activity, ActivityFilter, ActivityEditForm, ActivityExtended,
-    Customer, CustomerFilter, CustomerEditForm, CustomerExtended,
-    User, UserEntity, UserFilter, UserEditForm, UserCreateForm,
-    Version, Absence, AbsenceForm, AbsenceFilter,
-    Team, TeamEditForm, TagEntity, TagEditForm, TagFilter,
-    Invoice, InvoiceFilter,
-    Comment, CommentForm,
-    PublicHoliday, PublicHolidayFilter,
-    Plugin, CalendarEvent, TimesheetConfig,
-    Rate, RateForm, MetaFieldForm
+    Absence,
+    AbsenceFilter,
+    AbsenceForm,
+    Activity,
+    ActivityEditForm,
+    ActivityExtended,
+    ActivityFilter,
+    CalendarEvent,
+    Comment,
+    CommentForm,
+    Customer,
+    CustomerEditForm,
+    CustomerExtended,
+    CustomerFilter,
+    Invoice,
+    InvoiceFilter,
+    MetaFieldForm,
+    Plugin,
+    Project,
+    ProjectEditForm,
+    ProjectExtended,
+    ProjectFilter,
+    PublicHoliday,
+    PublicHolidayFilter,
+    Rate,
+    RateForm,
+    TagEditForm,
+    TagEntity,
+    TagFilter,
+    Team,
+    TeamEditForm,
+    TimesheetConfig,
+    TimesheetEditForm,
+    TimesheetEntity,
+    TimesheetFilter,
+    User,
+    UserCreateForm,
+    UserEditForm,
+    UserEntity,
+    UserFilter,
+    Version,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,7 +56,7 @@ logger = logging.getLogger(__name__)
 class KimaiAPIError(Exception):
     """Kimai API error."""
 
-    def __init__(self, message: str, status_code: Optional[int] = None, details: Optional[Any] = None):
+    def __init__(self, message: str, status_code: int | None = None, details: Any | None = None):
         self.message = message
         self.status_code = status_code
         self.details = details
@@ -37,7 +67,7 @@ class KimaiClient:
     """Kimai API client."""
 
     def __init__(self, base_url: str, api_token: str, timeout: float = 30.0,
-                 ssl_verify: Union[bool, str] = True):
+                 ssl_verify: bool | str = True):
         """Initialize Kimai client.
 
         Args:
@@ -76,7 +106,7 @@ class KimaiClient:
         """Close the HTTP client."""
         await self._client.aclose()
     
-    async def _request(self, method: str, endpoint: str, **kwargs) -> Union[Dict, List]:
+    async def _request(self, method: str, endpoint: str, **kwargs) -> dict | list:
         """Make an API request.
         
         Args:
@@ -101,7 +131,7 @@ class KimaiClient:
             
         except httpx.HTTPStatusError as e:
             # Try to parse error response
-            error_details: Optional[Any] = None
+            error_details: Any | None = None
             try:
                 error_data = e.response.json()
                 message = error_data.get('message', str(e))
@@ -127,21 +157,22 @@ class KimaiClient:
                         error_details = _prune_empty_dicts(error_data)
                 else:
                     error_details = None
-            except Exception:
+            except (ValueError, AttributeError):
+                # Body was not JSON, or not the object shape we expect.
                 message = str(e)
                 error_details = None
 
-            logging.error(
+            logger.error(
                 f"API error: {message} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
                 + (f" | details: {error_details}" if error_details else "")
             )
 
             raise KimaiAPIError(message, e.response.status_code, details=error_details)
         except httpx.RequestError as e:
-            logging.error(
-                f"API error: {str(e)} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
+            logger.error(
+                f"API error: {e!s} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
             )
-            raise KimaiAPIError(f"Request failed: {str(e)}")
+            raise KimaiAPIError(f"Request failed: {e!s}")
     
     # Version and status endpoints
     
@@ -150,7 +181,7 @@ class KimaiClient:
         data = await self._request("GET", "/version")
         return Version(**data)
     
-    async def ping(self) -> Dict[str, str]:
+    async def ping(self) -> dict[str, str]:
         """Ping the API to test connectivity."""
         return await self._request("GET", "/ping")
 
@@ -164,14 +195,14 @@ class KimaiClient:
         data = await self._request("GET", "/config/timesheet")
         return TimesheetConfig(**data)
 
-    async def get_color_config(self) -> Dict[str, str]:
+    async def get_color_config(self) -> dict[str, str]:
         """Get configured color codes.
 
         Returns a mapping of color names to hex codes.
         """
         return await self._request("GET", "/config/colors")
 
-    async def get_plugins(self) -> List[Plugin]:
+    async def get_plugins(self) -> list[Plugin]:
         """Get list of installed plugins."""
         data = await self._request("GET", "/plugins")
         return [Plugin(**item) for item in data]
@@ -183,7 +214,7 @@ class KimaiClient:
         data = await self._request("GET", "/users/me")
         return User(**data)
     
-    async def get_users(self, visible: int = 1, term: Optional[str] = None, full: bool = False) -> List[User]:
+    async def get_users(self, visible: int = 1, term: str | None = None, full: bool = False) -> list[User]:
         """Get list of users.
         
         Args:
@@ -202,9 +233,9 @@ class KimaiClient:
     
     async def get_timesheets(
         self,
-        filters: Optional[TimesheetFilter] = None,
-        max_results: Optional[int] = None
-    ) -> Tuple[List[TimesheetEntity], bool, Optional[int]]:
+        filters: TimesheetFilter | None = None,
+        max_results: int | None = None
+    ) -> tuple[list[TimesheetEntity], bool, int | None]:
         """Get list of timesheets.
 
         Args:
@@ -329,12 +360,12 @@ class KimaiClient:
 
         return all_timesheets, fetched_all, page
     
-    async def get_active_timesheets(self) -> List[TimesheetEntity]:
+    async def get_active_timesheets(self) -> list[TimesheetEntity]:
         """Get active timesheets for current user."""
         data = await self._request("GET", "/timesheets/active")
         return [TimesheetEntity(**item) for item in data]
     
-    async def get_recent_timesheets(self, begin: Optional[datetime] = None, size: int = 10) -> List[TimesheetEntity]:
+    async def get_recent_timesheets(self, begin: datetime | None = None, size: int = 10) -> list[TimesheetEntity]:
         """Get recent timesheet activities.
         
         Args:
@@ -395,7 +426,7 @@ class KimaiClient:
         data = await self._request("PATCH", f"/timesheets/{timesheet_id}/stop")
         return TimesheetEntity(**data)
     
-    async def restart_timesheet(self, timesheet_id: int, copy_all: bool = False, begin: Optional[datetime] = None) -> TimesheetEntity:
+    async def restart_timesheet(self, timesheet_id: int, copy_all: bool = False, begin: datetime | None = None) -> TimesheetEntity:
         """Restart a timesheet.
         
         Args:
@@ -430,7 +461,7 @@ class KimaiClient:
     
     # Project endpoints
     
-    async def get_projects(self, filters: Optional[ProjectFilter] = None) -> List[Project]:
+    async def get_projects(self, filters: ProjectFilter | None = None) -> list[Project]:
         """Get list of projects.
         
         Args:
@@ -492,7 +523,7 @@ class KimaiClient:
         data = await self._request("PATCH", f"/projects/{project_id}/meta", json=payload)
         return ProjectExtended(**data)
     
-    async def get_project_rates(self, project_id: int) -> List[Rate]:
+    async def get_project_rates(self, project_id: int) -> list[Rate]:
         """Get rates for a project."""
         data = await self._request("GET", f"/projects/{project_id}/rates")
         return [Rate(**item) for item in data]
@@ -509,7 +540,7 @@ class KimaiClient:
     
     # Activity endpoints
     
-    async def get_activities(self, filters: Optional[ActivityFilter] = None) -> List[Activity]:
+    async def get_activities(self, filters: ActivityFilter | None = None) -> list[Activity]:
         """Get list of activities.
         
         Args:
@@ -554,7 +585,7 @@ class KimaiClient:
         data = await self._request("PATCH", f"/activities/{activity_id}/meta", json=payload)
         return ActivityExtended(**data)
     
-    async def get_activity_rates(self, activity_id: int) -> List[Rate]:
+    async def get_activity_rates(self, activity_id: int) -> list[Rate]:
         """Get rates for an activity."""
         data = await self._request("GET", f"/activities/{activity_id}/rates")
         return [Rate(**item) for item in data]
@@ -571,7 +602,7 @@ class KimaiClient:
     
     # Customer endpoints
     
-    async def get_customers(self, filters: Optional[CustomerFilter] = None) -> List[Customer]:
+    async def get_customers(self, filters: CustomerFilter | None = None) -> list[Customer]:
         """Get list of customers.
         
         Args:
@@ -611,7 +642,7 @@ class KimaiClient:
         data = await self._request("PATCH", f"/customers/{customer_id}/meta", json=payload)
         return CustomerExtended(**data)
     
-    async def get_customer_rates(self, customer_id: int) -> List[Rate]:
+    async def get_customer_rates(self, customer_id: int) -> list[Rate]:
         """Get rates for a customer."""
         data = await self._request("GET", f"/customers/{customer_id}/rates")
         return [Rate(**item) for item in data]
@@ -628,7 +659,7 @@ class KimaiClient:
     
     # Absence endpoints
     
-    async def get_absences(self, filters: Optional[AbsenceFilter] = None) -> List[Absence]:
+    async def get_absences(self, filters: AbsenceFilter | None = None) -> list[Absence]:
         """Get list of absences.
 
         Args:
@@ -641,7 +672,7 @@ class KimaiClient:
         data = await self._request("GET", "/absences", params=params)
         return [Absence(**item) for item in data]
     
-    async def create_absence(self, absence: AbsenceForm) -> List[Absence]:
+    async def create_absence(self, absence: AbsenceForm) -> list[Absence]:
         """Create a new absence (can create multiple for date ranges).
         
         Args:
@@ -671,7 +702,7 @@ class KimaiClient:
         data = await self._request("PATCH", f"/absences/{absence_id}/reject")
         return Absence(**data)
     
-    async def get_absence_types(self, language: Optional[str] = None) -> Dict[str, str]:
+    async def get_absence_types(self, language: str | None = None) -> dict[str, str]:
         """Get available absence types.
         
         Args:
@@ -683,7 +714,7 @@ class KimaiClient:
         
         return await self._request("GET", "/absences/types", params=params)
     
-    async def get_absences_calendar(self, filters: Optional[AbsenceFilter] = None, language: Optional[str] = None) -> List[CalendarEvent]:
+    async def get_absences_calendar(self, filters: AbsenceFilter | None = None, language: str | None = None) -> list[CalendarEvent]:
         """Get absences for calendar integration.
         
         Args:
@@ -724,7 +755,7 @@ class KimaiClient:
 
     # Public Holiday endpoints
     
-    async def get_public_holidays(self, filters: Optional[PublicHolidayFilter] = None) -> List[PublicHoliday]:
+    async def get_public_holidays(self, filters: PublicHolidayFilter | None = None) -> list[PublicHoliday]:
         """Get list of public holidays.
 
         Args:
@@ -748,7 +779,7 @@ class KimaiClient:
         """Delete a public holiday."""
         await self._request("DELETE", f"/public-holidays/{holiday_id}")
     
-    async def get_public_holidays_calendar(self, filters: Optional[PublicHolidayFilter] = None) -> List[CalendarEvent]:
+    async def get_public_holidays_calendar(self, filters: PublicHolidayFilter | None = None) -> list[CalendarEvent]:
         """Get public holidays for calendar integration."""
         params = {}
         if filters:
@@ -765,7 +796,7 @@ class KimaiClient:
     
     # Team endpoints
     
-    async def get_teams(self) -> List[Team]:
+    async def get_teams(self) -> list[Team]:
         """Get list of teams."""
         data = await self._request("GET", "/teams")
         return [Team(**item) for item in data]
@@ -833,7 +864,7 @@ class KimaiClient:
     
     # Tag endpoints
     
-    async def get_tags(self, filters: Optional[TagFilter] = None) -> List[str]:
+    async def get_tags(self, filters: TagFilter | None = None) -> list[str]:
         """Get list of tags as strings (deprecated endpoint)."""
         params = {}
         if filters and filters.name:
@@ -841,7 +872,7 @@ class KimaiClient:
         
         return await self._request("GET", "/tags", params=params)
     
-    async def get_tags_full(self, filters: Optional[TagFilter] = None) -> List[TagEntity]:
+    async def get_tags_full(self, filters: TagFilter | None = None) -> list[TagEntity]:
         """Get list of tag entities."""
         params = {}
         if filters and filters.name:
@@ -862,7 +893,7 @@ class KimaiClient:
     
     # Extended User endpoints
     
-    async def get_users_extended(self, filters: Optional[UserFilter] = None) -> List[UserEntity]:
+    async def get_users_extended(self, filters: UserFilter | None = None) -> list[UserEntity]:
         """Get list of users with extended information.
         
         Args:
@@ -895,7 +926,7 @@ class KimaiClient:
     async def update_user_preferences(
         self,
         user_id: int,
-        preferences: List[Dict[str, Any]]
+        preferences: list[dict[str, Any]]
     ) -> UserEntity:
         """Update user preferences (e.g., work contract settings).
 
@@ -920,13 +951,13 @@ class KimaiClient:
         )
         return UserEntity(**data)
 
-    async def delete_api_token(self, token_id: int) -> Dict[str, Any]:
+    async def delete_api_token(self, token_id: int) -> dict[str, Any]:
         """Delete an API token (only own tokens)."""
         return await self._request("DELETE", f"/users/api-token/{token_id}")
     
     # Invoice endpoints
     
-    async def get_invoices(self, filters: Optional[InvoiceFilter] = None) -> List[Invoice]:
+    async def get_invoices(self, filters: InvoiceFilter | None = None) -> list[Invoice]:
         """Get list of invoices.
         
         Args:
@@ -957,7 +988,7 @@ class KimaiClient:
         data = await self._request("GET", f"/invoices/{invoice_id}")
         return Invoice(**data)
 
-    async def update_invoice_meta(self, invoice_id: int, meta_fields: List[MetaFieldForm]) -> Invoice:
+    async def update_invoice_meta(self, invoice_id: int, meta_fields: list[MetaFieldForm]) -> Invoice:
         """Update meta fields of an invoice (requires Kimai 2.56+).
 
         Unlike the other meta endpoints, this one accepts an array of fields in a single request.
@@ -969,7 +1000,7 @@ class KimaiClient:
     # Comment endpoints (requires Kimai 2.57+).
     # `entity` is "project" or "customer"; the path segment is the plural form.
 
-    async def get_comments(self, entity: str, entity_id: int) -> List[Comment]:
+    async def get_comments(self, entity: str, entity_id: int) -> list[Comment]:
         """Get comments for a project or customer."""
         data = await self._request("GET", f"/{entity}s/{entity_id}/comments")
         return [Comment(**item) for item in data]

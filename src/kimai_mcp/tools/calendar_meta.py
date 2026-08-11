@@ -1,9 +1,11 @@
 """Calendar and Meta tools for additional functionality."""
 
-from typing import List, Dict
-from mcp.types import Tool, TextContent
+
+from mcp.types import TextContent, Tool
+
 from ..client import KimaiClient
 from ..models import MetaFieldForm
+from .dates import day_end, day_start
 from .errors import ToolError
 
 
@@ -103,7 +105,7 @@ def user_current_tool() -> Tool:
     )
 
 
-async def handle_calendar(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_calendar(client: KimaiClient, **params) -> list[TextContent]:
     """Handle calendar operations."""
     calendar_type = params.get("type")
     filters = params.get("filters", {})
@@ -119,7 +121,7 @@ async def handle_calendar(client: KimaiClient, **params) -> List[TextContent]:
         )
 
 
-async def handle_meta(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_meta(client: KimaiClient, **params) -> list[TextContent]:
     """Handle meta field operations."""
     entity = params.get("entity")
     entity_id = params.get("entity_id")
@@ -171,7 +173,7 @@ async def handle_meta(client: KimaiClient, **params) -> List[TextContent]:
     )]
 
 
-async def handle_user_current(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_user_current(client: KimaiClient, **params) -> list[TextContent]:
     """Handle current user request."""
     # Errors propagate to the central handler in server.py
     user = await client.get_current_user()
@@ -194,7 +196,7 @@ async def handle_user_current(client: KimaiClient, **params) -> List[TextContent
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_calendar_absences(client: KimaiClient, filters: Dict) -> List[TextContent]:
+async def _handle_calendar_absences(client: KimaiClient, filters: dict) -> list[TextContent]:
     """Handle calendar absences request."""
     # Build filter object - API doesn't support year/month, only begin/end dates
     # Convert date formats to ISO with time like in absence manager
@@ -202,17 +204,13 @@ async def _handle_calendar_absences(client: KimaiClient, filters: Dict) -> List[
     if filters.get("user"):
         filter_params["user"] = str(filters["user"])
     if filters.get("begin"):
-        from datetime import datetime
         try:
-            parsed_date = datetime.strptime(filters["begin"], "%Y-%m-%d")
-            filter_params["begin"] = parsed_date.strftime("%Y-%m-%dT00:00:00")
+            filter_params["begin"] = day_start(filters["begin"])
         except ValueError:
             filter_params["begin"] = filters["begin"]  # Use as-is if not in expected format
     if filters.get("end"):
-        from datetime import datetime
         try:
-            parsed_date = datetime.strptime(filters["end"], "%Y-%m-%d")
-            filter_params["end"] = parsed_date.strftime("%Y-%m-%dT23:59:59")
+            filter_params["end"] = day_end(filters["end"])
         except ValueError:
             filter_params["end"] = filters["end"]  # Use as-is if not in expected format
     
@@ -244,7 +242,7 @@ async def _handle_calendar_absences(client: KimaiClient, filters: Dict) -> List[
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_calendar_holidays(client: KimaiClient, filters: Dict) -> List[TextContent]:
+async def _handle_calendar_holidays(client: KimaiClient, filters: dict) -> list[TextContent]:
     """Handle calendar holidays request."""
     # Build filter object - API doesn't support year/month, only begin/end dates
     filter_params = {}

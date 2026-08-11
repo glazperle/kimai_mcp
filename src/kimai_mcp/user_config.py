@@ -5,7 +5,6 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Dict, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -28,15 +27,15 @@ class UserConfig(BaseModel):
 
     kimai_url: str = Field(..., description="Kimai server URL")
     kimai_token: str = Field(..., description="Kimai API token")
-    ssl_verify: Union[bool, str] = Field(True, description="SSL verification setting")
-    auth_secret: Optional[str] = Field(
+    ssl_verify: bool | str = Field(True, description="SSL verification setting")
+    auth_secret: str | None = Field(
         None,
         description=(
             "Per-user secret for the OAuth login form. Users without an "
             "auth_secret cannot authenticate via OAuth."
         ),
     )
-    oidc_identity: Optional[str] = Field(
+    oidc_identity: str | None = Field(
         None,
         description=(
             "Identity value from the OIDC provider (e.g. the user's email) that "
@@ -56,7 +55,7 @@ class UserConfig(BaseModel):
 
     @field_validator("ssl_verify", mode="before")
     @classmethod
-    def parse_ssl_verify(cls, v: Union[bool, str]) -> Union[bool, str]:
+    def parse_ssl_verify(cls, v: bool | str) -> bool | str:
         """Parse SSL verify value from string or bool."""
         if isinstance(v, bool):
             return v
@@ -74,14 +73,14 @@ class UserConfig(BaseModel):
 class UsersConfig(BaseModel):
     """Configuration for all users."""
 
-    users: Dict[str, UserConfig] = Field(
+    users: dict[str, UserConfig] = Field(
         default_factory=dict,
         description="Map of user slug to user configuration"
     )
 
     @field_validator("users")
     @classmethod
-    def validate_slugs(cls, v: Dict[str, UserConfig]) -> Dict[str, UserConfig]:
+    def validate_slugs(cls, v: dict[str, UserConfig]) -> dict[str, UserConfig]:
         """Validate that all user slugs only contain safe characters."""
         for slug in v:
             if not SLUG_PATTERN.match(slug):
@@ -92,7 +91,7 @@ class UsersConfig(BaseModel):
         return v
 
     @staticmethod
-    def _apply_env_overrides(users: Dict[str, UserConfig]) -> None:
+    def _apply_env_overrides(users: dict[str, UserConfig]) -> None:
         """Apply per-user env-var overrides (KIMAI_USER_<NAME>_AUTH_SECRET /
         KIMAI_USER_<NAME>_OIDC_IDENTITY).
 
@@ -109,7 +108,7 @@ class UsersConfig(BaseModel):
                 logger.info(f"Loaded oidc_identity for user '{slug}' from environment")
 
     @classmethod
-    def from_file(cls, path: Union[str, Path]) -> "UsersConfig":
+    def from_file(cls, path: str | Path) -> "UsersConfig":
         """Load users configuration from a JSON file.
 
         Expected format:
@@ -238,7 +237,7 @@ class UsersConfig(BaseModel):
         return cls(users=users)
 
     @classmethod
-    def load(cls, config_path: Optional[Union[str, Path]] = None) -> "UsersConfig":
+    def load(cls, config_path: str | Path | None = None) -> "UsersConfig":
         """Load users configuration from file or environment.
 
         Priority:
@@ -262,11 +261,11 @@ class UsersConfig(BaseModel):
         logger.info("Loading users config from environment variables")
         return cls.from_env()
 
-    def get_user(self, slug: str) -> Optional[UserConfig]:
+    def get_user(self, slug: str) -> UserConfig | None:
         """Get configuration for a specific user."""
         return self.users.get(slug)
 
-    def get_user_by_oidc_identity(self, value: str) -> Optional[tuple[str, UserConfig]]:
+    def get_user_by_oidc_identity(self, value: str) -> tuple[str, UserConfig] | None:
         """Return (slug, UserConfig) whose oidc_identity matches value (case-insensitive)."""
         if not value:
             return None

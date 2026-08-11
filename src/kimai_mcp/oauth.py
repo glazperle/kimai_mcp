@@ -19,11 +19,6 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Union
-
-from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse, Response
-from starlette.routing import Route
 
 from mcp.server.auth.provider import (
     AccessToken,
@@ -35,6 +30,9 @@ from mcp.server.auth.provider import (
     construct_redirect_uri,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.routing import Route
 
 from .oidc import OIDCClient, OIDCConfig, OIDCError, OIDCLoginState
 from .user_config import UsersConfig, _env_key_for_slug
@@ -121,8 +119,8 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         self,
         users_config: UsersConfig,
         public_url: str,
-        state_file: Optional[Union[str, Path]] = None,
-        oidc_config: Optional[OIDCConfig] = None,
+        state_file: str | Path | None = None,
+        oidc_config: OIDCConfig | None = None,
     ):
         """Initialize the provider.
 
@@ -139,25 +137,25 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         self.public_url = public_url.rstrip("/")
         self.state_file = Path(state_file) if state_file else None
         # Federated OIDC login backend (None -> built-in local login form).
-        self.oidc: Optional[OIDCClient] = OIDCClient(oidc_config) if oidc_config else None
+        self.oidc: OIDCClient | None = OIDCClient(oidc_config) if oidc_config else None
         # Pending federated logins keyed by the OIDC `state` we sent to the IdP.
-        self._oidc_logins: Dict[str, OIDCLoginState] = {}
+        self._oidc_logins: dict[str, OIDCLoginState] = {}
 
-        self._clients: Dict[str, OAuthClientInformationFull] = {}
+        self._clients: dict[str, OAuthClientInformationFull] = {}
         # Last time each client was seen (registered or looked up). Used to
         # expire idle DCR clients in cleanup_expired() so the store can't grow
         # without bound.
-        self._client_last_seen: Dict[str, float] = {}
-        self._pending: Dict[str, PendingAuthorization] = {}
-        self._auth_codes: Dict[str, AuthorizationCode] = {}
-        self._access_tokens: Dict[str, AccessToken] = {}
-        self._refresh_tokens: Dict[str, RefreshToken] = {}
+        self._client_last_seen: dict[str, float] = {}
+        self._pending: dict[str, PendingAuthorization] = {}
+        self._auth_codes: dict[str, AuthorizationCode] = {}
+        self._access_tokens: dict[str, AccessToken] = {}
+        self._refresh_tokens: dict[str, RefreshToken] = {}
         # The SDK RefreshToken model has no `resource` field, so we keep the
         # RFC 8707 audience binding for refresh tokens in a side mapping.
-        self._refresh_token_resource: Dict[str, Optional[str]] = {}
+        self._refresh_token_resource: dict[str, str | None] = {}
         # Pairing for revocation/rotation: access <-> refresh
-        self._access_to_refresh: Dict[str, str] = {}
-        self._refresh_to_access: Dict[str, str] = {}
+        self._access_to_refresh: dict[str, str] = {}
+        self._refresh_to_access: dict[str, str] = {}
 
         self._load_clients()
 
@@ -179,7 +177,9 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
                 # not immediately expire still-valid clients.
                 self._client_last_seen[client_id] = now
             logger.info(f"Loaded {len(self._clients)} OAuth client(s) from {self.state_file}")
-        except Exception as e:
+        # A corrupt or unreadable state file must not stop the server from
+        # booting; clients simply have to register again.
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to load OAuth state file {self.state_file}: {e}")
 
     def _persist_clients(self) -> None:
@@ -198,10 +198,12 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             tmp_path.replace(self.state_file)
-        except Exception as e:
+        # Persistence is a convenience; a failing write must not break the
+        # in-memory registration that just succeeded.
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to persist OAuth state file {self.state_file}: {e}")
 
-    async def get_client(self, client_id: str) -> Optional[OAuthClientInformationFull]:
+    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         client = self._clients.get(client_id)
         if client is not None:
             # Renew last-seen on every use so actively used clients never expire.
@@ -251,7 +253,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
     # Login form (HTML)
     # ------------------------------------------------------------------
 
-    def _render_login_page(self, txn: str, error: Optional[str] = None, status_code: int = 200) -> Response:
+    def _render_login_page(self, txn: str, error: str | None = None, status_code: int = 200) -> Response:
         error_block = f'<div class="error">{html.escape(error)}</div>' if error else ""
         page = _LOGIN_PAGE_TEMPLATE.format(
             action=LOGIN_PATH,
@@ -260,7 +262,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         )
         return HTMLResponse(page, status_code=status_code)
 
-    def _get_pending(self, txn: Optional[str]) -> Optional[PendingAuthorization]:
+    def _get_pending(self, txn: str | None) -> PendingAuthorization | None:
         if not txn:
             return None
         pending = self._pending.get(txn)
@@ -351,7 +353,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
     # Federated OIDC callback
     # ------------------------------------------------------------------
 
-    def _get_oidc_login(self, state: Optional[str]) -> Optional[OIDCLoginState]:
+    def _get_oidc_login(self, state: str | None) -> OIDCLoginState | None:
         """Pop a pending OIDC login by state (single-use); None if missing/expired."""
         if not state:
             return None
@@ -436,7 +438,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
     # ------------------------------------------------------------------
 
     def _issue_token_pair(
-        self, client_id: str, scopes: list, subject: Optional[str], resource: Optional[str]
+        self, client_id: str, scopes: list, subject: str | None, resource: str | None
     ) -> OAuthToken:
         """Issue a new opaque access/refresh token pair bound to a user."""
         now = int(time.time())
@@ -474,7 +476,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
 
     async def load_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: str
-    ) -> Optional[AuthorizationCode]:
+    ) -> AuthorizationCode | None:
         code = self._auth_codes.get(authorization_code)
         if code is None:
             return None
@@ -497,7 +499,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
 
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
-    ) -> Optional[RefreshToken]:
+    ) -> RefreshToken | None:
         token = self._refresh_tokens.get(refresh_token)
         if token is None:
             return None
@@ -533,7 +535,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             resource=resource,
         )
 
-    async def load_access_token(self, token: str) -> Optional[AccessToken]:
+    async def load_access_token(self, token: str) -> AccessToken | None:
         access = self._access_tokens.get(token)
         if access is None:
             return None

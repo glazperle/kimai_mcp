@@ -1,14 +1,14 @@
 """Analytics extension for timesheet calculations."""
 
-from typing import Dict, List, Any
 from collections import defaultdict
+from typing import Any
 
 
 class TimesheetAnalytics:
     """Performs calculations on timesheet data."""
     
     @staticmethod
-    def calculate_statistics(timesheets: List[Any], include_details: bool = False, breakdown_by_year: bool = False) -> Dict[str, Any]:
+    def calculate_statistics(timesheets: list[Any], include_details: bool = False, breakdown_by_year: bool = False) -> dict[str, Any]:
         """Calculate comprehensive statistics from timesheet data."""
         if not timesheets:
             return {
@@ -186,7 +186,7 @@ class TimesheetAnalytics:
         return stats
 
     @staticmethod
-    def format_statistics_report(stats: Dict[str, Any], project_map: Dict[int, str] = None) -> str:
+    def format_statistics_report(stats: dict[str, Any], project_map: dict[int, str] | None = None) -> str:
         """Format statistics into a readable report."""
         if stats.get("total_entries", 0) == 0:
             return stats.get("message", "No data available for analysis")

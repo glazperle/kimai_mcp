@@ -1,14 +1,16 @@
 """Consolidated Absence Manager tool for all absence operations."""
 
-from typing import List, Dict, Optional, Tuple
-from datetime import datetime, date, timedelta
-from mcp.types import Tool, TextContent
-from ..client import KimaiClient, KimaiAPIError
-from ..models import AbsenceForm, AbsenceFilter
+from datetime import date, timedelta
+
+from mcp.types import TextContent, Tool
+
+from ..client import KimaiAPIError, KimaiClient
+from ..models import AbsenceFilter, AbsenceForm
 from .absence_analytics import AbsenceAnalytics
 from .batch_utils import execute_batch, format_batch_result
-from .user_discovery import resolve_accessible_users
+from .dates import day_end, day_start, parse_iso_date, today
 from .errors import ToolError
+from .user_discovery import resolve_accessible_users
 
 
 def absence_tool() -> Tool:
@@ -140,7 +142,7 @@ NOTE: To change annual vacation days quota, use entity tool with set_preferences
     )
 
 
-async def handle_absence(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_absence(client: KimaiClient, **params) -> list[TextContent]:
     """Handle consolidated absence operations."""
     action = params.get("action")
 
@@ -186,11 +188,11 @@ async def handle_absence(client: KimaiClient, **params) -> List[TextContent]:
 
 async def _fetch_absences_for_users(
     client: KimaiClient,
-    user_ids: List,
-    begin_date: Optional[str],
-    end_date: Optional[str],
+    user_ids: list,
+    begin_date: str | None,
+    end_date: str | None,
     status: str
-) -> List:
+) -> list:
     """Fetch absences for multiple users in parallel (max 10 concurrent).
 
     Users we don't have permission to view are skipped silently
@@ -208,7 +210,7 @@ async def _fetch_absences_for_users(
     return [absence for user_absences in success for absence in user_absences]
 
 
-async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextContent]:
+async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextContent]:
     """Handle absence list action."""
     # Handle user scope - API only supports single user or no user filter
     user_scope = filters.get("user_scope", "self")
@@ -219,20 +221,16 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
     
     if begin_date:
         try:
-            # Parse the date and add time component
-            parsed_date = datetime.strptime(begin_date, "%Y-%m-%d")
-            begin_date = parsed_date.strftime("%Y-%m-%dT00:00:00")
+            begin_date = day_start(begin_date)
         except ValueError:
             raise ToolError(f"Error: Invalid begin date format. Expected YYYY-MM-DD, got '{begin_date}'")
-    
+
     if end_date:
         try:
-            # Parse the date and add time component (end of day)
-            parsed_date = datetime.strptime(end_date, "%Y-%m-%d")
-            end_date = parsed_date.strftime("%Y-%m-%dT23:59:59")
+            end_date = day_end(end_date)
         except ValueError:
             raise ToolError(f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{end_date}'")
-    
+
     # Handle different user scopes
     absences = []
     
@@ -327,10 +325,10 @@ async def _handle_absence_list(client: KimaiClient, filters: Dict) -> List[TextC
 
 async def _handle_absence_statistics(
     client: KimaiClient,
-    filters: Dict,
+    filters: dict,
     group_by: str,
     breakdown_by_month: bool
-) -> List[TextContent]:
+) -> list[TextContent]:
     """Handle absence statistics action."""
     # First, fetch absences using the same logic as list
     user_scope = filters.get("user_scope", "all")  # Default to all for statistics
@@ -341,15 +339,13 @@ async def _handle_absence_statistics(
 
     if begin_date:
         try:
-            parsed_date = datetime.strptime(begin_date, "%Y-%m-%d")
-            begin_date = parsed_date.strftime("%Y-%m-%dT00:00:00")
+            begin_date = day_start(begin_date)
         except ValueError:
             raise ToolError(f"Error: Invalid begin date format. Expected YYYY-MM-DD, got '{begin_date}'")
 
     if end_date:
         try:
-            parsed_date = datetime.strptime(end_date, "%Y-%m-%d")
-            end_date = parsed_date.strftime("%Y-%m-%dT23:59:59")
+            end_date = day_end(end_date)
         except ValueError:
             raise ToolError(f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{end_date}'")
 
@@ -426,7 +422,7 @@ async def _handle_absence_statistics(
     return [TextContent(type="text", text=report)]
 
 
-async def _handle_absence_types(client: KimaiClient, language: str) -> List[TextContent]:
+async def _handle_absence_types(client: KimaiClient, language: str) -> list[TextContent]:
     """Handle absence types action."""
     types = await client.get_absence_types(language=language)
     
@@ -445,7 +441,7 @@ async def _handle_absence_types(client: KimaiClient, language: str) -> List[Text
 MAX_ABSENCE_DAYS = 30
 
 
-def _split_date_range(start: date, end: date) -> List[Tuple[date, date]]:
+def _split_date_range(start: date, end: date) -> list[tuple[date, date]]:
     """Split a date range respecting year boundaries and 30-day limit.
 
     Returns list of (start, end) tuples.
@@ -471,7 +467,7 @@ def _split_date_range(start: date, end: date) -> List[Tuple[date, date]]:
     return chunks
 
 
-async def _handle_absence_create(client: KimaiClient, data: Dict) -> List[TextContent]:
+async def _handle_absence_create(client: KimaiClient, data: dict) -> list[TextContent]:
     """Handle absence create action."""
     required_fields = ["comment", "date", "type"]
     missing_fields = [field for field in required_fields if not data.get(field)]
@@ -482,10 +478,11 @@ async def _handle_absence_create(client: KimaiClient, data: Dict) -> List[TextCo
         )
 
     # Parse dates
-    start_date = datetime.strptime(data["date"], "%Y-%m-%d").date()
-    end_date = start_date
-    if data.get("end"):
-        end_date = datetime.strptime(data["end"], "%Y-%m-%d").date()
+    try:
+        start_date = parse_iso_date(data["date"])
+        end_date = parse_iso_date(data["end"]) if data.get("end") else start_date
+    except ValueError as e:
+        raise ToolError(f"Error: Invalid date format. Expected YYYY-MM-DD ({e})")
 
     # Calculate total days
     total_days = (end_date - start_date).days + 1
@@ -514,9 +511,11 @@ async def _handle_absence_create(client: KimaiClient, data: Dict) -> List[TextCo
                     created_absences.extend(absence_list)
                 else:
                     created_absences.append(absence_list)
-            except Exception as e:
+            # Whatever goes wrong mid-split has to be reported as a tool error
+            # naming the failing chunk, so the caller knows where it stopped.
+            except Exception as e:  # noqa: BLE001
                 raise ToolError(
-                    f"Error creating absence chunk {chunk_start} - {chunk_end}: {str(e)}"
+                    f"Error creating absence chunk {chunk_start} - {chunk_end}: {e!s}"
                 )
 
         # Success message
@@ -566,7 +565,7 @@ async def _handle_absence_create(client: KimaiClient, data: Dict) -> List[TextCo
     )]
 
 
-async def _handle_absence_delete(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+async def _handle_absence_delete(client: KimaiClient, id: int | None) -> list[TextContent]:
     """Handle absence delete action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for delete action")
@@ -575,7 +574,7 @@ async def _handle_absence_delete(client: KimaiClient, id: Optional[int]) -> List
     return [TextContent(type="text", text=f"Deleted absence ID {id}")]
 
 
-async def _handle_absence_approve(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+async def _handle_absence_approve(client: KimaiClient, id: int | None) -> list[TextContent]:
     """Handle absence approve action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for approve action")
@@ -584,7 +583,7 @@ async def _handle_absence_approve(client: KimaiClient, id: Optional[int]) -> Lis
     return [TextContent(type="text", text=f"Approved absence ID {id}")]
 
 
-async def _handle_absence_reject(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+async def _handle_absence_reject(client: KimaiClient, id: int | None) -> list[TextContent]:
     """Handle absence reject action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for reject action")
@@ -593,7 +592,7 @@ async def _handle_absence_reject(client: KimaiClient, id: Optional[int]) -> List
     return [TextContent(type="text", text=f"Rejected absence ID {id}")]
 
 
-async def _handle_absence_request(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+async def _handle_absence_request(client: KimaiClient, id: int | None) -> list[TextContent]:
     """Handle absence request approval action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for request action")
@@ -602,7 +601,7 @@ async def _handle_absence_request(client: KimaiClient, id: Optional[int]) -> Lis
     return [TextContent(type="text", text=f"Requested approval for absence ID {id}")]
 
 
-async def _get_accessible_users(client: KimaiClient, user_scope: str) -> List:
+async def _get_accessible_users(client: KimaiClient, user_scope: str) -> list:
     """Get users based on scope with Teams-first approach.
 
     Returns list of user objects (not just IDs) for building reports.
@@ -614,8 +613,9 @@ async def _get_accessible_users(client: KimaiClient, user_scope: str) -> List:
     # For "all" scope, try teams first then fallback to get_users
     try:
         users = await resolve_accessible_users(client)
-    except Exception:
-        # If both fail, return empty list
+    # Both discovery paths failing (no permission, API error) degrades to an
+    # empty report rather than a failed tool call.
+    except Exception:  # noqa: BLE001
         return []
 
     # Only include active users
@@ -624,9 +624,9 @@ async def _get_accessible_users(client: KimaiClient, user_scope: str) -> List:
 
 async def _handle_attendance(
     client: KimaiClient,
-    filters: Dict,
-    date_str: Optional[str] = None
-) -> List[TextContent]:
+    filters: dict,
+    date_str: str | None = None
+) -> list[TextContent]:
     """Show who is present (not absent) on a given day."""
 
     # Type labels for German output
@@ -643,13 +643,13 @@ async def _handle_attendance(
     # 1. Determine date (Default: today)
     if date_str:
         try:
-            check_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            check_date = parse_iso_date(date_str)
         except ValueError:
             raise ToolError(
                 f"Error: Invalid date format. Expected YYYY-MM-DD, got '{date_str}'"
             )
     else:
-        check_date = datetime.now().date()
+        check_date = today()
 
     # 2. Get all accessible users
     user_scope = filters.get("user_scope", "all")
@@ -718,7 +718,7 @@ async def _handle_attendance(
 
 # Batch operations
 
-async def _handle_batch_delete(client: KimaiClient, ids: List[int]) -> List[TextContent]:
+async def _handle_batch_delete(client: KimaiClient, ids: list[int]) -> list[TextContent]:
     """Batch delete multiple absences."""
     if not ids:
         raise ToolError("Error: 'ids' parameter is required for batch_delete action")
@@ -732,7 +732,7 @@ async def _handle_batch_delete(client: KimaiClient, ids: List[int]) -> List[Text
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_batch_approve(client: KimaiClient, ids: List[int]) -> List[TextContent]:
+async def _handle_batch_approve(client: KimaiClient, ids: list[int]) -> list[TextContent]:
     """Batch approve multiple absences."""
     if not ids:
         raise ToolError("Error: 'ids' parameter is required for batch_approve action")
@@ -746,7 +746,7 @@ async def _handle_batch_approve(client: KimaiClient, ids: List[int]) -> List[Tex
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_batch_reject(client: KimaiClient, ids: List[int]) -> List[TextContent]:
+async def _handle_batch_reject(client: KimaiClient, ids: list[int]) -> list[TextContent]:
     """Batch reject multiple absences."""
     if not ids:
         raise ToolError("Error: 'ids' parameter is required for batch_reject action")

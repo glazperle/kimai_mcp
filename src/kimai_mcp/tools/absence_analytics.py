@@ -1,15 +1,15 @@
 """Analytics extension for absence calculations."""
 
-from typing import Dict, List, Any
 from collections import defaultdict
 from datetime import datetime
+from typing import Any, ClassVar
 
 
 class AbsenceAnalytics:
     """Performs calculations on absence data."""
 
     # Absence type translations (German)
-    TYPE_LABELS = {
+    TYPE_LABELS: ClassVar[dict[str, str]] = {
         "holiday": "Urlaub",
         "sickness": "Krankheit",
         "sickness_child": "Kind krank",
@@ -21,10 +21,10 @@ class AbsenceAnalytics:
 
     @staticmethod
     def calculate_statistics(
-        absences: List[Any],
+        absences: list[Any],
         group_by: str = "type",
         breakdown_by_month: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Calculate comprehensive statistics from absence data.
 
         Args:
@@ -93,7 +93,7 @@ class AbsenceAnalytics:
                     try:
                         parsed_date = datetime.fromisoformat(str(date).replace('Z', '+00:00'))
                         month_key = parsed_date.strftime("%Y-%m")
-                    except Exception:
+                    except ValueError:
                         month_key = "unknown"
 
                 stats["by_month"][month_key]["count"] += 1
@@ -166,7 +166,7 @@ class AbsenceAnalytics:
 
     @staticmethod
     def format_statistics_report(
-        stats: Dict[str, Any],
+        stats: dict[str, Any],
         title: str = "Absence Statistics Report"
     ) -> str:
         """Format statistics into a readable report.
@@ -230,7 +230,7 @@ class AbsenceAnalytics:
         return report
 
     @staticmethod
-    def calculate_sickness_stats(absences: List[Any]) -> Dict[str, Any]:
+    def calculate_sickness_stats(absences: list[Any]) -> dict[str, Any]:
         """Calculate statistics specifically for sickness absences.
 
         Args:

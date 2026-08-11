@@ -15,9 +15,9 @@ import json
 import logging
 import os
 import secrets
+import sys
 import uuid
 from contextlib import asynccontextmanager
-from typing import Optional, Union
 
 try:
     import uvicorn
@@ -31,7 +31,7 @@ except ImportError as e:
     ) from e
 
 from mcp.server.sse import SseServerTransport
-from .server import KimaiMCPServer, __version__
+
 from .security import (
     RateLimitConfig,
     RateLimitMiddleware,
@@ -39,6 +39,7 @@ from .security import (
     SessionConfig,
     SessionManager,
 )
+from .server import KimaiMCPServer, __version__
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -47,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 class AuthenticationError(Exception):
     """Raised when authentication fails."""
-    pass
 
 
 class RemoteMCPServer:
@@ -62,12 +62,12 @@ class RemoteMCPServer:
 
     def __init__(
         self,
-        default_kimai_url: Optional[str] = None,
-        ssl_verify: Optional[Union[bool, str]] = None,
-        server_token: Optional[str] = None,
+        default_kimai_url: str | None = None,
+        ssl_verify: bool | str | None = None,
+        server_token: str | None = None,
         host: str = "0.0.0.0",
         port: int = 8000,
-        allowed_origins: Optional[list[str]] = None,
+        allowed_origins: list[str] | None = None,
         max_sessions: int = 100,
         session_ttl_seconds: int = 3600,
         rate_limit_rpm: int = 60,
@@ -117,7 +117,7 @@ class RemoteMCPServer:
             enabled=rate_limit_rpm > 0,
         )
 
-    def verify_token(self, token: Optional[str]) -> bool:
+    def verify_token(self, token: str | None) -> bool:
         """Verify the MCP server authentication token.
 
         Args:
@@ -132,8 +132,8 @@ class RemoteMCPServer:
 
     def extract_kimai_credentials(
         self,
-        x_kimai_url: Optional[str] = None,
-        x_kimai_token: Optional[str] = None
+        x_kimai_url: str | None = None,
+        x_kimai_token: str | None = None
     ) -> tuple[str, str]:
         """Extract and validate Kimai credentials from request headers.
 
@@ -168,7 +168,7 @@ class RemoteMCPServer:
         self,
         kimai_url: str,
         kimai_token: str,
-        user_id: Optional[str] = None
+        user_id: str | None = None
     ) -> tuple[str, KimaiMCPServer]:
         """Create a new MCP server instance for a client.
 
@@ -203,12 +203,13 @@ class RemoteMCPServer:
                 f"Client session {session_id[:8]} connected to Kimai {version.version} "
                 f"at {kimai_url}"
             )
-        except Exception as e:
-            logger.error(f"Failed to connect to Kimai for session {session_id[:8]}: {str(e)}")
+        # Any connection failure is turned into a 502 for the client.
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Failed to connect to Kimai for session {session_id[:8]}: {e!s}")
             await mcp_server.cleanup()
             raise HTTPException(
                 status_code=502,
-                detail=f"Failed to connect to Kimai: {str(e)}"
+                detail=f"Failed to connect to Kimai: {e!s}"
             )
 
         # Try to register session (enforces limits)
@@ -292,10 +293,10 @@ class RemoteMCPServer:
         @app.get("/sse")
         async def handle_sse(
             request: Request,
-            authorization: Optional[str] = Header(None),
-            x_kimai_url: Optional[str] = Header(None, alias="X-Kimai-URL"),
-            x_kimai_token: Optional[str] = Header(None, alias="X-Kimai-Token"),
-            x_kimai_user: Optional[str] = Header(None, alias="X-Kimai-User"),
+            authorization: str | None = Header(None),
+            x_kimai_url: str | None = Header(None, alias="X-Kimai-URL"),
+            x_kimai_token: str | None = Header(None, alias="X-Kimai-Token"),
+            x_kimai_user: str | None = Header(None, alias="X-Kimai-User"),
         ):
             """Handle SSE connection for MCP with per-client Kimai credentials.
 
@@ -370,8 +371,8 @@ class RemoteMCPServer:
         @app.post("/messages")
         async def handle_messages(
             request: Request,
-            authorization: Optional[str] = Header(None),
-            x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
+            authorization: str | None = Header(None),
+            x_session_id: str | None = Header(None, alias="X-Session-ID"),
         ):
             """Handle incoming messages from client.
 
@@ -545,7 +546,7 @@ def main():
     require_https = args.require_https or os.getenv("REQUIRE_HTTPS", "").lower() == "true"
 
     # Parse SSL verify value
-    ssl_verify: Optional[Union[bool, str]] = None
+    ssl_verify: bool | str | None = None
     if args.ssl_verify:
         ssl_value = args.ssl_verify.lower()
         if ssl_value == "true":
@@ -574,4 +575,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())

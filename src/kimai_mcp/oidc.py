@@ -28,7 +28,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field
@@ -88,14 +88,14 @@ class OIDCConfig(BaseModel):
 
     issuer: str = Field(..., description="OIDC issuer URL, e.g. https://login.microsoftonline.com/<tenant>/v2.0")
     client_id: str = Field(..., description="OAuth client ID registered at the provider")
-    client_secret: Optional[str] = Field(
+    client_secret: str | None = Field(
         None, description="Client secret for confidential clients; omit for public (PKCE-only) clients"
     )
-    scopes: List[str] = Field(
+    scopes: list[str] = Field(
         default_factory=lambda: ["openid", "email", "profile"],
         description="Scopes requested from the provider (must include 'openid')",
     )
-    identity_claims: List[str] = Field(
+    identity_claims: list[str] = Field(
         default_factory=lambda: ["email", "preferred_username", "upn"],
         description="Ordered id_token claims to try when resolving the user identity",
     )
@@ -107,11 +107,11 @@ class OIDCConfig(BaseModel):
             "do not emit email_verified but are trusted to assert verified emails."
         ),
     )
-    allowed_algorithms: List[str] = Field(
+    allowed_algorithms: list[str] = Field(
         default_factory=lambda: list(DEFAULT_ALLOWED_ALGS),
         description="Permitted id_token signing algorithms (never 'none'/HS*)",
     )
-    discovery_url: Optional[str] = Field(
+    discovery_url: str | None = Field(
         None, description="Override for the discovery document URL (default: <issuer>/.well-known/openid-configuration)"
     )
     clock_skew_seconds: int = Field(60, description="Allowed clock skew when validating exp/iat")
@@ -147,13 +147,13 @@ class OIDCLoginState:
 class OIDCClient:
     """Minimal async OIDC relying party: discovery, auth URL, code exchange, id_token validation."""
 
-    def __init__(self, config: OIDCConfig, http_client: Optional[httpx.AsyncClient] = None):
+    def __init__(self, config: OIDCConfig, http_client: httpx.AsyncClient | None = None):
         self.config = config
         self._external_client = http_client is not None
         self._http = http_client
-        self._metadata: Optional[OIDCProviderMetadata] = None
+        self._metadata: OIDCProviderMetadata | None = None
         self._metadata_at: float = 0.0
-        self._jwks: Optional[dict] = None
+        self._jwks: dict | None = None
         self._jwks_at: float = 0.0
 
     @property
@@ -254,7 +254,7 @@ class OIDCClient:
         }
         return f"{metadata.authorization_endpoint}?{httpx.QueryParams(params)}"
 
-    async def exchange_code(self, *, code: str, code_verifier: str, redirect_uri: str) -> Dict[str, Any]:
+    async def exchange_code(self, *, code: str, code_verifier: str, redirect_uri: str) -> dict[str, Any]:
         """Exchange an authorization code for tokens. Returns the raw token response."""
         metadata = await self.discover()
         data = {
@@ -278,7 +278,7 @@ class OIDCClient:
         except ValueError as e:  # non-JSON body on a 200 (e.g. a misconfigured proxy)
             raise OIDCTokenExchangeError("Token endpoint returned a non-JSON response") from e
 
-    async def validate_id_token(self, id_token: str, *, expected_nonce: str) -> Dict[str, Any]:
+    async def validate_id_token(self, id_token: str, *, expected_nonce: str) -> dict[str, Any]:
         """Verify the id_token signature and claims; return the validated claims.
 
         Verifies: JWKS signature, ``iss`` == discovered issuer, ``aud`` == client_id,
@@ -324,7 +324,7 @@ class OIDCClient:
             raise OIDCValidationError("id_token nonce mismatch")
         return claims
 
-    async def _resolve_signing_key(self, kid: Optional[str]):
+    async def _resolve_signing_key(self, kid: str | None):
         """Find the JWK matching ``kid`` (refresh JWKS once on a miss for key rotation)."""
         from jwt import PyJWKSet  # lazy: part of the [server] extra
 
@@ -349,7 +349,7 @@ class OIDCClient:
     # Identity extraction
     # ------------------------------------------------------------------
 
-    def extract_identity(self, claims: Dict[str, Any]) -> Optional[str]:
+    def extract_identity(self, claims: dict[str, Any]) -> str | None:
         """Resolve the federated identity from the configured claim fallback list.
 
         For username-style fallback claims (``preferred_username``/``upn``) a value
@@ -368,12 +368,15 @@ class OIDCClient:
             value = value.strip()
             if claim in ("preferred_username", "upn") and "@" not in value:
                 continue
-            if claim == "email" and self.config.require_verified_email:
-                if claims.get("email_verified") is not True:
-                    logger.warning(
-                        "OIDC: ignoring 'email' claim because 'email_verified' is not true "
-                        "(set require_verified_email=false / --oidc-allow-unverified-email to override)"
-                    )
-                    continue
+            if (
+                claim == "email"
+                and self.config.require_verified_email
+                and claims.get("email_verified") is not True
+            ):
+                logger.warning(
+                    "OIDC: ignoring 'email' claim because 'email_verified' is not true "
+                    "(set require_verified_email=false / --oidc-allow-unverified-email to override)"
+                )
+                continue
             return value
         return None
