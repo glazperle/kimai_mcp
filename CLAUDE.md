@@ -39,7 +39,7 @@ ruff check --fix src/ tests/
 
 ### Running the Server
 
-There are two supported server types (plus a deprecated SSE server):
+There are two server types:
 
 ```bash
 # 1. LOCAL MCP SERVER (for Claude Desktop)
@@ -59,9 +59,9 @@ kimai-mcp-streamable --users-config ./config/users.json \
 |--------|---------|----------|----------|
 | Local | `kimai-mcp` | MCP Stdio | Claude Desktop local |
 | Streamable | `kimai-mcp-streamable` | HTTP Streamable + OAuth 2.1 | Claude.ai Connectors |
-| SSE | `kimai-mcp-server` | HTTP/SSE | **DEPRECATED, non-functional** (prints startup warning; use Streamable instead) |
 
 Notes:
+- The SSE server (`sse_server.py`, command `kimai-mcp-server`) was **removed in v2.16.0**. It had been non-functional since v2.12.0, and MCP SDK 2.x no longer ships `mcp.server.sse` at all.
 - `--kimai-user` / `KIMAI_DEFAULT_USER` is deprecated: accepted but ignored (warning is logged). Use the `user_scope` parameter of the tools instead.
 - The streamable server serves an OAuth-protected `/mcp` endpoint (DCR + PKCE, login form at `/oauth/login` with user slug + `auth_secret`). The legacy `/mcp/{slug}` endpoints still work but are deprecated and can be disabled with `--disable-legacy-slugs`.
 - `users.json` schema (see `src/kimai_mcp/user_config.py`): per slug `kimai_url`, `kimai_token`, optional `ssl_verify`, optional `auth_secret` (env override: `KIMAI_USER_<SLUG>_AUTH_SECRET`). Slugs must match `^[a-zA-Z0-9_-]+$`; keys starting with `_` are comments. The former `kimai_user_id` field was removed and is ignored when present.
@@ -104,7 +104,7 @@ If PyPI deployment fails with "version already exists", the version numbers in t
 
 ### Core Components
 
-1. **MCP Server (`server.py`)**: Local stdio server that handles MCP protocol communication and tool registration. **Uses consolidated tools (12 tools instead of the original 73)**: `entity`, `timesheet`, `timer`, `rate`, `team_access`, `absence`, `calendar`, `meta`, `user_current`, `analyze_project_team`, `config`, `comment`. Also contains the shared `format_api_error()` helper (status code + validation details, permission hint on 403).
+1. **MCP Server (`server.py`)**: Local stdio server that handles MCP protocol communication and tool registration. **Uses consolidated tools (12 tools instead of the original 73)**: `entity`, `timesheet`, `timer`, `rate`, `team_access`, `absence`, `calendar`, `meta`, `user_current`, `analyze_project_team`, `config`, `comment`. Also contains the shared helpers used by both transports: `format_api_error()` (status code + validation details, permission hint on 403), `error_result()` (`CallToolResult(is_error=True)`) and `tool_result()` (wraps a handler's content list, required since SDK 2.x no longer wraps bare returns).
 
 2. **Streamable HTTP Server (`streamable_http_server.py`)**: Multi-user remote server for Claude.ai Connectors. Routes the OAuth-protected `/mcp` endpoint (token subject = user slug) and the deprecated legacy `/mcp/{slug}` endpoints to per-user MCP sessions. Includes rate limiting, security headers, enumeration protection and trusted-proxy handling.
 
@@ -112,15 +112,13 @@ If PyPI deployment fails with "version already exists", the version numbers in t
 
 4. **User Configuration (`user_config.py`)**: Multi-user configuration (`users.json` or env vars) with slug validation and per-user `auth_secret` support.
 
-5. **SSE Server (`sse_server.py`)**: DEPRECATED and non-functional; kept only for backward compatibility, prints a startup warning.
+5. **Kimai API Client (`client.py`)**: HTTP client wrapper using httpx for all Kimai API interactions. Handles authentication, request formatting, response parsing and auto-pagination for list endpoints.
 
-6. **Kimai API Client (`client.py`)**: HTTP client wrapper using httpx for all Kimai API interactions. Handles authentication, request formatting, response parsing and auto-pagination for list endpoints.
+6. **Data Models (`models.py`)**: Pydantic models for type-safe data structures representing Kimai entities (timesheets, projects, users, comments, etc.).
 
-7. **Data Models (`models.py`)**: Pydantic models for type-safe data structures representing Kimai entities (timesheets, projects, users, comments, etc.).
+7. **Security Utilities (`security.py`)**: Rate limiting (token bucket), security headers middleware, enumeration protection, trusted-proxy-aware client IP extraction.
 
-8. **Security Utilities (`security.py`)**: Rate limiting (token bucket), security headers middleware, enumeration protection, trusted-proxy-aware client IP extraction.
-
-9. **Consolidated Tools (`tools/` directory)**:
+8. **Consolidated Tools (`tools/` directory)**:
    - `entity_manager.py`: Universal CRUD operations for all entities (`entity` tool)
    - `timesheet_consolidated.py`: All timesheet operations AND timer management (`timesheet` + `timer` tools)
    - `rate_manager.py`: Rate management across entities (`rate` tool)
@@ -133,6 +131,7 @@ If PyPI deployment fails with "version already exists", the version numbers in t
    - `user_discovery.py`: Shared helper to resolve accessible users (teams-first, parallel fetching)
    - `batch_utils.py`: Parallel batch operation utilities (asyncio.gather)
    - `absence_analytics.py` / `timesheet_analytics.py`: Calculation helpers for absence/timesheet statistics
+   - `dates.py`: Strict `YYYY-MM-DD` parsing (`parse_iso_date`, `day_start`, `day_end`, `today`) shared by the absence and calendar tools
 
 ### Key Design Patterns
 
@@ -145,6 +144,17 @@ If PyPI deployment fails with "version already exists", the version numbers in t
 4. **Consolidated Error Handling**: Unified error handling patterns across all consolidated tools. API errors returned to the MCP client include the HTTP status code and validation details; 403 responses include a permission hint (Kimai 2.57/2.58 tightened API permissions).
 
 5. **Flexible Configuration**: Supports CLI arguments, environment variables, and .env files.
+
+### MCP SDK 2.x contract (since v2.16.0)
+
+The project requires `mcp>=2.0,<3` and therefore speaks protocol revision **2026-07-28** while still serving every earlier revision from the same server. What that means when touching either transport:
+
+- Handlers are registered through the `Server(...)` **constructor** (`on_list_tools=`, `on_call_tool=`). The v1 decorators (`server.list_tools()(...)`) no longer exist.
+- Handlers receive `(ctx: ServerRequestContext, params)` and must return a **result object**: `ListToolsResult(tools=...)` and `CallToolResult(...)`. A bare list is no longer wrapped, which is what `tool_result()` in `server.py` is for.
+- Protocol model fields are snake_case (`input_schema`, `is_error`). camelCase still works when *constructing* a model (the SDK sets `alias_generator=to_camel`), but **attribute access** must use the snake_case name.
+- Raising an exception no longer produces `is_error=true` automatically. Both transports catch `ToolError`/`KimaiAPIError`/`Exception` and return `error_result(...)` explicitly.
+- `mcp.server.sse` is gone; `StreamableHTTPSessionManager` and the whole `mcp.server.auth.*` surface used by `oauth.py` are unchanged from 1.x.
+- `tests/test_mcp_protocol.py` drives both transports through a real in-memory `Client` session (handshake, `tools/list`, `tools/call`, `is_error`). Run it after any SDK bump: it is the test that catches a removed or renamed SDK API, which a handler-level unit test cannot (see issue #21).
 
 ### Authentication Flow
 - API token passed via configuration

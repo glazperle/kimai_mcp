@@ -32,9 +32,8 @@ kimai-mcp --setup
 |--------|---------|----------|
 | **Local** | `kimai-mcp` | Claude Desktop, single user, development |
 | **Streamable HTTP** | `kimai-mcp-streamable` | Claude.ai Connectors (web/mobile), teams |
-| **SSE Server** | `kimai-mcp-server` | **Deprecated** — do not use (see below) |
 
-> **Deprecation notice:** The SSE server (`kimai-mcp-server`) is deprecated and not functional (the SSE transport was removed from the MCP specification). It prints a startup warning. Use the Streamable HTTP server (`kimai-mcp-streamable`) instead.
+> **Removed in v2.16.0:** the SSE server and its `kimai-mcp-server` command are gone. The SSE transport was dropped from the MCP specification, the server had been non-functional and deprecated since v2.12.0, and MCP SDK 2.x no longer ships the transport at all. Use `kimai-mcp-streamable` for remote access.
 
 #### Quick Start with Docker (Streamable HTTP + OAuth)
 
@@ -802,7 +801,6 @@ kimai_mcp/
 │   │   ├── __init__.py
 │   │   ├── server.py                  # Local MCP server (stdio)
 │   │   ├── streamable_http_server.py  # Streamable HTTP server with OAuth (Claude.ai)
-│   │   ├── sse_server.py              # SSE server (deprecated, non-functional)
 │   │   ├── oauth.py                   # Embedded OAuth 2.1 authorization server
 │   │   ├── user_config.py             # users.json / env multi-user configuration
 │   │   ├── security.py                # Rate limiting, security headers, enumeration protection

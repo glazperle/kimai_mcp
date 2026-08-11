@@ -28,7 +28,7 @@ classifiers = [
 # project (it only files updates that change a constraint), which is how the
 # breaking mcp 2.0.0 release reached users unannounced (#21).
 dependencies = [
-    "mcp>=1.27.0,<2",
+    "mcp>=2.0.0,<3",
     "httpx>=0.24.0,<1",
     "pydantic>=2.0.0,<3",
     "python-dotenv>=1.0.0,<2",
@@ -59,7 +59,6 @@ Repository = "https://github.com/glazperle/kimai_mcp"
 
 [project.scripts]
 kimai-mcp = "kimai_mcp.server:entrypoint"
-kimai-mcp-server = "kimai_mcp.sse_server:main"
 kimai-mcp-streamable = "kimai_mcp.streamable_http_server:main"
 
 [tool.hatch.build.targets.wheel]

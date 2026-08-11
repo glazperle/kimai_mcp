@@ -12,7 +12,7 @@ def team_access_tool() -> Tool:
     return Tool(
         name="team_access",
         description="Universal team access management tool for member management and permission control.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["team_id", "action"],
             "properties": {

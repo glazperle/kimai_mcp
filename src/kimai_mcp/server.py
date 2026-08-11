@@ -9,7 +9,6 @@ import platform
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from kimai_mcp import __version__
 
@@ -22,8 +21,14 @@ except ImportError:
     pass
 
 from mcp.server import NotificationOptions, Server
-from mcp.server.models import InitializationOptions
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.server.context import ServerRequestContext
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+)
 
 from .client import KimaiAPIError, KimaiClient
 from .tools.errors import ToolError
@@ -49,15 +54,23 @@ def format_api_error(e: KimaiAPIError) -> str:
 def error_result(text: str) -> CallToolResult:
     """Wrap an error message so MCP clients can detect the failure.
 
-    Returns a CallToolResult with isError=True. The MCP SDK passes a
-    handler-supplied CallToolResult through unchanged, so this lets tool
-    execution errors be reported per the MCP spec (distinct from a normal
-    successful result that merely contains the word "Error").
+    Returns a CallToolResult with is_error=True, which is how the MCP spec
+    wants a failed tool execution reported (as opposed to a protocol-level
+    error, or a successful result that merely contains the word "Error").
     """
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
-        isError=True,
+        is_error=True,
     )
+
+
+def tool_result(content: list[TextContent]) -> CallToolResult:
+    """Wrap a handler's content blocks in a successful CallToolResult.
+
+    SDK 2.x no longer wraps a bare content list returned from a handler, so
+    both transports go through this helper.
+    """
+    return CallToolResult(content=list(content))
 
 
 class KimaiMCPServer:
@@ -77,12 +90,16 @@ class KimaiMCPServer:
                 - False: Disable SSL verification (not recommended)
                 - str: Path to CA certificate file or directory
         """
-        self.server = Server("kimai-mcp-consolidated")
         self.client: KimaiClient | None = None
 
-        # Register handlers
-        self.server.list_tools()(self._list_tools)
-        self.server.call_tool()(self._call_tool)
+        # SDK 2.x registers handlers through the constructor; the decorator API
+        # (server.list_tools()(...)) was removed.
+        self.server = Server(
+            "kimai-mcp-consolidated",
+            version=__version__,
+            on_list_tools=self._list_tools,
+            on_call_tool=self._call_tool,
+        )
 
         # Configuration - prefer arguments, fallback to environment variables
         self.base_url = (base_url or os.getenv("KIMAI_URL", "")).rstrip('/')
@@ -120,23 +137,28 @@ class KimaiMCPServer:
         if not self.client:
             self.client = KimaiClient(self.base_url, self.api_token, ssl_verify=self.ssl_verify)
 
-    async def _list_tools(self) -> list[Tool]:
+    async def _list_tools(
+        self,
+        ctx: ServerRequestContext,
+        params: PaginatedRequestParams | None = None,
+    ) -> ListToolsResult:
         """List consolidated MCP tools (12 tools instead of the original 73)."""
-        return all_tools()
+        return ListToolsResult(tools=all_tools())
 
     async def _call_tool(
-        self, name: str, arguments: dict[str, Any] | None = None
-    ) -> list[TextContent] | CallToolResult:
+        self,
+        ctx: ServerRequestContext,
+        params: CallToolRequestParams,
+    ) -> CallToolResult:
         """Handle consolidated tool calls."""
         await self._ensure_client()
 
-        # Ensure arguments is not None
-        if arguments is None:
-            arguments = {}
+        name = params.name
+        arguments = params.arguments or {}
 
         try:
             # Route to the shared tool registry
-            return await dispatch_tool(self.client, name, arguments)
+            return tool_result(await dispatch_tool(self.client, name, arguments))
 
         except ToolError as e:
             # Tool could not fulfill the request (bad input, unsupported op, etc.)
@@ -165,14 +187,10 @@ class KimaiMCPServer:
             logger.error(f"Failed to connect to Kimai: {e!s}")
             raise
 
-        # Configure server options
-        options = InitializationOptions(
-            server_name="kimai-mcp-consolidated",
-            server_version=__version__,
-            capabilities=self.server.get_capabilities(
-                notification_options=NotificationOptions(),
-                experimental_capabilities={},
-            ),
+        # Name, version and capabilities are derived from the Server instance
+        # and its registered handlers.
+        options = self.server.create_initialization_options(
+            notification_options=NotificationOptions(),
         )
 
         # Run the server

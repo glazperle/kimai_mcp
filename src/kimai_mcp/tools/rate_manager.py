@@ -21,7 +21,7 @@ def rate_tool() -> Tool:
 - User-specific rate: action=add, ..., data={rate:50, user:USER_ID}
 
 NOTE: For user hourly_rate preference, use entity tool with set_preferences instead.""",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["entity", "entity_id", "action"],
             "properties": {

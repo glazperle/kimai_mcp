@@ -20,7 +20,7 @@ def analyze_project_team_tool() -> Tool:
     return Tool(
         name="analyze_project_team",
         description="Comprehensive analysis of all team members working on a project. Automatically finds project by name, fetches ALL timesheets from ALL users, and provides detailed statistics.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["project_name", "begin", "end"],
             "properties": {

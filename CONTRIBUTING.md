@@ -191,7 +191,6 @@ kimai_mcp/
 │   ├── __main__.py              # Entry point for python -m kimai_mcp
 │   ├── server.py                # Local MCP server (stdio)
 │   ├── streamable_http_server.py  # Streamable HTTP server with OAuth (Claude.ai Connectors)
-│   ├── sse_server.py            # SSE server (deprecated, non-functional)
 │   ├── oauth.py                 # Embedded OAuth 2.1 authorization server
 │   ├── user_config.py           # Multi-user configuration (users.json / env vars)
 │   ├── security.py              # Rate limiting, security headers, enumeration protection

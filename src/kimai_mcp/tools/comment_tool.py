@@ -21,7 +21,7 @@ COMMON TASKS:
 - Delete: action=delete, entity_id=ID, comment_id=COMMENT_ID
 
 Markdown is supported in comment messages. Pinned comments always appear first.""",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["entity", "entity_id", "action"],
             "properties": {

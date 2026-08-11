@@ -26,3 +26,9 @@ jobs:
       - name: Run tests
         if: hashFiles('tests/') != ''
         run: pytest tests/ -v
+      # Catches import-time and entry-point breakage that unit tests can miss,
+      # e.g. an SDK release that removes an API used at module import (#21).
+      - name: Smoke test console scripts
+        run: |
+          kimai-mcp --help > /dev/null
+          kimai-mcp-streamable --help > /dev/null

@@ -58,7 +58,7 @@ COMMON TASKS:
 
 USER PREFERENCES (action=set_preferences, type=user only):
   holidays (vacation days), hours_per_week, work_contract_type, work_monday..work_sunday""",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["type", "action"],
             "properties": {
