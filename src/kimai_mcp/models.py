@@ -35,6 +35,11 @@ class Customer(BaseModel):
     homepage: str | None = None
     company: str | None = None
 
+    # Kimai 2.63+ (kimai/kimai#5857, #5855). Only returned by the collection
+    # endpoint when it is called with full=1.
+    language: str | None = None
+    invoice_email: str | None = Field(None, alias="invoiceEmail")
+
 
 class Project(BaseModel):
     """Project model."""
@@ -154,6 +159,9 @@ class CustomerFilter(BaseModel):
     order: str | None = None  # ASC, DESC
     order_by: str | None = Field(None, alias="orderBy")  # id, name
     term: str | None = None
+    # Kimai 2.62+: 1 returns the full detail set (needs the 'details_customer'
+    # permission; Kimai silently falls back to the short form without it).
+    full: int | None = None
 
 
 class ApiError(BaseModel):
@@ -528,6 +536,9 @@ class CustomerEditForm(BaseModel):
     buyer_reference: str | None = Field(None, alias="buyerReference")
     invoice_text: str | None = Field(None, alias="invoiceText")
     invoice_template: str | None = Field(None, alias="invoiceTemplate")
+    # Kimai 2.63+ (kimai/kimai#5857, #5855)
+    language: str | None = None  # e.g. "de", "en"
+    invoice_email: str | None = Field(None, alias="invoiceEmail")
     teams: int | None = None  # Team ID
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
 

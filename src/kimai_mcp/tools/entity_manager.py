@@ -113,7 +113,11 @@ USER PREFERENCES (action=set_preferences, type=user only):
                         "customers": {"type": "array", "items": {"type": "integer"},
                                       "description": "Customer IDs (for invoices)"},
                         "status": {"type": "array", "items": {"type": "string"},
-                                   "description": "Status filter (for invoices)"}
+                                   "description": "Status filter (for invoices)"},
+                        "full": {
+                            "type": "boolean",
+                            "description": "For type=customer: return the full detail set (language, invoice email, address, budget, ...) instead of the short form. Requires Kimai 2.62+ and the 'details_customer' permission; without the permission Kimai silently returns the short form."
+                        }
                     }
                 },
                 "data": {
@@ -268,6 +272,16 @@ OTHER:
                                         "type": "string",
                                         "maxLength": 64,
                                         "description": "Timezone identifier (e.g., 'Europe/Berlin', 'America/New_York'), required for create action."
+                                    },
+                                    "language": {
+                                        "type": "string",
+                                        "maxLength": 35,
+                                        "description": "Customer language for invoices and exports (e.g., 'de', 'en'). Requires Kimai 2.63+."
+                                    },
+                                    "invoiceEmail": {
+                                        "type": "string",
+                                        "format": "email",
+                                        "description": "Email address invoices are sent to, if it differs from 'email'. Requires Kimai 2.63+."
                                     },
                                     "invoiceText": {
                                         "type": "string",
@@ -755,6 +769,12 @@ class CustomerEntityHandler(BaseEntityHandler):
         if getattr(customer, 'company', None):
             result += f"Company: {customer.company}\n"
 
+        # Kimai 2.63+
+        if getattr(customer, 'language', None):
+            result += f"Language: {customer.language}\n"
+        if getattr(customer, 'invoice_email', None):
+            result += f"Invoice Email: {customer.invoice_email}\n"
+
         if getattr(customer, 'comment', None):
             result += f"Comment: {customer.comment}\n"
         if getattr(customer, 'meta_fields', None):
@@ -772,7 +792,8 @@ class CustomerEntityHandler(BaseEntityHandler):
             visible=filters.get("visible", 1),
             term=filters.get("term"),
             order=filters.get("order"),
-            order_by=filters.get("order_by")
+            order_by=filters.get("order_by"),
+            full=1 if filters.get("full") else None,
         )
         customers = await self.client.get_customers(customer_filter)
 
