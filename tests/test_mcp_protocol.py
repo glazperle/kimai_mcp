@@ -113,7 +113,7 @@ async def test_successful_tool_call_is_not_an_error(transport, mode, monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "exc, expected",
+    ("exc", "expected"),
     [
         (ToolError("Error: bad input"), "Error: bad input"),
         (KimaiAPIError("nope", status_code=403), "lacks permission"),

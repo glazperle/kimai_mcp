@@ -173,7 +173,8 @@ async def test_discovery_is_cached(httpx_mock):
     cl = make_client(httpx_mock, add_jwks=False)
     m1 = await cl.discover()
     m2 = await cl.discover()
-    assert m1.token_endpoint == TOKEN_ENDPOINT and m2.issuer == ISSUER
+    assert m1.token_endpoint == TOKEN_ENDPOINT
+    assert m2.issuer == ISSUER
     discovery_calls = [r for r in httpx_mock.get_requests() if "openid-configuration" in str(r.url)]
     assert len(discovery_calls) == 1
     await cl.aclose()
@@ -202,7 +203,8 @@ async def test_build_authorization_url(httpx_mock):
     assert url.startswith(AUTH_ENDPOINT + "?")
     assert "code_challenge_method=S256" in url
     assert "client_id=kimai-mcp-client" in url
-    assert "state=st" in url and "nonce=no" in url
+    assert "state=st" in url
+    assert "nonce=no" in url
     await cl.aclose()
 
 
@@ -214,7 +216,8 @@ async def test_exchange_code_public_vs_confidential(httpx_mock):
     out = await cl.exchange_code(code="abc", code_verifier="ver", redirect_uri="https://m/cb")
     assert out["id_token"] == "x"
     body = httpx_mock.get_requests(url=TOKEN_ENDPOINT)[-1].read().decode()
-    assert "code_verifier=ver" in body and "client_secret" not in body
+    assert "code_verifier=ver" in body
+    assert "client_secret" not in body
     await cl.aclose()
 
     # confidential client (secret included)

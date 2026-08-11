@@ -33,7 +33,7 @@ from kimai_mcp.user_config import UserConfig, UsersConfig
 
 
 @pytest.mark.parametrize(
-    "model, kwargs, expected_key, expected_value",
+    ("model", "kwargs", "expected_key", "expected_value"),
     [
         (AbsenceForm, {"comment": "c", "date": "2026-09-01", "half_day": True}, "halfDay", True),
         (RateForm, {"rate": 50.0, "is_fixed": True}, "isFixed", True),
@@ -69,7 +69,7 @@ def test_alias_spelling_still_accepted():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "arguments, expected",
+    ("arguments", "expected"),
     [
         ({"type": "customer", "action": "update", "id": 1, "data": {"langauge": "de"}},
          "Additional properties are not allowed"),
@@ -122,7 +122,7 @@ async def test_client_construction_failure_is_an_is_error_result():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "arguments, expected",
+    ("arguments", "expected"),
     [
         ({"project_name": "X", "end": "2026-01-01T00:00:00"}, "begin"),
         ({"project_name": "X", "begin": "01/2026", "end": "2026-01-01T00:00:00"}, "Invalid date format"),
@@ -177,7 +177,8 @@ async def test_mixed_offset_date_filters_do_not_fail_the_listing():
             "calculate_stats": True,
         },
     )
-    assert result and result[0].text
+    assert result
+    assert result[0].text
 
 
 # ---------------------------------------------------------------------------

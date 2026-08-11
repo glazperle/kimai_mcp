@@ -287,7 +287,7 @@ def write_config_to_file(config_path: Path, new_config: dict) -> bool:
             shutil.copy(config_path, backup_path)
             print(f"  Backup created: {backup_path}")
 
-            with open(config_path, "r", encoding="utf-8") as f:
+            with config_path.open(encoding="utf-8") as f:
                 existing = json.load(f)
 
         # Merge mcpServers
@@ -296,7 +296,7 @@ def write_config_to_file(config_path: Path, new_config: dict) -> bool:
         existing["mcpServers"]["kimai"] = new_config["mcpServers"]["kimai"]
 
         # Write merged config
-        with open(config_path, "w", encoding="utf-8") as f:
+        with config_path.open("w", encoding="utf-8") as f:
             json.dump(existing, f, indent=2)
 
         print(f"  Configuration written to: {config_path}")

@@ -30,7 +30,8 @@ async def test_list_without_date_filters_does_not_raise(filters):
 
     result = await _handle_timesheet_list(client, filters)
 
-    assert result and result[0].type == "text"
+    assert result
+    assert result[0].type == "text"
     timesheet_filter = client.get_timesheets.await_args.args[0]
     assert timesheet_filter.begin is None
     assert timesheet_filter.end is None
