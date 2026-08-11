@@ -578,6 +578,34 @@ class BaseEntityHandler:
     def __init__(self, client: KimaiClient):
         self.client = client
 
+    @staticmethod
+    def _serialize_budget(entity) -> str:
+        """Render the budget block shared by customers, projects and activities.
+
+        Kimai sends 0 for "no budget", so only non-zero values are shown.
+        """
+        out = ""
+        budget = getattr(entity, 'budget', None)
+        if budget:
+            budget_type = getattr(entity, 'budget_type', None)
+            period = f" per {budget_type}" if budget_type else ""
+            currency = getattr(entity, 'currency', None)
+            amount = f"{budget} {currency}" if currency else f"{budget}"
+            out += f"Budget: {amount}{period}\n"
+        time_budget = getattr(entity, 'time_budget', None)
+        if time_budget:
+            out += f"Time Budget: {time_budget / 3600:.2f} hours\n"
+        return out
+
+    @staticmethod
+    def _serialize_teams(entity) -> str:
+        """Render the teams that have access, which Kimai embeds as stubs."""
+        teams = getattr(entity, 'teams', None)
+        if not teams:
+            return ""
+        names = [t.name or f"ID {t.id}" for t in teams]
+        return f"Teams: {', '.join(names)}\n"
+
     async def list(self, filters: dict) -> list[TextContent]:
         raise NotImplementedError
 
@@ -599,7 +627,12 @@ class ProjectEntityHandler(BaseEntityHandler):
 
     def serialize_project(self, project) -> str:
         result = f"Project: {project.name} (ID: {project.id})\n"
-        result += f"Customer ID: {project.customer if project.customer else 'None'}\n"
+        customer_label = getattr(project, 'parent_title', None)
+        result += (
+            f"Customer: {customer_label} (ID: {project.customer})\n"
+            if customer_label else
+            f"Customer ID: {project.customer if project.customer else 'None'}\n"
+        )
         result += f"Status: {'Active' if project.visible else 'Inactive'}\n"
         result += f"Billable: {'Yes' if project.billable else 'No'}\n"
         if hasattr(project, 'global_activities'):
@@ -608,6 +641,22 @@ class ProjectEntityHandler(BaseEntityHandler):
             result += f"Number: {project.number}\n"
         if getattr(project, 'color', None):
             result += f"Color: {project.color}\n"
+
+        # Project timeframe and order data
+        start = getattr(project, 'start', None)
+        end = getattr(project, 'end', None)
+        if start or end:
+            result += (
+                f"Timeframe: {start.date() if start else 'open'}"
+                f" - {end.date() if end else 'open'}\n"
+            )
+        if getattr(project, 'order_number', None):
+            result += f"Order Number: {project.order_number}\n"
+        if getattr(project, 'order_date', None):
+            result += f"Order Date: {project.order_date.date()}\n"
+        result += self._serialize_budget(project)
+        result += self._serialize_teams(project)
+
         if getattr(project, 'comment', None):
             result += f"Comment: {project.comment}\n"
         if getattr(project, 'meta_fields', None):
@@ -675,10 +724,17 @@ class ActivityEntityHandler(BaseEntityHandler):
 
     def serialize_activity(self, activity) -> str:
         result = f"Activity: {activity.name} (ID: {activity.id})\n"
+        project_label = getattr(activity, 'parent_title', None)
+        if project_label:
+            result += f"Project: {project_label} (ID: {activity.project})\n"
         result += f"Status: {'Active' if activity.visible else 'Inactive'}\n"
         result += f"Billable: {'Yes' if activity.billable else 'No'}\n"
         if hasattr(activity, 'global'):
             result += f"Global: {'Yes' if getattr(activity, 'global', False) else 'No'}\n"
+        if getattr(activity, 'number', None):
+            result += f"Number: {activity.number}\n"
+        result += self._serialize_budget(activity)
+        result += self._serialize_teams(activity)
         if getattr(activity, 'comment', None):
             result += f"Comment: {activity.comment}\n"
         if getattr(activity, 'meta_fields', None):
@@ -799,12 +855,8 @@ class CustomerEntityHandler(BaseEntityHandler):
             result += f"Invoice Email: {customer.invoice_email}\n"
         if getattr(customer, 'buyer_reference', None):
             result += f"Buyer Reference: {customer.buyer_reference}\n"
-        if getattr(customer, 'budget', None):
-            budget_type = getattr(customer, 'budget_type', None)
-            period = f" per {budget_type}" if budget_type else ""
-            result += f"Budget: {customer.budget} {customer.currency or ''}{period}\n".replace("  ", " ")
-        if getattr(customer, 'time_budget', None):
-            result += f"Time Budget: {customer.time_budget / 3600:.2f} hours\n"
+        result += self._serialize_budget(customer)
+        result += self._serialize_teams(customer)
 
         if getattr(customer, 'comment', None):
             result += f"Comment: {customer.comment}\n"

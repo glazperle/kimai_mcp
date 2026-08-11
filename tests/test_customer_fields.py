@@ -23,9 +23,13 @@ import pytest
 
 from kimai_mcp.client import KimaiClient
 from kimai_mcp.models import Activity as ActivityModel
-from kimai_mcp.models import Customer, CustomerEditForm, CustomerExtended
+from kimai_mcp.models import Customer, CustomerEditForm, CustomerExtended, User
 from kimai_mcp.models import Project as ProjectModel
-from kimai_mcp.tools.entity_manager import CustomerEntityHandler, entity_tool
+from kimai_mcp.tools.entity_manager import (
+    CustomerEntityHandler,
+    ProjectEntityHandler,
+    entity_tool,
+)
 
 CUSTOMER_SCHEMA_TITLE = "Schema for creating/editing customer entities."
 
@@ -171,3 +175,61 @@ async def test_list_passes_full_to_the_api(filters, expected):
     assert sent.full == expected
     params = sent.model_dump(exclude_none=True, by_alias=True)
     assert params.get("full") == expected
+
+
+# ---------------------------------------------------------------------------
+# The rest of the model surface, verified against Kimai's schema definitions
+# (scripts/audit_api_models.py) and a live 2.65 instance.
+# ---------------------------------------------------------------------------
+
+
+def test_embedded_teams_parse_as_stubs():
+    """Kimai embeds teams as {id, name, color}, not as full Team objects.
+
+    Modelling them as `Team` would recurse (team -> customers -> teams), so the
+    stub type exists; before it, every customer/project/activity dropped the
+    team assignment entirely.
+    """
+    project = ProjectModel(
+        id=1, name="P",
+        teams=[{"id": 3, "name": "Verwaltung", "color": None},
+               {"id": 4, "name": "Administration", "color": "#fff"}],
+    )
+    assert [t.name for t in project.teams] == ["Verwaltung", "Administration"]
+
+
+def test_project_carries_timeframe_order_and_budget():
+    """A listing sends start/end/order*, the entity adds the budget."""
+    project = ProjectModel(
+        id=1, name="P", customer=2, parentTitle="Acme",
+        start="2026-01-01T00:00:00+0100", end="2026-12-31T00:00:00+0100",
+        orderNumber="PO-42", orderDate="2025-12-01T00:00:00+0100",
+        budget=1000.0, budgetType="month", timeBudget=7200,
+    )
+    assert project.order_number == "PO-42"
+    assert project.parent_title == "Acme"
+    assert project.start.year == 2026
+    assert project.time_budget == 7200
+
+
+def test_serialize_project_renders_the_new_fields():
+    text = ProjectEntityHandler(client=None).serialize_project(ProjectModel(
+        id=1, name="P", customer=2, parentTitle="Acme",
+        start="2026-01-01T00:00:00+0100", orderNumber="PO-42",
+        budget=1000.0, budgetType="month",
+        teams=[{"id": 3, "name": "Verwaltung"}],
+    ))
+    assert "Customer: Acme (ID: 2)" in text
+    assert "Order Number: PO-42" in text
+    assert "Timeframe: 2026-01-01 - open" in text
+    assert "Budget: 1000.0 per month" in text
+    assert "Teams: Verwaltung" in text
+
+
+def test_user_model_covers_the_default_group():
+    user = User(id=1, username="a", email="a@b.de", accountNumber="P-1",
+                systemAccount=False, avatar="https://x/y.png", initials="AB",
+                language="de", locale="de", timezone="Europe/Berlin")
+    assert user.email == "a@b.de"
+    assert user.account_number == "P-1"
+    assert user.system_account is False

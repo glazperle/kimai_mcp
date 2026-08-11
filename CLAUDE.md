@@ -178,11 +178,26 @@ Each consolidated tool follows this structure:
 ## API Documentation & Compliance
 
 ### API Reference
-The Kimai API documentation is available at:
-- **Local Documentation**: `C:\Users\MaximilianvonHeyden\Nextcloud\00_Professionell\10_Software\Kimai\api_documentation.json` (**exported December 2025, i.e. around Kimai 2.4x**). Re-export it from `/api/doc.json` of a current instance before relying on it; for anything newer check the [release notes](https://github.com/kimai/kimai/releases) or the entity/controller sources in `kimai/kimai`.
 - **Online Documentation**: https://www.kimai.org/documentation/rest-api.html
+- **Schema sources** (what the audit script below reads): `config/packages/nelmio_api_doc.yaml` and `src/Entity/*.php` in [kimai/kimai](https://github.com/kimai/kimai) at the matching tag.
+- A locally exported `api_documentation.json` may exist outside the repository; treat any such export as a snapshot of the version it was taken from, not as current truth. `api_documentation.json` is gitignored.
 
 Tracked against **Kimai 2.65.0** (2026-08-11). The server keeps working against older instances; features that need a specific version are marked as such in the tool schemas.
+
+### Checking API compliance
+
+Two scripts, run after every Kimai release:
+
+```bash
+# 1. Offline: models vs. Kimai's own schema definitions (needs the gh CLI only)
+python scripts/audit_api_models.py 2.66.0
+
+# 2. Online: what a real instance actually sends. GET requests only, safe
+#    against production. Credentials come from the environment, never the repo.
+KIMAI_URL=https://kimai.example.com KIMAI_API_TOKEN=... python scripts/verify_against_kimai.py
+```
+
+The offline audit derives each response schema from the serializer groups, so it catches "Kimai serializes a field our model drops". It is a lower bound: entity properties that come from PHP traits (`color`, `budget`, `timeBudget`, `budgetType`) are invisible to it, which is what the online check covers. Fields Kimai sends that are deliberately not modelled (`color-safe`, `apiToken`) are listed in both scripts with the reason; extend that list rather than weakening the check.
 
 ### API Version Update (December 2024)
 
@@ -308,7 +323,4 @@ When modifying tools:
 - **Permissions**: Many operations require specific permissions (noted in API docs)
 
 ### Testing API Compliance
-```bash
-# Test individual tools with real API
-python -c "import asyncio; from kimai_mcp.client import KimaiClient; from kimai_mcp.tools.absence_manager import handle_absence; asyncio.run(test_tool())"
-```
+See "Checking API compliance" above: `scripts/audit_api_models.py` (offline, models vs. schema definitions) and `scripts/verify_against_kimai.py` (online, read-only against a real instance).
