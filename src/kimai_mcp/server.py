@@ -46,8 +46,19 @@ def format_api_error(e: KimaiAPIError) -> str:
     text = f"Kimai API Error: {e.message} (Status: {e.status_code})"
     if e.status_code == 403:
         text += "\nThe API token lacks permission for this operation (Kimai enforces team/user permissions strictly)."
-    if e.details:
-        text += f"\nDetails: {json.dumps(e.details, ensure_ascii=False, default=str)}"
+    details = json.dumps(e.details, ensure_ascii=False, default=str) if e.details else ""
+    if "should not contain extra fields" in details:
+        # Kimai builds its API forms from the enabled features, so a field can
+        # be valid on one instance and rejected on the next. The message names
+        # no field, which makes a bare 400 hard to act on.
+        text += (
+            "\nThe instance rejected a field that this tool sent, because the corresponding "
+            "feature is switched off in its settings. The usual cause is 'break' on a "
+            "timesheet, which only exists when 'Break time' is enabled under "
+            "Settings > Timesheet; retry without that field."
+        )
+    if details:
+        text += f"\nDetails: {details}"
     return text
 
 

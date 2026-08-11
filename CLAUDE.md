@@ -206,14 +206,14 @@ The following new API fields have been implemented:
 #### New Fields Added
 | Entity | Field | Type | Description |
 |--------|-------|------|-------------|
-| **Timesheet** | `break` | integer | Break duration in seconds |
+| **Timesheet** | `break` | integer | Break duration in seconds. **Conditional:** Kimai only puts this field on the API form when 'Break time' is enabled (Settings > Timesheet). On an instance with it off, sending `break` fails the whole request with `This form should not contain extra fields.`; `format_api_error()` explains that. |
 | **Project** | `metaFields` | array | Custom meta fields for projects |
 | **Activity** | `metaFields` | array | Custom meta fields for activities |
 | **Customer** | `metaFields` | array | Custom meta fields for customers |
 | **Invoice** | `overdue` | boolean | Whether the invoice is overdue |
 
 #### Removed Fields
-- `TagEntity.color-safe` - No longer in API schema
+- `TagEntity.color-safe` - no longer part of the tag schema. Note that `color-safe` still exists on customers, projects, activities, users and the embedded team stubs; it is `color` with a fallback applied and is deliberately not modelled (see `models.py` and the audit scripts).
 
 #### Endpoint Changes (Work Contract)
 | Old Endpoint | New Endpoint | Description |
@@ -264,7 +264,7 @@ All consolidated tools have been analyzed for API compliance. Key findings:
 #### ✅ Tools with Issues (Now Fixed)
 - `calendar` - CalendarEvent model added, method calls corrected
 - `entity` - Method name mismatches resolved, metaFields support added
-- `timesheet` - Meta field update logic fixed, break field added
+- `timesheet` - Meta field update logic fixed, break field added (conditional, see above)
 - `team_access` - Invalid teamlead parameter handling corrected
 - `timer` - Timezone and tags handling improved
 - `analyze_project_team` - DateTime parameter conversion fixed

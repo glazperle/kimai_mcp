@@ -21,6 +21,7 @@ Ports the server to MCP Python SDK 2.x, catches up with Kimai 2.62 - 2.65, and f
 - **A mixed-offset date filter failed the whole timesheet listing.** The year-breakdown heuristic subtracts the two bounds; with one bound carrying a UTC offset and the other not, that raises `TypeError`, which the `ValueError`-only suppression introduced with the ruff cleanup did not catch. The heuristic is best effort again and simply leaves the breakdown off.
 - **Multi-chunk absence creation hid API errors.** Splitting a long absence wrapped `KimaiAPIError` into a plain tool error, discarding the status code, the validation details and the 403 permission hint that the single-chunk path reports.
 - **`analyze_project_team` answered with interpreter errors** such as `Error: 'begin'` for a missing argument, because required arguments were read above the try block.
+- **A rejected conditional field now explains itself.** Kimai builds its API forms from the enabled features, so `break` only exists on the timesheet form when "Break time" is on (Settings > Timesheet). Since the alias fix above means the field is now really sent, an instance with that setting off answers `This form should not contain extra fields.` without naming a field. `format_api_error()` says what to do about it, and the tool schema states the requirement. Found by running the write paths against a real instance that has break time disabled.
 
 ### Added
 

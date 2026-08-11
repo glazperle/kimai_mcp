@@ -113,7 +113,15 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                         "billable": {"type": "boolean"},
                         "fixedRate": {"type": "number"},
                         "hourlyRate": {"type": "number"},
-                        "break": {"type": "integer", "description": "Break duration in seconds"}
+                        "break": {
+                            "type": "integer",
+                            "description": (
+                                "Break duration in seconds. Only send this when the Kimai "
+                                "instance has 'Break time' enabled (Settings > Timesheet); "
+                                "otherwise the API rejects the whole request with "
+                                "'This form should not contain extra fields.'"
+                            )
+                        }
                     }
                 },
                 "meta": {
