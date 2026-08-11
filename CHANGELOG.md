@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.1] - 2026-08-11
+
+Hotfix release: new installations were broken. No functional changes to the tools.
+
+### Fixed
+
+- **Server no longer crashes on startup with MCP SDK 2.0.0.** The dependency was declared as `mcp>=1.27.0` without an upper bound, so a fresh install resolved to SDK 2.0.0 (released 2026-07-28), whose low-level `Server` no longer has the `list_tools()`/`call_tool()` decorators. `KimaiMCPServer.__init__` therefore died with `AttributeError: 'Server' object has no attribute 'list_tools'` before the MCP handshake, and every client reported the server as failed. The dependency is now capped at `mcp>=1.27.0,<2`. The port to the SDK 2.x API (and with it protocol revision 2026-07-28) follows in 2.16.0. (#21)
+- **CI was red on every pull request.** ruff 0.16.0 grew its default rule set from 59 to 413 rules; with no ruff configuration and no version pin (`ruff>=0.1.0`) the workflow always installed the newest release, so `ruff check src/` reported 806 findings and blocked unrelated PRs, including Dependabot's.
+
+### Changed
+
+- **The new ruff defaults are now the project's lint baseline.** 786 findings were auto-fixed (PEP 604 unions, builtin generics, import order, f-string conversions); the remaining 51 were fixed or suppressed at the individual site with a stated reason, so a new blind `except Exception` still shows up in CI. ruff is pinned to `>=0.16,<0.17`.
+- **Dependency majors are capped** (`mcp<2`, `httpx<1`, `pydantic<3`, `python-dotenv<2`). Dependabot only files a PR when it can change a constraint, so with lower bounds only it never reported a single Python update for this project, which is how the breaking `mcp` 2.0 release went unnoticed until it broke installs.
+- **Strict `YYYY-MM-DD` parsing lives in one place** (`tools/dates.py`) instead of being copy-pasted across `absence_manager` and `calendar_meta`. As a side effect, `absence action=create` with an unparsable `date`/`end` now returns a proper tool error instead of letting a raw `ValueError` escape.
+- Timestamps that intentionally use local time (Claude Desktop config backup name, absence attendance "today", timer elapsed calculation) say so explicitly instead of relying on a naive `datetime.now()`.
+- CI lints `tests/` as well and runs Python 3.13 in addition to 3.10 and 3.12; `actions/setup-python` bumped to v7. (#20)
+- `requirements.txt` removed: no workflow or Dockerfile used it and it still pinned `mcp>=0.9.0`, contradicting `pyproject.toml`.
+
 ## [2.15.0] - 2026-06-30
 
 ### Changed
