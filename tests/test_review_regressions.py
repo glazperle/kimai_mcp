@@ -12,7 +12,7 @@ import pytest
 from mcp.client import Client
 from mcp.types import CallToolRequestParams
 
-from kimai_mcp.client import KimaiClient
+from kimai_mcp.client import KimaiAPIError, KimaiClient
 from kimai_mcp.models import (
     AbsenceForm,
     ActivityFilter,
@@ -206,3 +206,37 @@ def test_rotated_access_token_is_revoked_with_its_refresh_token():
     provider._remove_refresh_token(first.refresh_token)
 
     assert asyncio.run(provider.load_access_token(first.access_token)) is None
+
+
+# ---------------------------------------------------------------------------
+# Conditional Kimai fields need an actionable error, not a bare 400
+# ---------------------------------------------------------------------------
+
+
+def test_extra_field_rejection_explains_itself():
+    """Kimai builds its API forms from the enabled features.
+
+    `break` exists on the timesheet form only when 'Break time' is enabled, so
+    the same request succeeds on one instance and fails on another with a
+    message that names no field. Verified against a real instance that has the
+    setting off.
+    """
+    from kimai_mcp.server import format_api_error
+
+    text = format_api_error(KimaiAPIError(
+        "Validation Failed", status_code=400,
+        details={"errors": ["This form should not contain extra fields."]},
+    ))
+    assert "Break time" in text
+    assert "Settings > Timesheet" in text
+    assert "should not contain extra fields" in text  # raw details still shown
+
+
+def test_ordinary_validation_error_gets_no_break_hint():
+    from kimai_mcp.server import format_api_error
+
+    text = format_api_error(KimaiAPIError(
+        "Validation Failed", status_code=400,
+        details={"errors": {"begin": ["This value is not valid."]}},
+    ))
+    assert "Break time" not in text
