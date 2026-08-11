@@ -168,7 +168,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         if not self.state_file or not self.state_file.exists():
             return
         try:
-            with open(self.state_file, "r", encoding="utf-8") as f:
+            with self.state_file.open(encoding="utf-8") as f:
                 data = json.load(f)
             now = time.time()
             for client_id, client_data in data.get("clients", {}).items():
@@ -195,7 +195,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             }
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with tmp_path.open("w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             tmp_path.replace(self.state_file)
         # Persistence is a convenience; a failing write must not break the

@@ -15,7 +15,7 @@ from kimai_mcp.tools.entity_manager import (
 )
 
 
-@pytest.mark.parametrize("handler_cls, model_cls, method", [
+@pytest.mark.parametrize(("handler_cls", "model_cls", "method"), [
     (ProjectEntityHandler, ProjectExtended, "serialize_project"),
     (CustomerEntityHandler, CustomerExtended, "serialize_customer"),
     (ActivityEntityHandler, ActivityExtended, "serialize_activity"),

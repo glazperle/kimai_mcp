@@ -4,6 +4,10 @@ import contextlib
 import json
 from datetime import datetime, timedelta, timezone
 
+# Bounds the extra fetching for statistics so a huge date range cannot pull an
+# unbounded number of pages into a single response.
+MAX_STATS_RESULTS = 10000
+
 from mcp.types import TextContent, Tool
 
 from ..client import KimaiAPIError, KimaiClient
@@ -302,9 +306,6 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     # Auto-fetch remaining pages if calculate_stats is enabled and the client
     # did not already fetch everything (e.g. manual pagination was used)
     if filters.get("calculate_stats") and not fetched_all:
-        # Bound the additional fetching so a huge date range cannot pull an
-        # unbounded number of pages into a single response.
-        MAX_STATS_RESULTS = 10000
         all_timesheets = list(timesheets)
         page = (last_page or 1) + 1
         page_size = timesheet_filter.size or 50

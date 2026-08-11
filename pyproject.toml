@@ -64,3 +64,32 @@ kimai-mcp-streamable = "kimai_mcp.streamable_http_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kimai_mcp"]
+
+[tool.ruff]
+# target-version is taken from project.requires-python (3.10).
+# The code predates any line-length rule and E501 is not part of the rule set
+# below; this value is what `ruff format` would use and documents the intent.
+line-length = 120
+
+[tool.ruff.lint]
+# Baseline: ruff's default rule set (413 rules as of 0.16), which the [dev]
+# extra pins to one minor so it cannot shift underneath a release. On top of it:
+#
+#   C4   comprehension clarity        PT   pytest style (parametrize, raises)
+#   N    PEP 8 naming                 PTH  pathlib over os.path/open
+#
+# Deliberately NOT enabled, with the finding count each would add today:
+#   ANN (397) and D (289) - annotating and docstring-ing every helper is not
+#     how this codebase documents itself; the tool schemas are the contract.
+#   TRY (179) and EM (152) - would rewrite every raise site of the ToolError
+#     pattern, whose message text is user-visible and asserted in tests.
+#   ARG (42) - handlers deliberately accept a uniform signature and ignore
+#     arguments that do not apply to their action.
+#   TID (41) - the lazy, function-local imports it flags are intentional
+#     (optional [server] dependencies, import-cycle breaks).
+extend-select = ["C4", "N", "PT", "PTH"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests construct throwaway servers and providers; reaching into a private
+# helper is the point of a regression test.
+"tests/*" = ["SLF001"]

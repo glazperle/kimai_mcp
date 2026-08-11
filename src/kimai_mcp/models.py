@@ -31,8 +31,28 @@ class User(KimaiModel):
     color: str | None = None
 
 
+class MetaField(KimaiModel):
+    """Meta field model."""
+    name: str
+    value: str | None = None
+
+
 class Customer(KimaiModel):
-    """Customer model."""
+    """Customer model.
+
+    Which fields Kimai actually sends depends on the serializer group of the
+    endpoint (verified against `src/Entity/Customer.php` at 2.65.0), so every
+    field beyond id/name is optional:
+
+    * ``Default`` (every response, including a plain listing): the block below
+      up to ``metaFields``, ``language`` among them.
+    * ``Customer_Details`` (listing with ``full=1``, Kimai 2.62+): ``vatId``
+      and the structured address.
+    * ``Customer_Entity`` (get/create/update only): the details above plus
+      ``contact``, ``address``, ``email``, ``invoiceEmail``, ``buyerReference``
+      and the budget fields.
+    """
+
     id: int
     name: str
     country: str | None = None
@@ -50,10 +70,26 @@ class Customer(KimaiModel):
     homepage: str | None = None
     company: str | None = None
 
-    # Kimai 2.63+ (kimai/kimai#5857, #5855). Only returned by the collection
-    # endpoint when it is called with full=1.
-    language: str | None = None
-    invoice_email: str | None = Field(None, alias="invoiceEmail")
+    language: str | None = None  # Kimai 2.63+ (kimai/kimai#5857)
+    meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
+
+    # Customer_Details: listing with full=1, and every single-customer response
+    vat_id: str | None = Field(None, alias="vatId")
+    address_line1: str | None = Field(None, alias="addressLine1")
+    address_line2: str | None = Field(None, alias="addressLine2")
+    address_line3: str | None = Field(None, alias="addressLine3")
+    post_code: str | None = Field(None, alias="postCode")
+    city: str | None = None
+
+    # Customer_Entity: get/create/update only
+    contact: str | None = None
+    address: str | None = None  # legacy unstructured address
+    email: str | None = None
+    invoice_email: str | None = Field(None, alias="invoiceEmail")  # Kimai 2.63+ (#5855)
+    buyer_reference: str | None = Field(None, alias="buyerReference")
+    budget: float | None = None
+    time_budget: int | None = Field(None, alias="timeBudget")
+    budget_type: str | None = Field(None, alias="budgetType")
 
 
 class Project(KimaiModel):
@@ -67,6 +103,8 @@ class Project(KimaiModel):
     global_activities: bool = Field(True, alias="globalActivities")
     number: str | None = None
     color: str | None = None
+    # Serializer group Default, so listings carry them too.
+    meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
 
 
 class Activity(KimaiModel):
@@ -79,6 +117,8 @@ class Activity(KimaiModel):
     billable: bool = True
     number: str | None = None
     color: str | None = None
+    # Serializer group Default, so listings carry them too.
+    meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
 
 
 class TimesheetEntity(KimaiModel):
@@ -488,12 +528,6 @@ class RateForm(KimaiModel):
 
 # Meta field models
 
-class MetaField(KimaiModel):
-    """Meta field model."""
-    name: str
-    value: str | None = None
-
-
 class MetaFieldForm(KimaiModel):
     """Form for updating meta fields."""
     name: str
@@ -502,19 +536,21 @@ class MetaFieldForm(KimaiModel):
 
 # Extended entity models with meta fields
 
+# Kimai puts metaFields in the `Default` serializer group, so *every* response
+# carries them and the base models above parse them. These subclasses are kept
+# as the return types of the create/update client methods, where the response is
+# the full entity, but they no longer add fields of their own.
+
 class CustomerExtended(Customer):
-    """Extended customer model with meta fields."""
-    meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
+    """Customer as returned by get/create/update (full entity)."""
 
 
 class ProjectExtended(Project):
-    """Extended project model with meta fields."""
-    meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
+    """Project as returned by get/create/update (full entity)."""
 
 
 class ActivityExtended(Activity):
-    """Extended activity model with meta fields."""
-    meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
+    """Activity as returned by get/create/update (full entity)."""
 
 
 # CRUD forms for administrative operations

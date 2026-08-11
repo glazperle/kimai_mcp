@@ -128,7 +128,7 @@ class UsersConfig(BaseModel):
         if not path.exists():
             raise FileNotFoundError(f"Users config file not found: {path}")
 
-        with open(path, "r", encoding="utf-8") as f:
+        with path.open(encoding="utf-8") as f:
             data = json.load(f)
 
         # Parse each user config

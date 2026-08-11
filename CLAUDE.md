@@ -219,7 +219,17 @@ The `entity` tool now supports both `lock_month` and `unlock_month` actions for 
 | Kimai | Change | Implementation |
 |-------|--------|----------------|
 | 2.63 | Customer gained `language` and `invoiceEmail` ([#5857](https://github.com/kimai/kimai/pull/5857), [#5855](https://github.com/kimai/kimai/pull/5855)) | `Customer` / `CustomerEditForm` in `models.py`, `entity` customer schema (its `data` object is `additionalProperties: false`, so an unlisted field cannot be sent), `serialize_customer()` |
-| 2.62 | `GET /api/customers` accepts `full=0\|1` for the full detail set | `CustomerFilter.full`, exposed as the boolean `filters.full` on `entity type=customer action=list`. Needs the `details_customer` permission; **without it Kimai silently returns the short form instead of a 403**, so absent detail fields are not necessarily a bug |
+| 2.62 | `GET /api/customers` accepts `full=0\|1` for the detail set | `CustomerFilter.full`, exposed as the boolean `filters.full` on `entity type=customer action=list`. Needs the `details_customer` permission; **without it Kimai silently returns the short form instead of a 403**, so absent detail fields are not necessarily a bug |
+
+**Which customer fields come back where** (serializer groups in `src/Entity/Customer.php`, read at 2.65.0 - getting this wrong is easy and silent):
+
+| Serializer group | Endpoint | Fields |
+|---|---|---|
+| `Default` | every response, plain listing included | id, name, number, comment, visible, billable, company, country, currency, timezone, phone, fax, mobile, homepage, **language**, **metaFields** |
+| `Customer_Details` | listing **with `full=1`** | `vatId`, `addressLine1`-`3`, `postCode`, `city` |
+| `Customer_Entity` | `get` / `create` / `update` only | the details above plus `contact`, `address`, `email`, **`invoiceEmail`**, `buyerReference`, `budget`, `timeBudget`, `budgetType` |
+
+So `full=1` is **not** what surfaces `language` (that is `Default`) and **cannot** surface `invoiceEmail` (that is entity-only). `invoiceTemplate` and `invoiceText` are writable but never serialized back.
 | 2.65 | Removing a team's customer/project/activity access additionally requires `IsGranted('permissions', ...)` on that entity | No code change; `team_access action=revoke` (handler `_handle_revoke_access`) can now return 403 where 2.64 succeeded. The permission hint in `format_api_error()` covers it |
 | 2.63 | WorkContract preferences are guarded more strictly | No code change; `entity type=user action=set_preferences` can fail with 403 (not only 404) on instances where the token lacks the work-contract permission |
 | 2.65 | `GET /api/tags` (plain string array) formally flagged deprecated | Already avoided: `client.get_tags_full()` uses `/tags/find`, and that is what the `entity type=tag` handler calls |

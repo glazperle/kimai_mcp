@@ -171,7 +171,7 @@ Options for the Streamable HTTP server (`kimai-mcp-streamable`):
 ### Complete Kimai Integration
 - **Timesheet Management** - Create, update, delete, start/stop timers, view active timers
 - **Project & Activity Management** - Browse and view projects and activities
-- **Customer Management** - Browse and view customer information, including `language` and `invoiceEmail` (Kimai 2.63+) and optional full-detail listings via `filters.full` (Kimai 2.62+, needs the `details_customer` permission)
+- **Customer Management** - Browse and view customer information including the full detail set (VAT ID, structured address, contact, budget, meta fields, plus `language` and `invoiceEmail` from Kimai 2.63+). Listings can request `filters.full` for the address and VAT ID (Kimai 2.62+, needs the `details_customer` permission); contact, email and budget are only returned for a single customer via `action=get`
 - **User Management** - List, view, create, update user accounts, and configure work contracts (preferences)
 - **Team Management** - Create teams, manage members, control access permissions
 - **Absence Management** - Create, approve, reject, and track absences

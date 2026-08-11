@@ -116,7 +116,7 @@ USER PREFERENCES (action=set_preferences, type=user only):
                                    "description": "Status filter (for invoices)"},
                         "full": {
                             "type": "boolean",
-                            "description": "For type=customer: ask Kimai for the detailed customer records (Kimai 2.62+, needs the 'details_customer' permission). Of the extra fields this server surfaces 'language' and 'invoiceEmail'; use action=get for a single customer's remaining details."
+                            "description": "For type=customer: return the detailed customer records, which adds vatId and the structured address (addressLine1-3, postCode, city). Requires Kimai 2.62+ and the 'details_customer' permission; without the permission Kimai silently returns the short form instead of failing. Fields like email, contact, invoiceEmail, buyerReference and the budget are never part of a listing, use action=get for those."
                         }
                     }
                 },
@@ -764,16 +764,47 @@ class CustomerEntityHandler(BaseEntityHandler):
             result += f"Fax: {customer.fax}\n"
         if getattr(customer, 'mobile', None):
             result += f"Mobile: {customer.mobile}\n"
+        if getattr(customer, 'email', None):
+            result += f"Email: {customer.email}\n"
         if getattr(customer, 'homepage', None):
             result += f"Homepage: {customer.homepage}\n"
         if getattr(customer, 'company', None):
             result += f"Company: {customer.company}\n"
+        if getattr(customer, 'contact', None):
+            result += f"Contact: {customer.contact}\n"
 
-        # Kimai 2.63+
         if getattr(customer, 'language', None):
             result += f"Language: {customer.language}\n"
+
+        # Address: structured fields (Kimai 2.62+ detail set) with the legacy
+        # unstructured 'address' as fallback.
+        address_lines = [
+            getattr(customer, attr, None)
+            for attr in ('address_line1', 'address_line2', 'address_line3')
+        ]
+        city_line = " ".join(
+            part for part in (getattr(customer, 'post_code', None), getattr(customer, 'city', None))
+            if part
+        )
+        address_parts = [part for part in [*address_lines, city_line] if part]
+        if address_parts:
+            result += "Address: " + ", ".join(address_parts) + "\n"
+        elif getattr(customer, 'address', None):
+            result += f"Address: {customer.address}\n"
+
+        # Invoicing / billing
+        if getattr(customer, 'vat_id', None):
+            result += f"VAT ID: {customer.vat_id}\n"
         if getattr(customer, 'invoice_email', None):
             result += f"Invoice Email: {customer.invoice_email}\n"
+        if getattr(customer, 'buyer_reference', None):
+            result += f"Buyer Reference: {customer.buyer_reference}\n"
+        if getattr(customer, 'budget', None):
+            budget_type = getattr(customer, 'budget_type', None)
+            period = f" per {budget_type}" if budget_type else ""
+            result += f"Budget: {customer.budget} {customer.currency or ''}{period}\n".replace("  ", " ")
+        if getattr(customer, 'time_budget', None):
+            result += f"Time Budget: {customer.time_budget / 3600:.2f} hours\n"
 
         if getattr(customer, 'comment', None):
             result += f"Comment: {customer.comment}\n"

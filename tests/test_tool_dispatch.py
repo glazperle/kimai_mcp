@@ -631,7 +631,7 @@ def assert_valid_result(result):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("handler,params,expect_error", CASES)
+@pytest.mark.parametrize(("handler", "params", "expect_error"), CASES)
 async def test_dispatch_smoke(handler, params, expect_error):
     """Dispatch every action of every tool handler against a specced mock.
 
@@ -646,19 +646,18 @@ async def test_dispatch_smoke(handler, params, expect_error):
 
     is_positional = handler is project_analysis.handle_analyze_project_team
 
+    async def call():
+        # analyze_project_team takes the arguments dict positionally.
+        if is_positional:
+            return await handler(client, params)
+        return await handler(client, **params)
+
     if expect_error:
         with pytest.raises(ToolError):
-            if is_positional:
-                # This handler takes the arguments dict positionally (see server.py)
-                await handler(client, params)
-            else:
-                await handler(client, **params)
+            await call()
         return
 
-    if is_positional:
-        result = await handler(client, params)
-    else:
-        result = await handler(client, **params)
+    result = await call()
 
     assert_valid_result(result)
 
@@ -730,7 +729,7 @@ SCHEMA_ENUM_CHECKS = [
 
 
 @pytest.mark.parametrize(
-    "tool_name,tool_factory,prop",
+    ("tool_name", "tool_factory", "prop"),
     SCHEMA_ENUM_CHECKS,
     ids=[f"{name}-{prop}" for name, _, prop in SCHEMA_ENUM_CHECKS],
 )
