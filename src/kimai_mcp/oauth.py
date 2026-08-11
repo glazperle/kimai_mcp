@@ -560,6 +560,11 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         access = self._refresh_to_access.pop(token, None)
         if access:
             self._access_to_refresh.pop(access, None)
+            # Drop the paired access token as well. Leaving it in _access_tokens
+            # made it unreachable from either mapping, so revoke_token could no
+            # longer find it and a rotated-away token kept authenticating for the
+            # rest of its TTL - one such token per refresh.
+            self._access_tokens.pop(access, None)
 
     async def revoke_token(self, token) -> None:
         """Revoke an access or refresh token together with its counterpart."""

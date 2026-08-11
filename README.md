@@ -35,7 +35,7 @@ kimai-mcp --setup
 | **Local** | `kimai-mcp` | Claude Desktop, single user, development |
 | **Streamable HTTP** | `kimai-mcp-streamable` | Claude.ai Connectors (web/mobile), teams |
 
-> **Removed in v2.16.0:** the SSE server and its `kimai-mcp-server` command are gone. The SSE transport was dropped from the MCP specification, the server had been non-functional and deprecated since v2.12.0, and MCP SDK 2.x no longer ships the transport at all. Use `kimai-mcp-streamable` for remote access.
+> **Removed in v2.16.0:** the SSE server and its `kimai-mcp-server` command are gone. The SSE transport was dropped from the MCP specification in favour of Streamable HTTP, and this project's implementation had been non-functional and deprecated since v2.12.0. Use `kimai-mcp-streamable` for remote access.
 
 #### Quick Start with Docker (Streamable HTTP + OAuth)
 

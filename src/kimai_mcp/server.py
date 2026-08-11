@@ -151,12 +151,15 @@ class KimaiMCPServer:
         params: CallToolRequestParams,
     ) -> CallToolResult:
         """Handle consolidated tool calls."""
-        await self._ensure_client()
-
         name = params.name
         arguments = params.arguments or {}
 
         try:
+            # Inside the try: SDK 2.x has no net around the handler, so a failure
+            # here (e.g. an unreadable CA bundle) would otherwise leave the
+            # handler as a JSON-RPC error instead of an is_error result (#18).
+            await self._ensure_client()
+
             # Route to the shared tool registry
             return tool_result(await dispatch_tool(self.client, name, arguments))
 

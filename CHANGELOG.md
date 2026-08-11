@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.16.0] - 2026-08-11
 
-Ports the server to MCP Python SDK 2.x and catches up with Kimai 2.62 - 2.65.
+Ports the server to MCP Python SDK 2.x, catches up with Kimai 2.62 - 2.65, and fixes a group of defects a review of the port surfaced. Several of them are long-standing and silent: the tool reported success while the field never reached Kimai.
+
+### Fixed
+
+- **Aliased fields passed by their Python name were silently dropped.** No model set `populate_by_name`, so Pydantic ignored the field name and `model_dump(by_alias=True)` left the field out entirely. Four call sites were affected: `absence action=create` with `halfDay` **booked a full day** off the user's vacation quota; `rate action=add` dropped `isFixed` and `internalRate`, so a fixed rate was **created as an hourly one**; `timesheet action=create` never sent `break`, the field CLAUDE.md documented as supported; and `order_by` was dropped from customer, project and activity listings, so results came back sorted by Kimai's default column while `order=DESC` still applied. Every case answered "created"/"updated" as if it had worked. All models now derive from a `KimaiModel` base that accepts both spellings; the wire format is unchanged.
+- **Tool arguments are validated against the tool schema again.** SDK 1.x ran `jsonschema.validate(arguments, inputSchema)` server-side and answered `Input validation error: ...`; SDK 2.x dropped it (jsonschema is client-side only there), and the constructor-based handler registration inherits that. Since the entity `data` sub-schemas are `additionalProperties: false` while the Pydantic forms ignore extras, a typo like `{"langauge": "de"}` sent an **empty PATCH** and reported `Updated Customer: ...`. `tools/registry.py::validate_arguments` restores the check for both transports.
+- **OIDC: `require_verified_email` was a no-op with real IdPs.** The guard skipped the unverified `email` claim and then accepted the same address from `preferred_username`/`upn` one iteration later. Entra ID, Keycloak, Auth0 and Okta all emit those next to `email`, so an IdP account with an unverified address could map to another user's slug. A token whose `email` claim is not asserted as verified is now rejected for identity mapping entirely. Deployments whose `identity_claims` do not include `email`, and tokens that carry no `email` claim at all, are unaffected, as is the `--oidc-allow-unverified-email` opt-out.
+- **Rotating a refresh token orphaned the old access token.** It stayed in the token store while both pairing maps dropped it, so `revoke_token` could no longer reach it and it kept authenticating until its TTL expired, one unrevocable bearer token per refresh. Revocation now terminates access as documented.
+- **On-demand session initialization produced a permanently broken endpoint.** A user whose startup init failed (Kimai briefly unreachable) got a fresh `StreamableHTTPSessionManager` whose `run()` was never entered, which answers `Task group is not initialized` on every request, and the session was then cached in that state. Session managers now run in their own supervised task, which is also what anyio requires: the task that enters the manager's task group has to be the one that exits it. The corresponding test drives a real request through the healed session instead of only asserting that an attribute is set.
+- **`session_idle_timeout` is set to 30 minutes.** SDK 2.x added it and defaults it to `None`, which reclaims a session only when its transport crashes, so a cleanly closed session leaked a transport and a task on every reconnect.
+- **Exceptions could escape `_call_tool` as protocol errors.** `_ensure_client()` ran outside the try block, so a failure constructing the HTTP client (e.g. an unreadable CA bundle passed to `--ssl-verify`) surfaced as a JSON-RPC error rather than the `is_error` result of #18, and every later call failed the same way.
+- **A mixed-offset date filter failed the whole timesheet listing.** The year-breakdown heuristic subtracts the two bounds; with one bound carrying a UTC offset and the other not, that raises `TypeError`, which the `ValueError`-only suppression introduced with the ruff cleanup did not catch. The heuristic is best effort again and simply leaves the breakdown off.
+- **Multi-chunk absence creation hid API errors.** Splitting a long absence wrapped `KimaiAPIError` into a plain tool error, discarding the status code, the validation details and the 403 permission hint that the single-chunk path reports.
+- **`analyze_project_team` answered with interpreter errors** such as `Error: 'begin'` for a missing argument, because required arguments were read above the try block.
 
 ### Added
 
@@ -15,7 +28,8 @@ Ports the server to MCP Python SDK 2.x and catches up with Kimai 2.62 - 2.65.
 - **Customer `language` and `invoiceEmail`** (Kimai 2.63, [kimai/kimai#5857](https://github.com/kimai/kimai/pull/5857), [#5855](https://github.com/kimai/kimai/pull/5855)). Readable on `get`/`list`, writable on `create`/`update`. The customer `data` schema is `additionalProperties: false`, so without the schema entries these fields could not be sent at all.
 - **Full-detail customer listings**: `entity type=customer action=list filters={"full": true}` maps to the `full=1` parameter added in Kimai 2.62. Needs the `details_customer` permission; Kimai silently returns the short form without it rather than failing, so missing detail fields are not necessarily an error.
 - **`tests/test_mcp_protocol.py`**: drives both transports through a real in-memory MCP client session (connect, `tools/list`, `tools/call`, every error path, unknown tool, advertised capability and version) across both protocol eras, 28 cases. Issue #21 was a crash in `__init__`, which no handler-level unit test could ever see; this closes that gap for future SDK bumps.
-- CI smoke-tests both console scripts, so import-time and entry-point breakage fails the build even without a matching unit test.
+- **`tests/test_review_regressions.py`**: one test per defect listed above, each stating the observable failure it prevents.
+- CI smoke-tests the console scripts **and constructs both servers**, since `--help` exits in `parse_args()` before any server object exists and would not have caught #21. The matrix now also covers Python 3.11 and 3.14 (3.14 is what the published Docker image runs).
 
 ### Changed
 
@@ -23,10 +37,12 @@ Ports the server to MCP Python SDK 2.x and catches up with Kimai 2.62 - 2.65.
 - `team_access action=revoke` documents that **Kimai 2.65** additionally requires the `permissions` permission on the target customer/project/activity; a token that could revoke on 2.64 may now receive a 403 (the existing permission hint covers it).
 - `entity type=user action=set_preferences` documents that **Kimai 2.63** guards work-contract preferences more strictly, so a 403 means a missing permission, as opposed to the 404 that signals an un-initialized contract on Kimai < 2.61.
 - Documentation is tracked against Kimai 2.65, and the local API-documentation export referenced in CLAUDE.md is flagged as a December 2025 snapshot.
+- `fastapi` dropped from the `[server]` extra: the deleted SSE server was its only importer, the streamable server is plain Starlette (which `mcp` brings) plus uvicorn.
+- The German absence labels used by the attendance report are the ones from `AbsenceAnalytics` instead of a byte-identical private copy, so the two reports cannot drift apart.
 
 ### Removed
 
-- **The SSE server and its `kimai-mcp-server` command.** SDK 2.x does not ship `mcp.server.sse` at all, and the server had been documented as deprecated and non-functional since v2.12.0 (the SSE transport was dropped from the MCP specification). Use `kimai-mcp-streamable` for remote access. The `SessionManager`/`SessionConfig` helpers in `security.py` are removed with it, since only the SSE server used them. The `docker-compose.yml` service keeps its name and is unaffected: it runs `kimai-mcp-streamable`.
+- **The SSE server and its `kimai-mcp-server` command.** It had been documented as deprecated and **non-functional** since v2.12.0: the SSE transport was dropped from the MCP specification in favour of Streamable HTTP, and the transport wiring in `sse_server.py` was already broken, so the command printed a warning and could not serve a client. (The MCP SDK does still ship `mcp.server.sse`; the removal is about this project's dead code, not about the SDK.) Use `kimai-mcp-streamable` for remote access. The `SessionManager`/`SessionConfig` helpers in `security.py` are removed with it, since only the SSE server used them. The `docker-compose.yml` service keeps its name and is unaffected: it runs `kimai-mcp-streamable`.
 
 ## [2.15.1] - 2026-08-11
 

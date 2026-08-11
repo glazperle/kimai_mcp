@@ -13,7 +13,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12", "3.13"]
+        # 3.14 is what the published Docker image runs; 3.11 is in the classifiers.
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -26,9 +27,30 @@ jobs:
       - name: Run tests
         if: hashFiles('tests/') != ''
         run: pytest tests/ -v
-      # Catches import-time and entry-point breakage that unit tests can miss,
-      # e.g. an SDK release that removes an API used at module import (#21).
-      - name: Smoke test console scripts
+      # --help alone would not catch #21: argparse exits before any server object
+      # is built, and that crash was in KimaiMCPServer.__init__. So construct
+      # both servers, derive the handshake options from the registered handlers,
+      # and build the ASGI app - everything `main()` does up to the point where
+      # it needs a reachable Kimai. (The stdio transport itself is not entered
+      # here because it blocks on stdin; tests/test_mcp_protocol.py covers the
+      # handler contract instead.)
+      - name: Smoke test console scripts and server startup
         run: |
           kimai-mcp --help > /dev/null
           kimai-mcp-streamable --help > /dev/null
+          python - <<'EOF'
+          from kimai_mcp.server import KimaiMCPServer
+          from kimai_mcp.streamable_http_server import StreamableHTTPMCPServer
+          from kimai_mcp.user_config import UserConfig, UsersConfig
+
+          local = KimaiMCPServer(base_url="http://kimai.invalid", api_token="t")
+          options = local.server.create_initialization_options()
+          assert options.server_name == "kimai-mcp-consolidated", options
+          assert options.capabilities.tools is not None, options.capabilities
+
+          users = UsersConfig(users={"smoketestuser1234": UserConfig(
+              kimai_url="http://kimai.invalid", kimai_token="t", auth_secret="s")})
+          remote = StreamableHTTPMCPServer(users_config=users, public_url="https://mcp.invalid")
+          assert remote.create_app() is not None
+          print("startup smoke test OK")
+          EOF

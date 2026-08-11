@@ -42,11 +42,21 @@ def analyze_project_team_tool() -> Tool:
 
 async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle comprehensive project team analysis."""
+    missing = [f for f in ("project_name", "begin", "end") if not arguments.get(f)]
+    if missing:
+        raise ToolError(f"Error: Missing required fields: {', '.join(missing)}")
+
     project_name = arguments['project_name']
-    begin = datetime.fromisoformat(arguments['begin'])
-    end = datetime.fromisoformat(arguments['end'])
+    try:
+        begin = datetime.fromisoformat(arguments['begin'])
+        end = datetime.fromisoformat(arguments['end'])
+    except ValueError as e:
+        raise ToolError(
+            f"Error: Invalid date format for 'begin'/'end'. Use ISO format "
+            f"(YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS) ({e})"
+        )
     include_details = arguments.get('include_details', True)
-    
+
     try:
         # 1. Find project by name (server-side term search instead of loading all projects)
         projects = await client.get_projects(ProjectFilter(term=project_name))

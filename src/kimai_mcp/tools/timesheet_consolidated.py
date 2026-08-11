@@ -357,8 +357,10 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         # Auto-enable year breakdown if time span > 1 year
         breakdown_by_year = filters.get("breakdown_by_year", False)
         if not breakdown_by_year and filters.get("begin") and filters.get("end"):
-            # Unparsable filter dates just leave the breakdown off.
-            with contextlib.suppress(ValueError):
+            # Unparsable filter dates just leave the breakdown off. TypeError is
+            # included because one bound may carry an offset and the other may
+            # not, and subtracting naive from aware raises TypeError, not ValueError.
+            with contextlib.suppress(ValueError, TypeError):
                 begin_date = datetime.fromisoformat(filters["begin"].replace('Z', '+00:00'))
                 end_date = datetime.fromisoformat(filters["end"].replace('Z', '+00:00'))
                 if (end_date - begin_date).days > 365:  # More than 1 year

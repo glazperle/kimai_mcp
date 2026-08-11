@@ -126,8 +126,21 @@ def test_extract_identity_skips_unverified_email():
     cl = OIDCClient(cfg)
     # email_verified missing -> email ignored; preferred_username (no @) skipped -> None
     assert cl.extract_identity({"email": "a@b.de", "preferred_username": "plain"}) is None
-    # email_verified false -> email ignored, falls back to upn (has @)
-    assert cl.extract_identity({"email": "a@b.de", "email_verified": False, "upn": "u@b.de"}) == "u@b.de"
+    # email_verified false -> no fallback either. Skipping only the email claim
+    # would be a no-op guard: every fallback claim has to look like an email, and
+    # the IdPs that emit email also emit preferred_username/upn, so the same
+    # unverified address (or any other) would be accepted one claim later.
+    assert cl.extract_identity({"email": "a@b.de", "email_verified": False, "upn": "u@b.de"}) is None
+    assert cl.extract_identity(
+        {"email": "a@b.de", "email_verified": False, "preferred_username": "a@b.de"}
+    ) is None
+
+
+def test_extract_identity_without_email_claim_still_uses_upn():
+    """A token making no email assertion is not affected by the guard."""
+    cfg = OIDCConfig(issuer=ISSUER, client_id=CLIENT_ID)
+    cl = OIDCClient(cfg)
+    assert cl.extract_identity({"upn": "u@b.de"}) == "u@b.de"
 
 
 def test_extract_identity_allows_unverified_email_when_disabled():

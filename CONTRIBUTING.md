@@ -107,7 +107,7 @@ When adding new MCP tools:
        return Tool(
            name="category_action",
            description="Clear, concise description of what the tool does",
-           inputSchema={
+           input_schema={
                "type": "object",
                "required": ["required_param"],
                "properties": {
@@ -126,9 +126,11 @@ When adding new MCP tools:
 
 2. **Handler Function Structure:**
    ```python
-   async def handle_your_action(client: KimaiClient, arguments: Dict[str, Any]) -> List[TextContent]:
+   async def handle_your_action(client: KimaiClient, arguments: dict[str, Any]) -> list[TextContent]:
        """Handle your action."""
-       # Validate and extract arguments
+       # Arguments are validated against input_schema before dispatch, but
+       # raise ToolError (never a bare KeyError) for anything the schema
+       # cannot express.
        required_param = arguments['required_param']
        optional_param = arguments.get('optional_param')
        
@@ -144,9 +146,10 @@ When adding new MCP tools:
        return [TextContent(type="text", text=formatted_result)]
    ```
 
-3. **Register tools** in `server.py`:
-   - Add tool to `_list_tools()` method
-   - Add handler to `_call_tool()` method
+3. **Register tools** in `tools/registry.py`:
+   - Add `"your_tool": (your_tool, _kw(handle_your_action))` to `_REGISTRY`
+   - Both servers (stdio and streamable HTTP) read that single registry, so
+     there is nothing to change in `server.py` or `streamable_http_server.py`
 
 ### Testing Guidelines
 
@@ -208,10 +211,13 @@ kimai_mcp/
 │       ├── comment_tool.py      # Project/customer comments (Kimai 2.57+)
 │       ├── project_analysis.py  # Project analytics
 │       ├── config_info.py       # Server configuration tools
+│       ├── registry.py          # Single source of truth: tool list and dispatch
+│       ├── dates.py             # Strict YYYY-MM-DD parsing shared by the tools
+│       ├── errors.py            # ToolError -> CallToolResult(is_error=True)
 │       ├── user_discovery.py    # Shared helper to resolve accessible users
 │       ├── absence_analytics.py # Absence statistics helpers
 │       └── timesheet_analytics.py  # Timesheet statistics helpers
-├── tests/                       # Test suite (test_oauth.py, test_security.py, test_timesheet_list.py)
+├── tests/                       # Test suite (see tests/ for the full list)
 ├── examples/                    # Usage examples
 └── pyproject.toml              # Project configuration
 ```

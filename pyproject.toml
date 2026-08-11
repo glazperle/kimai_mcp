@@ -36,9 +36,10 @@ dependencies = [
 
 [project.optional-dependencies]
 server = [
-    "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
-    "PyJWT[crypto]>=2.8.0",
+    # fastapi was dropped in 2.16.0 with the SSE server, its only importer; the
+    # streamable server is plain Starlette (which mcp brings) plus uvicorn.
+    "uvicorn[standard]>=0.24.0,<1",
+    "PyJWT[crypto]>=2.8.0,<3",
 ]
 dev = [
     "pytest>=7.0.0",
