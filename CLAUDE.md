@@ -178,8 +178,10 @@ Each consolidated tool follows this structure:
 
 ### API Reference
 The Kimai API documentation is available at:
-- **Local Documentation**: `C:\Users\MaximilianvonHeyden\Nextcloud\00_Professionell\10_Software\Kimai\api_documentation.json`
+- **Local Documentation**: `C:\Users\MaximilianvonHeyden\Nextcloud\00_Professionell\10_Software\Kimai\api_documentation.json` — **exported December 2025, i.e. around Kimai 2.4x.** Re-export it from `/api/doc.json` of a current instance before relying on it; for anything newer check the [release notes](https://github.com/kimai/kimai/releases) or the entity/controller sources in `kimai/kimai`.
 - **Online Documentation**: https://www.kimai.org/documentation/rest-api.html
+
+Tracked against **Kimai 2.65.0** (2026-08-11). The server keeps working against older instances; features that need a specific version are marked as such in the tool schemas.
 
 ### API Version Update (December 2024)
 
@@ -210,6 +212,18 @@ The `entity` tool now supports both `lock_month` and `unlock_month` actions for 
 - **`comment` tool** (12th tool, `tools/comment_tool.py`): Comments on projects and customers - actions `list`, `create`, `delete`, `pin` (toggle). Requires **Kimai 2.57+**. Markdown is supported in messages; pinned comments are listed first.
 - **`meta` tool supports `invoice`** (requires **Kimai 2.56+**). Special case: invoice meta fields are sent in a SINGLE request containing all fields (`update_invoice_meta`); all other entity types still use one request per field.
 - **OAuth 2.1** for the streamable HTTP server (see `oauth.py` and the server section above).
+
+### Kimai 2.62 - 2.65 (implemented in v2.16.0)
+
+| Kimai | Change | Implementation |
+|-------|--------|----------------|
+| 2.63 | Customer gained `language` and `invoiceEmail` ([#5857](https://github.com/kimai/kimai/pull/5857), [#5855](https://github.com/kimai/kimai/pull/5855)) | `Customer` / `CustomerEditForm` in `models.py`, `entity` customer schema (its `data` object is `additionalProperties: false`, so an unlisted field cannot be sent), `serialize_customer()` |
+| 2.62 | `GET /api/customers` accepts `full=0\|1` for the full detail set | `CustomerFilter.full`, exposed as the boolean `filters.full` on `entity type=customer action=list`. Needs the `details_customer` permission; **without it Kimai silently returns the short form instead of a 403**, so absent detail fields are not necessarily a bug |
+| 2.65 | Removing a team's customer/project/activity access additionally requires `IsGranted('permissions', ...)` on that entity | No code change; `team_access action=remove_*` can now return 403 where 2.64 succeeded. The permission hint in `format_api_error()` covers it |
+| 2.63 | WorkContract preferences are guarded more strictly | No code change; `entity type=user action=set_preferences` can fail with 403 (not only 404) on instances where the token lacks the work-contract permission |
+| 2.65 | `GET /api/tags` (plain string array) formally flagged deprecated | Already avoided: `client.get_tags_full()` uses `/tags/find`, and that is what the `entity type=tag` handler calls |
+| 2.63 | POST on customer/project/activity applies Kimai defaults instead of `null` | No change needed; fields the tool omits now come back with the server default |
+| 2.63 | Timesheet pagination got a stable id tie-breaker | No change needed; makes the client's auto-pagination reliable across pages |
 
 ### Compliance Status
 All consolidated tools have been analyzed for API compliance. Key findings:
@@ -254,6 +268,7 @@ entity type=user action=set_preferences id=5 preferences=[
 **Work Contract auto-initialization (Kimai ≥ 2.61.0):** As of Kimai server [PR #5894](https://github.com/kimai/kimai/pull/5894) (fixes issue [#5751](https://github.com/kimai/kimai/issues/5751)), the API auto-initializes work-contract preferences for users who never configured one in the UI. `set_preferences` now works out of the box — **no UI pre-configuration required**.
 - On older Kimai (**< 2.61.0**), `set_preferences` returns 404 for un-configured users; configure the work contract once in the UI first (the tool returns a hint with the exact URL).
 - Caveat: auto-init covers `work_contract_type`, `work_monday`..`work_sunday`, `public_holiday_group`, `holidays`, `work_start_day`, `work_last_day` — but **not** `hours_per_week`. For a week-based contract, set `work_contract_type="week"` first (separate request), then set `hours_per_week`.
+- Since **Kimai 2.63** the work-contract preferences are guarded more strictly (2.63 security note "Make sure that WorkContract preferences are correctly guarded"), so a 403 here means the token lacks the work-contract permission — as opposed to the 404 that signals an un-initialized contract on Kimai < 2.61.0.
 
 See `examples/usage_examples.md` for more detailed examples.
 
@@ -261,6 +276,9 @@ See `examples/usage_examples.md` for more detailed examples.
 - `calendar` tool no longer supports `year`/`month` parameters (use `begin`/`end` instead)
 - `team_access` tool no longer supports `teamlead` parameter in `add_member` action
 - `meta` tool updates one field per API call for customer/project/activity/timesheet (handles multiple fields by iteration); `invoice` is the exception and sends all fields in a single request
+- `team_access` revoke actions need the `permissions` permission on the customer/project/activity since **Kimai 2.65**, on top of `edit` on the team; a token that could revoke on 2.64 may get a 403 now
+- `entity type=user action=set_preferences` can fail with 403 (not only 404) since **Kimai 2.63** tightened the work-contract guard
+- `filters.full` for customer listings needs the `details_customer` permission; without it Kimai returns the short form silently rather than an error
 - Some advanced API parameters not yet implemented (see individual tool schemas)
 
 ### API Compliance Guidelines

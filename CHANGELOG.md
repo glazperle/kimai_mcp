@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.0] - 2026-08-11
+
+Ports the server to MCP Python SDK 2.x and catches up with Kimai 2.62 - 2.65.
+
+### Added
+
+- **MCP protocol revision 2026-07-28.** With SDK 2.x the server speaks the current revision and still serves every earlier one from the same code, so 2025-era clients (including current Claude Desktop builds) and 2026-era clients both work without configuration. (#21)
+- **Customer `language` and `invoiceEmail`** (Kimai 2.63, [kimai/kimai#5857](https://github.com/kimai/kimai/pull/5857), [#5855](https://github.com/kimai/kimai/pull/5855)). Readable on `get`/`list`, writable on `create`/`update`. The customer `data` schema is `additionalProperties: false`, so without the schema entries these fields could not be sent at all.
+- **Full-detail customer listings**: `entity type=customer action=list filters={"full": true}` maps to the `full=1` parameter added in Kimai 2.62. Needs the `details_customer` permission; Kimai silently returns the short form without it rather than failing, so missing detail fields are not necessarily an error.
+- **`tests/test_mcp_protocol.py`**: drives both transports through a real in-memory MCP client session (connect, `tools/list`, `tools/call`, every error path, unknown tool, advertised capability and version) across both protocol eras, 28 cases. Issue #21 was a crash in `__init__`, which no handler-level unit test could ever see; this closes that gap for future SDK bumps.
+- CI smoke-tests both console scripts, so import-time and entry-point breakage fails the build even without a matching unit test.
+
+### Changed
+
+- **Requires `mcp>=2.0,<3`.** Handlers are registered through the `Server(...)` constructor (`on_list_tools`/`on_call_tool`) instead of the removed decorators, take `(ctx, params)`, and return `ListToolsResult`/`CallToolResult`. SDK 2.x no longer wraps a bare content list, so both transports pass handler output through the new `tool_result()` helper. Protocol model fields are snake_case now (`input_schema`, `is_error`); the tool definitions and `error_result()` follow suit. The `mcp.server.auth.*` surface used by `oauth.py` and `StreamableHTTPSessionManager` are unchanged, so OAuth 2.1, DCR, PKCE and the legacy slug endpoints behave exactly as before.
+- `team_access action=revoke` documents that **Kimai 2.65** additionally requires the `permissions` permission on the target customer/project/activity; a token that could revoke on 2.64 may now receive a 403 (the existing permission hint covers it).
+- `entity type=user action=set_preferences` documents that **Kimai 2.63** guards work-contract preferences more strictly, so a 403 means a missing permission, as opposed to the 404 that signals an un-initialized contract on Kimai < 2.61.
+- Documentation is tracked against Kimai 2.65, and the local API-documentation export referenced in CLAUDE.md is flagged as a December 2025 snapshot.
+
+### Removed
+
+- **The SSE server and its `kimai-mcp-server` command.** SDK 2.x does not ship `mcp.server.sse` at all, and the server had been documented as deprecated and non-functional since v2.12.0 (the SSE transport was dropped from the MCP specification). Use `kimai-mcp-streamable` for remote access. The `SessionManager`/`SessionConfig` helpers in `security.py` are removed with it, since only the SSE server used them. The `docker-compose.yml` service keeps its name and is unaffected: it runs `kimai-mcp-streamable`.
+
 ## [2.15.1] - 2026-08-11
 
 Hotfix release: new installations were broken. No functional changes to the tools.

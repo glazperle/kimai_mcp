@@ -7,6 +7,8 @@
 
 A comprehensive Model Context Protocol (MCP) server for integrating with the Kimai time-tracking API. This server allows AI assistants like Claude to efficiently interact with Kimai instances to manage time tracking, projects, activities, customers, users, teams, absences, and more.
 
+Speaks MCP protocol revision **2026-07-28** and every earlier revision (MCP Python SDK 2.x), tracked against **Kimai 2.65**. Older Kimai instances keep working; features that need a specific Kimai version are marked below.
+
 ## 🚀 Quick Start
 
 ### Local Installation (Single User)
@@ -169,7 +171,7 @@ Options for the Streamable HTTP server (`kimai-mcp-streamable`):
 ### Complete Kimai Integration
 - **Timesheet Management** - Create, update, delete, start/stop timers, view active timers
 - **Project & Activity Management** - Browse and view projects and activities
-- **Customer Management** - Browse and view customer information
+- **Customer Management** - Browse and view customer information, including `language` and `invoiceEmail` (Kimai 2.63+) and optional full-detail listings via `filters.full` (Kimai 2.62+, needs the `details_customer` permission)
 - **User Management** - List, view, create, update user accounts, and configure work contracts (preferences)
 - **Team Management** - Create teams, manage members, control access permissions
 - **Absence Management** - Create, approve, reject, and track absences
@@ -181,7 +183,7 @@ Options for the Streamable HTTP server (`kimai-mcp-streamable`):
 - **Real-time Timer Control** - Start, stop, and monitor active time tracking
 - **Comprehensive Filtering** - Advanced filters for all data types
 - **Permission Management** - Respect Kimai's role-based permissions
-- **Error Handling** - API errors are reported with status code and validation details; 403 responses include a permission hint (Kimai 2.57/2.58 enforce API permissions more strictly)
+- **Error Handling** - API errors are reported with status code and validation details; 403 responses include a permission hint (Kimai has tightened API permissions repeatedly, most recently in 2.65 for revoking a team's customer/project/activity access)
 - **Flexible Configuration** - Multiple configuration methods (CLI args, .env files, environment variables)
 
 ## Installation

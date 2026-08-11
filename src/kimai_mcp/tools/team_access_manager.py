@@ -23,7 +23,12 @@ def team_access_tool() -> Tool:
                 "action": {
                     "type": "string",
                     "enum": ["add_member", "remove_member", "grant", "revoke"],
-                    "description": "The action to perform"
+                    "description": (
+                        "The action to perform. Since Kimai 2.65 'revoke' requires the "
+                        "'permissions' permission on the target customer/project/activity "
+                        "in addition to 'edit' on the team, so a token that could revoke on "
+                        "older versions may now get a 403."
+                    )
                 },
                 "target": {
                     "type": "string",
