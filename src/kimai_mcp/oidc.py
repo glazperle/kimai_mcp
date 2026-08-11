@@ -356,27 +356,39 @@ class OIDCClient:
         is only accepted if it looks like an email (contains ``@``), to avoid
         matching an opaque username against an email-keyed user mapping.
 
-        The ``email`` claim is only honored when the id_token also asserts
-        ``email_verified`` is true (unless ``require_verified_email`` is disabled),
-        so an IdP that lets users self-assert an unverified address cannot be used
-        to impersonate a user mapped by email.
+        When ``require_verified_email`` is on and the token carries an ``email``
+        claim that it does not assert as verified, the token is rejected for
+        identity mapping entirely - not just for the ``email`` claim. Skipping
+        only that one claim would be pointless: every fallback claim must look
+        like an email anyway, and IdPs like Entra ID, Keycloak, Auth0 and Okta
+        emit ``preferred_username``/``upn`` next to ``email``, so an unverified
+        address would simply be accepted one claim later.
+
+        A token with no ``email`` claim at all makes no email assertion, so its
+        username-style claims (a directory-owned UPN) are still honored. The
+        same goes for a deployment whose ``identity_claims`` do not include
+        ``email``: that mapping is not email-keyed, so ``email_verified`` says
+        nothing about it.
         """
+        email_unverified = (
+            self.config.require_verified_email
+            and "email" in self.config.identity_claims
+            and "email" in claims
+            and claims.get("email_verified") is not True
+        )
+        if email_unverified:
+            logger.warning(
+                "OIDC: refusing identity mapping because 'email_verified' is not true "
+                "(set require_verified_email=false / --oidc-allow-unverified-email to override)"
+            )
+            return None
+
         for claim in self.config.identity_claims:
             value = claims.get(claim)
             if not isinstance(value, str) or not value.strip():
                 continue
             value = value.strip()
             if claim in ("preferred_username", "upn") and "@" not in value:
-                continue
-            if (
-                claim == "email"
-                and self.config.require_verified_email
-                and claims.get("email_verified") is not True
-            ):
-                logger.warning(
-                    "OIDC: ignoring 'email' claim because 'email_verified' is not true "
-                    "(set require_verified_email=false / --oidc-allow-unverified-email to override)"
-                )
                 continue
             return value
         return None

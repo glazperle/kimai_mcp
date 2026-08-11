@@ -84,6 +84,11 @@ logger = logging.getLogger(__name__)
 # Interval for the periodic security cleanup task (seconds)
 SECURITY_CLEANUP_INTERVAL_SECONDS = 300
 
+# Idle timeout after which a stateful MCP session is reclaimed (seconds).
+# SDK 2.x leaves this unset by default, which never reclaims cleanly closed
+# sessions; 30 minutes is the value its own docstring recommends.
+SESSION_IDLE_TIMEOUT_SECONDS = 1800
+
 
 def is_low_entropy_slug(slug: str) -> bool:
     """Heuristic for guessable legacy user slugs.
@@ -145,6 +150,11 @@ class UserMCPSession:
             app=self.mcp_server,
             json_response=False,  # Use SSE for streaming
             stateless=False,  # Stateful for better performance
+            # Without a timeout a stateful session is only reclaimed when its
+            # transport crashes, so every reconnect would leak a transport and a
+            # task. 30 minutes is the value the SDK documents as the default
+            # recommendation.
+            session_idle_timeout=SESSION_IDLE_TIMEOUT_SECONDS,
         )
 
     async def cleanup(self) -> None:
@@ -353,6 +363,12 @@ class StreamableHTTPMCPServer:
         # Serializes on-demand (re)initialization of sessions for configured users
         # whose startup init failed (e.g. Kimai was briefly unreachable).
         self._session_init_lock = asyncio.Lock()
+        # One supervisor task per running session manager. A manager's run()
+        # enters an anyio task group, and anyio requires the scope to be exited
+        # by the task that entered it, so a shared exit stack cannot start
+        # managers for sessions created later from a request task.
+        self._session_manager_tasks: list[asyncio.Task] = []
+        self._serving = False
         self.trusted_proxies = list(trusted_proxies) if trusted_proxies else []
         self.legacy_slugs_enabled = not disable_legacy_slugs
 
@@ -446,6 +462,43 @@ class StreamableHTTPMCPServer:
             except Exception as e:  # noqa: BLE001
                 logger.error(f"Error in security cleanup task: {e}")
 
+    async def _start_session_manager(self, session: UserMCPSession) -> None:
+        """Run a session's manager in its own task until the server shuts down.
+
+        The manager is only usable once ``run()`` has been entered; calling
+        handle_request() before that raises "Task group is not initialized".
+        """
+        started = asyncio.Event()
+
+        async def _runner() -> None:
+            async with session.session_manager.run():
+                started.set()
+                # Hold the manager open; cancelled by _stop_session_managers().
+                await asyncio.Event().wait()
+
+        task = asyncio.create_task(_runner(), name=f"session-manager-{session.user_slug}")
+        self._session_manager_tasks.append(task)
+
+        # Wait until the manager is actually running, or until the runner dies.
+        waiter = asyncio.create_task(started.wait())
+        done, _ = await asyncio.wait({waiter, task}, return_when=asyncio.FIRST_COMPLETED)
+        if waiter in done:
+            return
+        waiter.cancel()
+        self._session_manager_tasks.remove(task)
+        # Surface whatever killed the runner to the caller.
+        await task
+        raise RuntimeError(f"session manager for '{session.user_slug}' stopped immediately")
+
+    async def _stop_session_managers(self) -> None:
+        """Cancel every session-manager task and wait for it to unwind."""
+        tasks, self._session_manager_tasks = self._session_manager_tasks, []
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+
     @contextlib.asynccontextmanager
     async def lifespan(self, app: Starlette) -> AsyncIterator[None]:
         """Manage server lifecycle."""
@@ -461,27 +514,32 @@ class StreamableHTTPMCPServer:
         cleanup_task = asyncio.create_task(self._security_cleanup_loop())
 
         try:
-            # Start all session managers
-            async with contextlib.AsyncExitStack() as stack:
-                for slug, session in self.user_sessions.items():
-                    if session.session_manager:
-                        await stack.enter_async_context(session.session_manager.run())
-                        logger.info(f"Started session manager for user '{slug}'")
+            self._serving = True
+            # Start a manager per session. Sessions created later (on-demand
+            # initialization in _ensure_session) get theirs the same way; a
+            # manager whose run() was never entered raises "Task group is not
+            # initialized" on every request it is handed.
+            for slug, session in self.user_sessions.items():
+                if session.session_manager:
+                    await self._start_session_manager(session)
+                    logger.info(f"Started session manager for user '{slug}'")
 
-                logger.info(f"Server ready with {len(self.user_sessions)} user session(s)")
-                logger.info(f"OAuth-protected MCP endpoint: {self.public_url}/mcp")
-                if self.legacy_slugs_enabled:
-                    logger.warning(
-                        "Legacy slug endpoints /mcp/{user_slug} are enabled (DEPRECATED). "
-                        "Use the OAuth endpoint /mcp and --disable-legacy-slugs instead."
-                    )
-                else:
-                    logger.info("Legacy slug endpoints are disabled")
+            logger.info(f"Server ready with {len(self.user_sessions)} user session(s)")
+            logger.info(f"OAuth-protected MCP endpoint: {self.public_url}/mcp")
+            if self.legacy_slugs_enabled:
+                logger.warning(
+                    "Legacy slug endpoints /mcp/{user_slug} are enabled (DEPRECATED). "
+                    "Use the OAuth endpoint /mcp and --disable-legacy-slugs instead."
+                )
+            else:
+                logger.info("Legacy slug endpoints are disabled")
 
-                yield
+            yield
         finally:
             # Cleanup
+            self._serving = False
             logger.info("Shutting down...")
+            await self._stop_session_managers()
             cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cleanup_task
@@ -538,6 +596,12 @@ class StreamableHTTPMCPServer:
             new_session = UserMCPSession(slug, self.users_config.users[slug])
             try:
                 await new_session.initialize()
+                # The manager's run() must be entered before it can serve a
+                # request; without this the session would be cached and then
+                # answer "Task group is not initialized" forever.
+                if not self._serving:
+                    raise RuntimeError("server lifespan is not running")
+                await self._start_session_manager(new_session)
             # A failing on-demand init is answered with a 404/503 for this
             # request; it must not propagate into the ASGI stack.
             except Exception as e:  # noqa: BLE001

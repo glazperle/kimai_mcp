@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from starlette.testclient import TestClient
 
-from kimai_mcp.streamable_http_server import StreamableHTTPMCPServer
+from kimai_mcp.streamable_http_server import StreamableHTTPMCPServer, UserMCPSession
 from kimai_mcp.user_config import UserConfig, UsersConfig
 
 PUBLIC_URL = "http://localhost:8000"
@@ -388,29 +388,53 @@ def test_mcp_with_valid_token_reaches_user_session(make_client):
     assert "mcp-session-id" in {k.lower() for k in resp.headers}
 
 
-@pytest.mark.asyncio
-async def test_session_initialized_on_demand(users_config, monkeypatch):
-    """A configured user whose startup init failed (no active session) is
-    (re)initialized on demand instead of staying in a permanent 403/503 loop."""
+def test_session_initialized_on_demand(users_config, monkeypatch):
+    """A configured user whose startup init failed is (re)initialized on demand.
+
+    The request has to be driven all the way through the new session, not just
+    inspected: a session manager whose ``run()`` was never entered looks fully
+    initialized (``session_manager is not None``) but answers every request with
+    "Task group is not initialized", and because it is cached the slug then
+    stays broken until restart - worse than the 403/503 loop this heals.
+    """
     monkeypatch.setattr(
         "kimai_mcp.streamable_http_server.KimaiClient", FakeKimaiClient
     )
     server = StreamableHTTPMCPServer(
         users_config=users_config, public_url=PUBLIC_URL, rate_limit_rpm=0
     )
-    # No sessions initialized yet (initialize_users was not run).
-    assert USER_SLUG not in server.user_sessions
 
-    session = await server._ensure_session(USER_SLUG)
-    assert session is not None
-    assert session.session_manager is not None
-    assert server.user_sessions[USER_SLUG] is session
+    original_initialize = UserMCPSession.initialize
+    failed_once: set[str] = set()
 
-    # A second call returns the same (now active) session.
-    assert await server._ensure_session(USER_SLUG) is session
+    async def flaky_initialize(self):
+        """Fail the first init for USER_SLUG, as a Kimai outage at boot would."""
+        if self.user_slug == USER_SLUG and self.user_slug not in failed_once:
+            failed_once.add(self.user_slug)
+            raise RuntimeError("Kimai unreachable at boot")
+        await original_initialize(self)
 
-    # An unknown slug is never initialized.
-    assert await server._ensure_session("unconfigured-slug") is None
+    monkeypatch.setattr(UserMCPSession, "initialize", flaky_initialize)
+
+    with TestClient(server.create_app(), base_url=PUBLIC_URL) as http:
+        # Startup dropped the user, so only the other slug has a session.
+        assert USER_SLUG not in server.user_sessions
+
+        # The OAuth endpoint is the one that re-initializes on demand.
+        tokens = obtain_tokens(http)
+        auth = {**MCP_HEADERS, "Authorization": f"Bearer {tokens['access_token']}"}
+
+        resp = http.post("/mcp", json=INIT_PAYLOAD, headers=auth)
+        assert resp.status_code == 200, resp.text
+        assert "mcp-session-id" in {k.lower() for k in resp.headers}
+
+        session = server.user_sessions[USER_SLUG]
+        assert session.session_manager is not None
+
+        # The healed session keeps working on later requests.
+        again = http.post("/mcp", json=INIT_PAYLOAD, headers=auth)
+        assert again.status_code == 200, again.text
+        assert server.user_sessions[USER_SLUG] is session
 
 
 # ---------------------------------------------------------------------------

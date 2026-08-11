@@ -47,6 +47,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-# Default: Run the new Streamable HTTP server (for Claude.ai Connectors)
-# Use kimai-mcp-server for the legacy SSE server
+# Run the Streamable HTTP server (for Claude.ai Connectors). It is the only
+# remote server; the SSE server was removed in v2.16.0.
 CMD ["kimai-mcp-streamable"]

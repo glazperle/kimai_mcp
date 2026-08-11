@@ -116,7 +116,7 @@ USER PREFERENCES (action=set_preferences, type=user only):
                                    "description": "Status filter (for invoices)"},
                         "full": {
                             "type": "boolean",
-                            "description": "For type=customer: return the full detail set (language, invoice email, address, budget, ...) instead of the short form. Requires Kimai 2.62+ and the 'details_customer' permission; without the permission Kimai silently returns the short form."
+                            "description": "For type=customer: ask Kimai for the detailed customer records (Kimai 2.62+, needs the 'details_customer' permission). Of the extra fields this server surfaces 'language' and 'invoiceEmail'; use action=get for a single customer's remaining details."
                         }
                     }
                 },

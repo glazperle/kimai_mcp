@@ -477,12 +477,20 @@ async def _handle_absence_create(client: KimaiClient, data: dict) -> list[TextCo
             f"Error: Missing required fields: {', '.join(missing_fields)}"
         )
 
-    # Parse dates
+    # Parse dates. Phrased like the list/attendance validators so the model sees
+    # one message shape for a bad date, not the raw strptime text.
     try:
         start_date = parse_iso_date(data["date"])
+    except ValueError:
+        raise ToolError(
+            f"Error: Invalid date format. Expected YYYY-MM-DD, got '{data['date']}'"
+        )
+    try:
         end_date = parse_iso_date(data["end"]) if data.get("end") else start_date
-    except ValueError as e:
-        raise ToolError(f"Error: Invalid date format. Expected YYYY-MM-DD ({e})")
+    except ValueError:
+        raise ToolError(
+            f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{data['end']}'"
+        )
 
     # Calculate total days
     total_days = (end_date - start_date).days + 1
@@ -511,8 +519,13 @@ async def _handle_absence_create(client: KimaiClient, data: dict) -> list[TextCo
                     created_absences.extend(absence_list)
                 else:
                     created_absences.append(absence_list)
-            # Whatever goes wrong mid-split has to be reported as a tool error
-            # naming the failing chunk, so the caller knows where it stopped.
+            except KimaiAPIError:
+                # Let the central handler render status code, validation details
+                # and the 403 permission hint, exactly as the single-chunk path
+                # does. Re-wrapping it here would throw all of that away.
+                raise
+            # Anything else is reported as a tool error naming the failing chunk,
+            # so the caller knows where the split stopped.
             except Exception as e:  # noqa: BLE001
                 raise ToolError(
                     f"Error creating absence chunk {chunk_start} - {chunk_end}: {e!s}"
@@ -629,16 +642,8 @@ async def _handle_attendance(
 ) -> list[TextContent]:
     """Show who is present (not absent) on a given day."""
 
-    # Type labels for German output
-    TYPE_LABELS = {
-        "holiday": "Urlaub",
-        "sickness": "Krankheit",
-        "sickness_child": "Kind krank",
-        "time_off": "Zeitausgleich",
-        "parental": "Elternzeit",
-        "unpaid_vacation": "Unbezahlter Urlaub",
-        "other": "Sonstiges"
-    }
+    # German labels, shared with the statistics reports so the two cannot drift.
+    type_labels = AbsenceAnalytics.TYPE_LABELS
 
     # 1. Determine date (Default: today)
     if date_str:
@@ -663,8 +668,8 @@ async def _handle_attendance(
         )
 
     # 3. Check absences for this day
-    begin = check_date.strftime("%Y-%m-%dT00:00:00")
-    end = check_date.strftime("%Y-%m-%dT23:59:59")
+    begin = day_start(check_date)
+    end = day_end(check_date)
 
     absent_users_with_reason = {}  # user_id -> (user, absence_type)
 
@@ -710,7 +715,7 @@ async def _handle_attendance(
         result += f"\n## Absent ({len(absent_users_with_reason)})\n"
         for user, absence_type in sorted(absent_users_with_reason.values(), key=lambda x: x[0].username.lower()):
             display_name = user.alias if hasattr(user, 'alias') and user.alias else user.username
-            type_label = TYPE_LABELS.get(absence_type, absence_type)
+            type_label = type_labels.get(absence_type, absence_type)
             result += f"- ✗ {display_name} ({type_label})\n"
 
     return [TextContent(type="text", text=result)]

@@ -3,10 +3,25 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class User(BaseModel):
+class KimaiModel(BaseModel):
+    """Base for every Kimai model: accepts both the field name and the alias.
+
+    Kimai's API speaks camelCase, so aliased fields (``halfDay``, ``isFixed``,
+    ``break``, ``orderBy``, ...) are what goes on the wire. Without
+    ``populate_by_name`` the Python name is *silently ignored* on construction,
+    so a handler passing ``half_day=True`` produced a form that serialized
+    without ``halfDay`` at all and Kimai booked a full day. Accepting both
+    spellings makes those calls mean what they say; ``by_alias=True`` on dump
+    keeps the wire format unchanged.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class User(KimaiModel):
     """User model."""
     id: int
     username: str
@@ -16,7 +31,7 @@ class User(BaseModel):
     color: str | None = None
 
 
-class Customer(BaseModel):
+class Customer(KimaiModel):
     """Customer model."""
     id: int
     name: str
@@ -41,7 +56,7 @@ class Customer(BaseModel):
     invoice_email: str | None = Field(None, alias="invoiceEmail")
 
 
-class Project(BaseModel):
+class Project(KimaiModel):
     """Project model."""
     id: int
     name: str
@@ -54,7 +69,7 @@ class Project(BaseModel):
     color: str | None = None
 
 
-class Activity(BaseModel):
+class Activity(KimaiModel):
     """Activity model."""
     id: int
     name: str
@@ -66,7 +81,7 @@ class Activity(BaseModel):
     color: str | None = None
 
 
-class TimesheetEntity(BaseModel):
+class TimesheetEntity(KimaiModel):
     """Timesheet entity model."""
     id: int | None = None
     activity: int
@@ -87,7 +102,7 @@ class TimesheetEntity(BaseModel):
     break_duration: int | None = Field(None, alias="break")
 
 
-class TimesheetEditForm(BaseModel):
+class TimesheetEditForm(KimaiModel):
     """Timesheet edit form for creating/updating timesheets."""
     begin: datetime | None = None
     end: datetime | None = None
@@ -103,7 +118,7 @@ class TimesheetEditForm(BaseModel):
     break_duration: int | None = Field(None, alias="break")
 
 
-class TimesheetFilter(BaseModel):
+class TimesheetFilter(KimaiModel):
     """Filters for timesheet queries."""
     user: str | None = None  # User ID or "all"
     users: list[int] | None = None
@@ -128,7 +143,7 @@ class TimesheetFilter(BaseModel):
     modified_after: str | datetime | None = Field(None, alias="modified_after")  # HTML5 date format
 
 
-class ProjectFilter(BaseModel):
+class ProjectFilter(KimaiModel):
     """Filters for project queries."""
     customer: int | None = None
     customers: list[int] | None = None
@@ -142,7 +157,7 @@ class ProjectFilter(BaseModel):
     term: str | None = None
 
 
-class ActivityFilter(BaseModel):
+class ActivityFilter(KimaiModel):
     """Filters for activity queries."""
     project: int | None = None
     projects: list[int] | None = None
@@ -153,7 +168,7 @@ class ActivityFilter(BaseModel):
     term: str | None = None
 
 
-class CustomerFilter(BaseModel):
+class CustomerFilter(KimaiModel):
     """Filters for customer queries."""
     visible: int | None = 1  # 1=visible, 2=hidden, 3=both
     order: str | None = None  # ASC, DESC
@@ -164,13 +179,13 @@ class CustomerFilter(BaseModel):
     full: int | None = None
 
 
-class ApiError(BaseModel):
+class ApiError(KimaiModel):
     """API error response."""
     message: str
     code: int | None = None
 
 
-class Version(BaseModel):
+class Version(KimaiModel):
     """Kimai version information."""
     version: str
     version_id: int = Field(alias="versionId")
@@ -179,7 +194,7 @@ class Version(BaseModel):
 
 # Absence models
 
-class AbsenceForm(BaseModel):
+class AbsenceForm(KimaiModel):
     """Form for creating absences."""
     half_day: bool | None = Field(None, alias="halfDay")
     duration: str | None = None  # Duration string format (e.g., "01:30")
@@ -191,7 +206,7 @@ class AbsenceForm(BaseModel):
         "holiday", "time_off", "sickness", "sickness_child", "other", "parental", "unpaid_vacation"] = "other"
 
 
-class Absence(BaseModel):
+class Absence(KimaiModel):
     """Absence model matching API Absence2 schema."""
     id: int | None = None
     user: User
@@ -205,7 +220,7 @@ class Absence(BaseModel):
     end_date: datetime | None = Field(None, alias="endDate")
 
 
-class AbsenceFilter(BaseModel):
+class AbsenceFilter(KimaiModel):
     """Filters for absence queries."""
     user: str | None = None
     begin: str | None = None  # HTML5 date format (YYYY-MM-DD)
@@ -215,20 +230,20 @@ class AbsenceFilter(BaseModel):
 
 # Team models
 
-class TeamMember(BaseModel):
+class TeamMember(KimaiModel):
     """Team member model."""
     user: User
     teamlead: bool = False
 
 
-class TeamEditForm(BaseModel):
+class TeamEditForm(KimaiModel):
     """Form for creating/editing teams."""
     name: str
     color: str | None = None
     members: list[dict[str, Any]]  # List of {user: int, teamlead: bool}
 
 
-class Team(BaseModel):
+class Team(KimaiModel):
     """Team model."""
     id: int | None = None
     name: str
@@ -239,14 +254,14 @@ class Team(BaseModel):
     color: str | None = None
 
 
-class TeamFilter(BaseModel):
+class TeamFilter(KimaiModel):
     """Filters for team queries."""
     # Teams don't have many filter options
 
 
 # Tag models
 
-class TagEntity(BaseModel):
+class TagEntity(KimaiModel):
     """Tag entity model."""
     id: int | None = None
     name: str
@@ -254,21 +269,21 @@ class TagEntity(BaseModel):
     color: str | None = None
 
 
-class TagEditForm(BaseModel):
+class TagEditForm(KimaiModel):
     """Form for creating/editing tags."""
     name: str
     color: str | None = None
     visible: bool | None = None
 
 
-class TagFilter(BaseModel):
+class TagFilter(KimaiModel):
     """Filters for tag queries."""
     name: str | None = None
 
 
 # Invoice models
 
-class Invoice(BaseModel):
+class Invoice(KimaiModel):
     """Invoice model."""
     id: int | None = None
     invoice_number: str = Field(alias="invoiceNumber")
@@ -287,7 +302,7 @@ class Invoice(BaseModel):
     overdue: bool | None = None  # Whether the invoice is overdue
 
 
-class InvoiceFilter(BaseModel):
+class InvoiceFilter(KimaiModel):
     """Filters for invoice queries."""
     begin: datetime | None = None
     end: datetime | None = None
@@ -299,7 +314,7 @@ class InvoiceFilter(BaseModel):
 
 # Comment models (Kimai 2.57+, projects and customers)
 
-class Comment(BaseModel):
+class Comment(KimaiModel):
     """Comment on a project or customer."""
     id: int | None = None
     message: str
@@ -308,7 +323,7 @@ class Comment(BaseModel):
     pinned: bool = False
 
 
-class CommentForm(BaseModel):
+class CommentForm(KimaiModel):
     """Form for creating a comment (markdown is supported in message)."""
     message: str
     pinned: bool | None = None
@@ -316,13 +331,13 @@ class CommentForm(BaseModel):
 
 # Public Holiday models
 
-class PublicHolidayGroup(BaseModel):
+class PublicHolidayGroup(KimaiModel):
     """Public holiday group model."""
     id: int | None = None
     name: str
 
 
-class PublicHoliday(BaseModel):
+class PublicHoliday(KimaiModel):
     """Public holiday model."""
     id: int | None = None
     date: datetime
@@ -331,7 +346,7 @@ class PublicHoliday(BaseModel):
     half_day: bool = Field(False, alias="halfDay")
 
 
-class PublicHolidayFilter(BaseModel):
+class PublicHolidayFilter(KimaiModel):
     """Filters for public holiday queries."""
     group: int | None = None
     begin: datetime | None = None
@@ -340,7 +355,7 @@ class PublicHolidayFilter(BaseModel):
 
 # User extended models
 
-class UserEntity(BaseModel):
+class UserEntity(KimaiModel):
     """Extended user entity model."""
     id: int
     username: str
@@ -358,7 +373,7 @@ class UserEntity(BaseModel):
     preferences: list[dict[str, Any]] | None = None
 
 
-class UserPreference(BaseModel):
+class UserPreference(KimaiModel):
     """Model for user preference name-value pair.
 
     Used for work contract settings like:
@@ -373,7 +388,7 @@ class UserPreference(BaseModel):
     value: str | None = Field(None, max_length=250)
 
 
-class UserEditForm(BaseModel):
+class UserEditForm(KimaiModel):
     """Form for updating users."""
     alias: str | None = None
     title: str | None = None
@@ -391,7 +406,7 @@ class UserEditForm(BaseModel):
     requires_password_reset: bool | None = Field(None, alias="requiresPasswordReset")
 
 
-class UserCreateForm(BaseModel):
+class UserCreateForm(KimaiModel):
     """Form for creating users."""
     username: str
     alias: str | None = None
@@ -412,7 +427,7 @@ class UserCreateForm(BaseModel):
     requires_password_reset: bool | None = Field(None, alias="requiresPasswordReset")
 
 
-class UserFilter(BaseModel):
+class UserFilter(KimaiModel):
     """Filters for user queries."""
     visible: int | None = 1
     order_by: str | None = Field(None, alias="orderBy")
@@ -423,7 +438,7 @@ class UserFilter(BaseModel):
 
 # Plugin models
 
-class Plugin(BaseModel):
+class Plugin(KimaiModel):
     """Plugin model."""
     name: str
     version: str
@@ -431,7 +446,7 @@ class Plugin(BaseModel):
 
 # Configuration models
 
-class TimesheetConfig(BaseModel):
+class TimesheetConfig(KimaiModel):
     """Timesheet configuration from the Kimai instance."""
     tracking_mode: str = Field("default", alias="trackingMode")
     default_begin_time: str = Field("now", alias="defaultBeginTime")
@@ -442,7 +457,7 @@ class TimesheetConfig(BaseModel):
 
 # Calendar event model
 
-class CalendarEvent(BaseModel):
+class CalendarEvent(KimaiModel):
     """Calendar event model."""
     title: str
     color: str | None = None
@@ -454,7 +469,7 @@ class CalendarEvent(BaseModel):
 
 # Rate management models
 
-class Rate(BaseModel):
+class Rate(KimaiModel):
     """Rate model."""
     id: int | None = None
     user: User | None = None
@@ -463,7 +478,7 @@ class Rate(BaseModel):
     is_fixed: bool = Field(False, alias="isFixed")
 
 
-class RateForm(BaseModel):
+class RateForm(KimaiModel):
     """Form for creating/editing rates."""
     user: int | None = None
     rate: float
@@ -473,13 +488,13 @@ class RateForm(BaseModel):
 
 # Meta field models
 
-class MetaField(BaseModel):
+class MetaField(KimaiModel):
     """Meta field model."""
     name: str
     value: str | None = None
 
 
-class MetaFieldForm(BaseModel):
+class MetaFieldForm(KimaiModel):
     """Form for updating meta fields."""
     name: str
     value: str
@@ -504,7 +519,7 @@ class ActivityExtended(Activity):
 
 # CRUD forms for administrative operations
 
-class CustomerEditForm(BaseModel):
+class CustomerEditForm(KimaiModel):
     """Form for creating/editing customers."""
     name: str | None = None  # Required for creation
     country: str | None = None  # Required for creation (2-letter ISO code)
@@ -543,7 +558,7 @@ class CustomerEditForm(BaseModel):
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
 
 
-class ProjectEditForm(BaseModel):
+class ProjectEditForm(KimaiModel):
     """Form for creating/editing projects."""
     name: str | None = None  # Required for creation
     customer: int | None = None  # Required for creation (Customer ID)
@@ -565,7 +580,7 @@ class ProjectEditForm(BaseModel):
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
 
 
-class ActivityEditForm(BaseModel):
+class ActivityEditForm(KimaiModel):
     """Form for creating/editing activities."""
     name: str  # Required
     project: int | None = None  # Project ID (None = global activity)

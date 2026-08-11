@@ -2,9 +2,9 @@
 
 This module provides security-related classes for:
 - Rate limiting (Token Bucket algorithm)
-- Session management with TTL and limits
 - Security headers middleware
 - Enumeration protection
+- Trusted-proxy-aware client IP extraction
 """
 
 import asyncio

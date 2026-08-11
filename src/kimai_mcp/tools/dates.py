@@ -20,14 +20,18 @@ def parse_iso_date(value: str) -> date:
     return datetime.strptime(value, DATE_FORMAT).date()  # noqa: DTZ007
 
 
-def day_start(value: str) -> str:
-    """Turn ``YYYY-MM-DD`` into the ISO timestamp of that day's first second."""
-    return f"{parse_iso_date(value).isoformat()}T00:00:00"
+def day_start(value: str | date) -> str:
+    """The ISO timestamp of the day's first second (accepts a date or string)."""
+    return f"{_as_date(value).isoformat()}T00:00:00"
 
 
-def day_end(value: str) -> str:
-    """Turn ``YYYY-MM-DD`` into the ISO timestamp of that day's last second."""
-    return f"{parse_iso_date(value).isoformat()}T23:59:59"
+def day_end(value: str | date) -> str:
+    """The ISO timestamp of the day's last second (accepts a date or string)."""
+    return f"{_as_date(value).isoformat()}T23:59:59"
+
+
+def _as_date(value: str | date) -> date:
+    return value if isinstance(value, date) else parse_iso_date(value)
 
 
 def today() -> date:

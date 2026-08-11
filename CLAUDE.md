@@ -61,7 +61,7 @@ kimai-mcp-streamable --users-config ./config/users.json \
 | Streamable | `kimai-mcp-streamable` | HTTP Streamable + OAuth 2.1 | Claude.ai Connectors |
 
 Notes:
-- The SSE server (`sse_server.py`, command `kimai-mcp-server`) was **removed in v2.16.0**. It had been non-functional since v2.12.0, and MCP SDK 2.x no longer ships `mcp.server.sse` at all.
+- The SSE server (`sse_server.py`, command `kimai-mcp-server`) was **removed in v2.16.0**. It had been non-functional since v2.12.0 (broken transport wiring, and the SSE transport is no longer part of the MCP specification). The SDK still ships `mcp.server.sse`, so this was dead code in this project, not a forced removal.
 - `--kimai-user` / `KIMAI_DEFAULT_USER` is deprecated: accepted but ignored (warning is logged). Use the `user_scope` parameter of the tools instead.
 - The streamable server serves an OAuth-protected `/mcp` endpoint (DCR + PKCE, login form at `/oauth/login` with user slug + `auth_secret`). The legacy `/mcp/{slug}` endpoints still work but are deprecated and can be disabled with `--disable-legacy-slugs`.
 - `users.json` schema (see `src/kimai_mcp/user_config.py`): per slug `kimai_url`, `kimai_token`, optional `ssl_verify`, optional `auth_secret` (env override: `KIMAI_USER_<SLUG>_AUTH_SECRET`). Slugs must match `^[a-zA-Z0-9_-]+$`; keys starting with `_` are comments. The former `kimai_user_id` field was removed and is ignored when present.
@@ -153,7 +153,8 @@ The project requires `mcp>=2.0,<3` and therefore speaks protocol revision **2026
 - Handlers receive `(ctx: ServerRequestContext, params)` and must return a **result object**: `ListToolsResult(tools=...)` and `CallToolResult(...)`. A bare list is no longer wrapped, which is what `tool_result()` in `server.py` is for.
 - Protocol model fields are snake_case (`input_schema`, `is_error`). camelCase still works when *constructing* a model (the SDK sets `alias_generator=to_camel`), but **attribute access** must use the snake_case name.
 - Raising an exception no longer produces `is_error=true` automatically. Both transports catch `ToolError`/`KimaiAPIError`/`Exception` and return `error_result(...)` explicitly.
-- `mcp.server.sse` is gone; `StreamableHTTPSessionManager` and the whole `mcp.server.auth.*` surface used by `oauth.py` are unchanged from 1.x.
+- `StreamableHTTPSessionManager` and the whole `mcp.server.auth.*` surface used by `oauth.py` are unchanged from 1.x, so the OAuth server needed no porting. `StreamableHTTPSessionManager` did gain `session_idle_timeout`, which defaults to `None` (sessions are then never reclaimed) and is set to 30 minutes here.
+- **SDK 2.x no longer validates tool arguments server-side.** 1.x ran `jsonschema.validate(arguments, tool.inputSchema)` before the handler and answered `Input validation error: ...`; in 2.x jsonschema is client-side only. `tools/registry.py::validate_arguments` restores it, which matters because the entity `data` sub-schemas are `additionalProperties: false` while the Pydantic forms ignore extras, so an unvalidated typo would otherwise become an empty PATCH reported as success.
 - `tests/test_mcp_protocol.py` drives both transports through a real in-memory `Client` session (handshake, `tools/list`, `tools/call`, `is_error`). Run it after any SDK bump: it is the test that catches a removed or renamed SDK API, which a handler-level unit test cannot (see issue #21).
 
 ### Authentication Flow
@@ -178,7 +179,7 @@ Each consolidated tool follows this structure:
 
 ### API Reference
 The Kimai API documentation is available at:
-- **Local Documentation**: `C:\Users\MaximilianvonHeyden\Nextcloud\00_Professionell\10_Software\Kimai\api_documentation.json` — **exported December 2025, i.e. around Kimai 2.4x.** Re-export it from `/api/doc.json` of a current instance before relying on it; for anything newer check the [release notes](https://github.com/kimai/kimai/releases) or the entity/controller sources in `kimai/kimai`.
+- **Local Documentation**: `C:\Users\MaximilianvonHeyden\Nextcloud\00_Professionell\10_Software\Kimai\api_documentation.json` (**exported December 2025, i.e. around Kimai 2.4x**). Re-export it from `/api/doc.json` of a current instance before relying on it; for anything newer check the [release notes](https://github.com/kimai/kimai/releases) or the entity/controller sources in `kimai/kimai`.
 - **Online Documentation**: https://www.kimai.org/documentation/rest-api.html
 
 Tracked against **Kimai 2.65.0** (2026-08-11). The server keeps working against older instances; features that need a specific version are marked as such in the tool schemas.
@@ -219,7 +220,7 @@ The `entity` tool now supports both `lock_month` and `unlock_month` actions for 
 |-------|--------|----------------|
 | 2.63 | Customer gained `language` and `invoiceEmail` ([#5857](https://github.com/kimai/kimai/pull/5857), [#5855](https://github.com/kimai/kimai/pull/5855)) | `Customer` / `CustomerEditForm` in `models.py`, `entity` customer schema (its `data` object is `additionalProperties: false`, so an unlisted field cannot be sent), `serialize_customer()` |
 | 2.62 | `GET /api/customers` accepts `full=0\|1` for the full detail set | `CustomerFilter.full`, exposed as the boolean `filters.full` on `entity type=customer action=list`. Needs the `details_customer` permission; **without it Kimai silently returns the short form instead of a 403**, so absent detail fields are not necessarily a bug |
-| 2.65 | Removing a team's customer/project/activity access additionally requires `IsGranted('permissions', ...)` on that entity | No code change; `team_access action=remove_*` can now return 403 where 2.64 succeeded. The permission hint in `format_api_error()` covers it |
+| 2.65 | Removing a team's customer/project/activity access additionally requires `IsGranted('permissions', ...)` on that entity | No code change; `team_access action=revoke` (handler `_handle_revoke_access`) can now return 403 where 2.64 succeeded. The permission hint in `format_api_error()` covers it |
 | 2.63 | WorkContract preferences are guarded more strictly | No code change; `entity type=user action=set_preferences` can fail with 403 (not only 404) on instances where the token lacks the work-contract permission |
 | 2.65 | `GET /api/tags` (plain string array) formally flagged deprecated | Already avoided: `client.get_tags_full()` uses `/tags/find`, and that is what the `entity type=tag` handler calls |
 | 2.63 | POST on customer/project/activity applies Kimai defaults instead of `null` | No change needed; fields the tool omits now come back with the server default |
@@ -268,7 +269,7 @@ entity type=user action=set_preferences id=5 preferences=[
 **Work Contract auto-initialization (Kimai ≥ 2.61.0):** As of Kimai server [PR #5894](https://github.com/kimai/kimai/pull/5894) (fixes issue [#5751](https://github.com/kimai/kimai/issues/5751)), the API auto-initializes work-contract preferences for users who never configured one in the UI. `set_preferences` now works out of the box — **no UI pre-configuration required**.
 - On older Kimai (**< 2.61.0**), `set_preferences` returns 404 for un-configured users; configure the work contract once in the UI first (the tool returns a hint with the exact URL).
 - Caveat: auto-init covers `work_contract_type`, `work_monday`..`work_sunday`, `public_holiday_group`, `holidays`, `work_start_day`, `work_last_day` — but **not** `hours_per_week`. For a week-based contract, set `work_contract_type="week"` first (separate request), then set `hours_per_week`.
-- Since **Kimai 2.63** the work-contract preferences are guarded more strictly (2.63 security note "Make sure that WorkContract preferences are correctly guarded"), so a 403 here means the token lacks the work-contract permission — as opposed to the 404 that signals an un-initialized contract on Kimai < 2.61.0.
+- Since **Kimai 2.63** the work-contract preferences are guarded more strictly (2.63 security note "Make sure that WorkContract preferences are correctly guarded"), so a 403 here means the token lacks the work-contract permission, as opposed to the 404 that signals an un-initialized contract on Kimai < 2.61.0.
 
 See `examples/usage_examples.md` for more detailed examples.
 

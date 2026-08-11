@@ -9,7 +9,7 @@ Dieses Dokument beschreibt, wie Sie den Kimai MCP Server zentral in Ihrem Untern
 | **Streamable HTTP** | `kimai-mcp-streamable` | HTTP Streamable + OAuth 2.1 | Claude.ai Connectors (Web/Mobile), Teams |
 | **Lokaler Server** | `kimai-mcp` | MCP Stdio | Claude Desktop (Lokal) |
 
-> **Entfernt in v2.16.0:** Der SSE-Server und sein Befehl `kimai-mcp-server` existieren nicht mehr. Der SSE-Transport wurde aus der MCP-Spezifikation entfernt, der Server war seit v2.12.0 deprecated und nicht funktionsfähig, und das MCP-SDK 2.x liefert den Transport gar nicht mehr mit. Verwenden Sie für Remote-Zugriff `kimai-mcp-streamable`.
+> **Entfernt in v2.16.0:** Der SSE-Server und sein Befehl `kimai-mcp-server` existieren nicht mehr. Der SSE-Transport wurde zugunsten von Streamable HTTP aus der MCP-Spezifikation entfernt, und die Implementierung in diesem Projekt war seit v2.12.0 deprecated und nicht funktionsfähig. Verwenden Sie für Remote-Zugriff `kimai-mcp-streamable`.
 
 ### Streamable HTTP Server
 

@@ -6,6 +6,7 @@ not the other).
 """
 from typing import Any
 
+import jsonschema
 from mcp.types import TextContent, Tool
 
 from ..client import KimaiClient
@@ -75,6 +76,27 @@ def tool_names() -> list[str]:
     return list(_REGISTRY.keys())
 
 
+def validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
+    """Validate tool arguments against the tool's own JSON schema.
+
+    MCP SDK 1.x validated this server-side before calling the handler and
+    answered ``Input validation error: ...``; SDK 2.x dropped that entirely
+    (jsonschema is only used client-side now). Without it, a typo in a nested
+    object silently passes: the entity schemas are ``additionalProperties:
+    false`` while the Pydantic forms ignore extras, so ``{"langauge": "de"}``
+    would produce an empty PATCH and still report success.
+
+    Raises:
+        ToolError: if the arguments do not satisfy the schema.
+    """
+    try:
+        jsonschema.validate(instance=arguments, schema=tool.input_schema)
+    except jsonschema.ValidationError as e:
+        location = "/".join(str(part) for part in e.absolute_path)
+        where = f" at '{location}'" if location else ""
+        raise ToolError(f"Input validation error{where}: {e.message}")
+
+
 async def dispatch_tool(
     client: KimaiClient, name: str, arguments: dict[str, Any] | None
 ) -> list[TextContent]:
@@ -85,5 +107,7 @@ async def dispatch_tool(
         raise ToolError(
             f"Unknown tool: {name}. Available tools: {', '.join(_REGISTRY)}"
         )
-    _, run = entry
-    return await run(client, arguments or {})
+    factory, run = entry
+    arguments = arguments or {}
+    validate_arguments(factory(), arguments)
+    return await run(client, arguments)
