@@ -3,7 +3,7 @@
 Handlers raise :class:`ToolError` when they cannot fulfill a request (invalid
 or missing input, an unknown action/type, an unsupported operation, or a
 permission/discovery failure). Both servers' ``_call_tool`` catch it and return
-a ``CallToolResult(isError=True)`` (via ``server.error_result``), so programmatic
+a ``CallToolResult(is_error=True)`` (via ``server.error_result``), so programmatic
 MCP clients can detect the failure instead of mistaking the error text for a
 successful payload.
 
