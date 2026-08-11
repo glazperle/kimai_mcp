@@ -268,7 +268,7 @@ def _case(tool_name, handler, params, case_id, expect_error=False):
 
 # (entity_type, action) combinations whose handler now raises ToolError instead
 # of returning an "Error: ..." TextContent (unsupported operations / hard API
-# limitations). The central _call_tool converts these to isError=True results.
+# limitations). The central _call_tool converts these to is_error=True results.
 ENTITY_ERROR_CASES = {
     ("user", "delete"),
     ("tag", "get"),
@@ -640,7 +640,7 @@ async def test_dispatch_smoke(handler, params, expect_error):
 
     Cases marked ``expect_error`` exercise unsupported operations / hard API
     limitations, which now raise ``ToolError`` (the central _call_tool turns
-    these into ``isError=True`` results).
+    these into ``is_error=True`` results).
     """
     client = make_mock_client()
 
@@ -693,7 +693,7 @@ def test_tool_schema_is_valid(tool_factory):
     assert tool.name, "Tool must have a non-empty name"
     assert tool.description, "Tool must have a non-empty description"
 
-    schema = tool.inputSchema
+    schema = tool.input_schema
     assert isinstance(schema, dict)
     assert schema.get("type") == "object"
     # Must be valid JSON (no sets, datetimes, etc. embedded)
@@ -742,7 +742,7 @@ def test_schema_enums_match_dispatch_coverage(tool_name, tool_factory, prop):
     exercise a value that the schema does not declare.
     """
     tool = tool_factory()
-    schema_values = set(tool.inputSchema["properties"][prop]["enum"])
+    schema_values = set(tool.input_schema["properties"][prop]["enum"])
     exercised = EXERCISED[(tool_name, prop)]
 
     missing = schema_values - exercised
@@ -782,6 +782,6 @@ async def test_registry_dispatch_routes_known_and_unknown():
     result = await registry.dispatch_tool(client, "user_current", {})
     assert_valid_result(result)
     # An unknown tool raises ToolError, which the servers convert to an
-    # isError=True result.
+    # is_error=True result.
     with pytest.raises(ToolError, match="Unknown tool"):
         await registry.dispatch_tool(client, "does_not_exist", {})

@@ -25,7 +25,7 @@ import os
 import re
 import sys
 from collections.abc import AsyncIterator
-from typing import Any, Optional
+from typing import Optional
 
 from mcp.server import Server
 from mcp.server.auth.middleware.bearer_auth import (
@@ -43,8 +43,14 @@ from mcp.server.auth.settings import (
     ClientRegistrationOptions,
     RevocationOptions,
 )
+from mcp.server.context import ServerRequestContext
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+)
 from pydantic import AnyHttpUrl
 from starlette.applications import Starlette
 from starlette.middleware.authentication import AuthenticationMiddleware
@@ -64,7 +70,7 @@ from .security import (
     get_client_ip,
     random_delay,
 )
-from .server import __version__, error_result, format_api_error
+from .server import __version__, error_result, format_api_error, tool_result
 from .tools.errors import ToolError
 
 # Shared tool registry (single source of truth for both servers)
@@ -104,12 +110,14 @@ class UserMCPSession:
         self.config = config
         self.kimai_client: KimaiClient | None = None
 
-        # Create MCP server for this user
-        self.mcp_server = Server(f"kimai-mcp-{user_slug}")
-
-        # Register tool handlers
-        self.mcp_server.list_tools()(self._list_tools)
-        self.mcp_server.call_tool()(self._call_tool)
+        # Create MCP server for this user. SDK 2.x takes the handlers as
+        # constructor arguments; the decorator API was removed.
+        self.mcp_server = Server(
+            f"kimai-mcp-{user_slug}",
+            version=__version__,
+            on_list_tools=self._list_tools,
+            on_call_tool=self._call_tool,
+        )
 
         # Session manager (created during initialization)
         self.session_manager: StreamableHTTPSessionManager | None = None
@@ -145,21 +153,28 @@ class UserMCPSession:
             await self.kimai_client.close()
             self.kimai_client = None
 
-    async def _list_tools(self) -> list[Tool]:
+    async def _list_tools(
+        self,
+        ctx: ServerRequestContext,
+        params: PaginatedRequestParams | None = None,
+    ) -> ListToolsResult:
         """List all available MCP tools."""
-        return all_tools()
+        return ListToolsResult(tools=all_tools())
 
     async def _call_tool(
-        self, name: str, arguments: dict[str, Any] | None = None
-    ) -> list[TextContent] | CallToolResult:
+        self,
+        ctx: ServerRequestContext,
+        params: CallToolRequestParams,
+    ) -> CallToolResult:
         """Handle tool calls."""
         if self.kimai_client is None:
             return error_result("Error: Kimai client not initialized")
 
-        arguments = arguments or {}
+        name = params.name
+        arguments = params.arguments or {}
 
         try:
-            return await dispatch_tool(self.kimai_client, name, arguments)
+            return tool_result(await dispatch_tool(self.kimai_client, name, arguments))
 
         except ToolError as e:
             # Tool could not fulfill the request (bad input, unsupported op, etc.)

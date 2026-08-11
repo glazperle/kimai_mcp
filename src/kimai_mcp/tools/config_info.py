@@ -13,7 +13,7 @@ def config_tool() -> Tool:
     return Tool(
         name="config",
         description="Fetch Kimai server configuration, installed plugins, and system info. Useful for understanding server rules and capabilities.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["type"],
             "properties": {

@@ -27,7 +27,7 @@ COMMON TASKS:
 - Export entries: action=batch_export, ids=[...]
 
 NOTE: For running timers (no end time), use the 'timer' tool instead.""",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["action"],
             "properties": {
@@ -144,7 +144,7 @@ def timer_tool() -> Tool:
 - Show active: action=active
 
 NOTE: Creates timesheet entries without end time. Use 'timesheet' tool for completed entries.""",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["action"],
             "properties": {

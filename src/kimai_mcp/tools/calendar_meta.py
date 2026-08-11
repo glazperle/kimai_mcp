@@ -14,7 +14,7 @@ def calendar_tool() -> Tool:
     return Tool(
         name="calendar",
         description="Universal calendar tool for accessing absences and holidays data.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["type"],
             "properties": {
@@ -53,7 +53,7 @@ def meta_tool() -> Tool:
     return Tool(
         name="meta",
         description="Universal meta fields management tool for custom field operations across all entity types.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["entity", "entity_id", "action"],
             "properties": {
@@ -98,7 +98,7 @@ def user_current_tool() -> Tool:
     return Tool(
         name="user_current",
         description="Get information about the currently authenticated user.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {}
         }

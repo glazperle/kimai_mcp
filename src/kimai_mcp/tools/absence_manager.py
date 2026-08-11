@@ -28,7 +28,7 @@ COMMON TASKS:
 ABSENCE TYPES: holiday, time_off, sickness, sickness_child, parental, other, unpaid_vacation
 
 NOTE: To change annual vacation days quota, use entity tool with set_preferences and holidays preference.""",
-        inputSchema={
+        input_schema={
             "type": "object",
             "required": ["action"],
             "properties": {
