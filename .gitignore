@@ -187,3 +187,8 @@ test_tools_registration.py
 config.json
 config/users.json
 api_documentation.json
+
+# Tool caches. They contain absolute local paths, so keep them out of a public
+# repository even though the tools also self-ignore.
+.ruff_cache/
+scripts/.kimai-api-cache/

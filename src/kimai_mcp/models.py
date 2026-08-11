@@ -22,19 +22,46 @@ class KimaiModel(BaseModel):
 
 
 class User(KimaiModel):
-    """User model."""
+    """User model (serializer group ``Default``).
+
+    ``apiToken`` and ``color-safe`` are also on the wire and deliberately not
+    modelled: the first is a UI flag whose name invites confusion with a
+    credential, the second is only ``color`` with a fallback applied.
+    """
+
     id: int
     username: str
     alias: str | None = None
     title: str | None = None
     enabled: bool = False
     color: str | None = None
+    email: str | None = None
+    account_number: str | None = Field(None, alias="accountNumber")
+    avatar: str | None = None
+    system_account: bool | None = Field(None, alias="systemAccount")
+    initials: str | None = None
+    language: str | None = None
+    locale: str | None = None
+    timezone: str | None = None
 
 
 class MetaField(KimaiModel):
     """Meta field model."""
     name: str
     value: str | None = None
+
+
+class TeamRef(KimaiModel):
+    """A team as embedded in customer/project/activity payloads.
+
+    Kimai serializes only a stub there (``id``, ``name``, ``color``), not the
+    full team with members, so this is intentionally not the ``Team`` model:
+    that one would recurse (team -> customers -> teams).
+    """
+
+    id: int | None = None
+    name: str | None = None
+    color: str | None = None
 
 
 class Customer(KimaiModel):
@@ -90,10 +117,17 @@ class Customer(KimaiModel):
     budget: float | None = None
     time_budget: int | None = Field(None, alias="timeBudget")
     budget_type: str | None = Field(None, alias="budgetType")
+    teams: list[TeamRef] | None = None
 
 
 class Project(KimaiModel):
-    """Project model."""
+    """Project model.
+
+    ``start``/``end``, the order fields and the budget are part of what Kimai
+    sends for a project; a listing carries everything except the budget, which
+    is ``Project_Entity`` only.
+    """
+
     id: int
     name: str
     customer: int | None = None
@@ -105,6 +139,17 @@ class Project(KimaiModel):
     color: str | None = None
     # Serializer group Default, so listings carry them too.
     meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
+    # Project timeframe and order data (listing and entity)
+    start: datetime | None = None
+    end: datetime | None = None
+    order_date: datetime | None = Field(None, alias="orderDate")
+    order_number: str | None = Field(None, alias="orderNumber")
+    parent_title: str | None = Field(None, alias="parentTitle")  # customer name
+    teams: list[TeamRef] | None = None
+    # Project_Entity only
+    budget: float | None = None
+    time_budget: int | None = Field(None, alias="timeBudget")
+    budget_type: str | None = Field(None, alias="budgetType")
 
 
 class Activity(KimaiModel):
@@ -119,6 +164,12 @@ class Activity(KimaiModel):
     color: str | None = None
     # Serializer group Default, so listings carry them too.
     meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
+    parent_title: str | None = Field(None, alias="parentTitle")  # project name
+    teams: list[TeamRef] | None = None
+    # Activity_Entity only
+    budget: float | None = None
+    time_budget: int | None = Field(None, alias="timeBudget")
+    budget_type: str | None = Field(None, alias="budgetType")
 
 
 class TimesheetEntity(KimaiModel):
@@ -340,6 +391,7 @@ class Invoice(KimaiModel):
     payment_date: datetime | None = Field(None, alias="paymentDate")
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
     overdue: bool | None = None  # Whether the invoice is overdue
+    invoice_filename: str | None = Field(None, alias="invoiceFilename")
 
 
 class InvoiceFilter(KimaiModel):
@@ -396,7 +448,7 @@ class PublicHolidayFilter(KimaiModel):
 # User extended models
 
 class UserEntity(KimaiModel):
-    """Extended user entity model."""
+    """Extended user entity model (serializer group ``User_Entity``)."""
     id: int
     username: str
     alias: str | None = None
@@ -411,6 +463,11 @@ class UserEntity(KimaiModel):
     language: str | None = None
     teams: list[Team] = []
     preferences: list[dict[str, Any]] | None = None
+    email: str | None = None
+    account_number: str | None = Field(None, alias="accountNumber")
+    system_account: bool | None = Field(None, alias="systemAccount")
+    initials: str | None = None
+    memberships: list[dict[str, Any]] | None = None
 
 
 class UserPreference(KimaiModel):
