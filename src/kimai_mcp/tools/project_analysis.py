@@ -248,12 +248,12 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
         return [TextContent(type="text", text="\n".join(result_parts))]
 
     except ToolError:
-        # Already a clean, client-facing error; let the central handler mark isError.
+        # Already a clean, client-facing error; let the central handler mark is_error.
         raise
     except KimaiAPIError:
-        # Let the central handler format it via format_api_error (with isError).
+        # Let the central handler format it via format_api_error (with is_error).
         raise
-    # Everything else becomes a tool error so the client sees isError instead of
+    # Everything else becomes a tool error so the client sees is_error instead of
     # an opaque crash from the middle of the analysis.
     except Exception as e:  # noqa: BLE001
         raise ToolError(f"❌ Error during analysis: {e!s}")
