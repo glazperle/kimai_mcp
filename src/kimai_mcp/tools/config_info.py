@@ -1,8 +1,9 @@
 """Configuration and system info tool for Kimai."""
 
 import asyncio
-from typing import List
-from mcp.types import Tool, TextContent
+
+from mcp.types import TextContent, Tool
+
 from ..client import KimaiClient
 from .errors import ToolError
 
@@ -32,7 +33,7 @@ def config_tool() -> Tool:
     )
 
 
-async def handle_config(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_config(client: KimaiClient, **params) -> list[TextContent]:
     """Handle configuration info requests."""
     config_type = params.get("type", "all")
 
@@ -53,7 +54,7 @@ async def handle_config(client: KimaiClient, **params) -> List[TextContent]:
         )
 
 
-async def _handle_timesheet_config(client: KimaiClient) -> List[TextContent]:
+async def _handle_timesheet_config(client: KimaiClient) -> list[TextContent]:
     """Get timesheet configuration."""
     config = await client.get_timesheet_config()
 
@@ -76,7 +77,7 @@ async def _handle_timesheet_config(client: KimaiClient) -> List[TextContent]:
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_color_config(client: KimaiClient) -> List[TextContent]:
+async def _handle_color_config(client: KimaiClient) -> list[TextContent]:
     """Get color configuration."""
     colors = await client.get_color_config()
 
@@ -90,7 +91,7 @@ async def _handle_color_config(client: KimaiClient) -> List[TextContent]:
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_plugins(client: KimaiClient) -> List[TextContent]:
+async def _handle_plugins(client: KimaiClient) -> list[TextContent]:
     """Get installed plugins."""
     plugins = await client.get_plugins()
 
@@ -104,7 +105,7 @@ async def _handle_plugins(client: KimaiClient) -> List[TextContent]:
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_version(client: KimaiClient) -> List[TextContent]:
+async def _handle_version(client: KimaiClient) -> list[TextContent]:
     """Get version information."""
     version = await client.get_version()
 
@@ -116,7 +117,7 @@ async def _handle_version(client: KimaiClient) -> List[TextContent]:
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_all_config(client: KimaiClient) -> List[TextContent]:
+async def _handle_all_config(client: KimaiClient) -> list[TextContent]:
     """Get all configuration info (fetched in parallel)."""
     version_result, ts_result, plugin_result, color_result = await asyncio.gather(
         _handle_version(client),

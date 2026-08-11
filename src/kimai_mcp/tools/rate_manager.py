@@ -1,7 +1,10 @@
 """Consolidated Rate Manager tool for all rate operations."""
 
-from typing import List, Dict
-from mcp.types import Tool, TextContent
+
+import builtins
+
+from mcp.types import TextContent, Tool
+
 from ..client import KimaiClient
 from ..models import RateForm
 from .errors import ToolError
@@ -55,7 +58,7 @@ NOTE: For user hourly_rate preference, use entity tool with set_preferences inst
     )
 
 
-async def handle_rate(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_rate(client: KimaiClient, **params) -> list[TextContent]:
     """Handle consolidated rate operations."""
     entity = params.get("entity")
     entity_id = params.get("entity_id")
@@ -103,16 +106,16 @@ class BaseRateHandler:
         self.client = client
         self.entity_name = ""
     
-    async def list(self, entity_id: int) -> List[TextContent]:
+    async def list(self, entity_id: int) -> list[TextContent]:
         raise NotImplementedError
     
-    async def add(self, entity_id: int, data: Dict) -> List[TextContent]:
+    async def add(self, entity_id: int, data: dict) -> builtins.list[TextContent]:
         raise NotImplementedError
     
-    async def delete(self, entity_id: int, rate_id: int) -> List[TextContent]:
+    async def delete(self, entity_id: int, rate_id: int) -> builtins.list[TextContent]:
         raise NotImplementedError
     
-    def format_rate_list(self, rates: List, entity_name: str, entity_id: int) -> str:
+    def format_rate_list(self, rates: builtins.list, entity_name: str, entity_id: int) -> str:
         """Format a list of rates for display."""
         if not rates:
             return f"No rates configured for {entity_name} ID {entity_id}"
@@ -146,12 +149,12 @@ class CustomerRateHandler(BaseRateHandler):
         super().__init__(client)
         self.entity_name = "customer"
     
-    async def list(self, entity_id: int) -> List[TextContent]:
+    async def list(self, entity_id: int) -> list[TextContent]:
         rates = await self.client.get_customer_rates(entity_id)
         result = self.format_rate_list(rates, self.entity_name, entity_id)
         return [TextContent(type="text", text=result)]
     
-    async def add(self, entity_id: int, data: Dict) -> List[TextContent]:
+    async def add(self, entity_id: int, data: dict) -> builtins.list[TextContent]:
         rate_form = RateForm(
             user=data.get("user"),
             rate=data.get("rate", 0),
@@ -167,7 +170,7 @@ class CustomerRateHandler(BaseRateHandler):
             text=f"Added rate ID {rate.id} for {user_info} to customer ID {entity_id}"
         )]
     
-    async def delete(self, entity_id: int, rate_id: int) -> List[TextContent]:
+    async def delete(self, entity_id: int, rate_id: int) -> builtins.list[TextContent]:
         await self.client.delete_customer_rate(entity_id, rate_id)
         return [TextContent(
             type="text",
@@ -182,12 +185,12 @@ class ProjectRateHandler(BaseRateHandler):
         super().__init__(client)
         self.entity_name = "project"
     
-    async def list(self, entity_id: int) -> List[TextContent]:
+    async def list(self, entity_id: int) -> list[TextContent]:
         rates = await self.client.get_project_rates(entity_id)
         result = self.format_rate_list(rates, self.entity_name, entity_id)
         return [TextContent(type="text", text=result)]
     
-    async def add(self, entity_id: int, data: Dict) -> List[TextContent]:
+    async def add(self, entity_id: int, data: dict) -> builtins.list[TextContent]:
         rate_form = RateForm(
             user=data.get("user"),
             rate=data.get("rate", 0),
@@ -203,7 +206,7 @@ class ProjectRateHandler(BaseRateHandler):
             text=f"Added rate ID {rate.id} for {user_info} to project ID {entity_id}"
         )]
     
-    async def delete(self, entity_id: int, rate_id: int) -> List[TextContent]:
+    async def delete(self, entity_id: int, rate_id: int) -> builtins.list[TextContent]:
         await self.client.delete_project_rate(entity_id, rate_id)
         return [TextContent(
             type="text",
@@ -218,12 +221,12 @@ class ActivityRateHandler(BaseRateHandler):
         super().__init__(client)
         self.entity_name = "activity"
     
-    async def list(self, entity_id: int) -> List[TextContent]:
+    async def list(self, entity_id: int) -> list[TextContent]:
         rates = await self.client.get_activity_rates(entity_id)
         result = self.format_rate_list(rates, self.entity_name, entity_id)
         return [TextContent(type="text", text=result)]
     
-    async def add(self, entity_id: int, data: Dict) -> List[TextContent]:
+    async def add(self, entity_id: int, data: dict) -> builtins.list[TextContent]:
         rate_form = RateForm(
             user=data.get("user"),
             rate=data.get("rate", 0),
@@ -239,7 +242,7 @@ class ActivityRateHandler(BaseRateHandler):
             text=f"Added rate ID {rate.id} for {user_info} to activity ID {entity_id}"
         )]
     
-    async def delete(self, entity_id: int, rate_id: int) -> List[TextContent]:
+    async def delete(self, entity_id: int, rate_id: int) -> builtins.list[TextContent]:
         await self.client.delete_activity_rate(entity_id, rate_id)
         return [TextContent(
             type="text",

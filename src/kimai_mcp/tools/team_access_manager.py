@@ -1,7 +1,8 @@
 """Consolidated Team Access Manager tool for all team operations."""
 
-from typing import List, Optional
-from mcp.types import Tool, TextContent
+
+from mcp.types import TextContent, Tool
+
 from ..client import KimaiClient
 from .errors import ToolError
 
@@ -42,7 +43,7 @@ def team_access_tool() -> Tool:
     )
 
 
-async def handle_team_access(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_team_access(client: KimaiClient, **params) -> list[TextContent]:
     """Handle consolidated team access operations."""
     team_id = params.get("team_id")
     action = params.get("action")
@@ -68,7 +69,7 @@ async def handle_team_access(client: KimaiClient, **params) -> List[TextContent]
         )
 
 
-async def _handle_add_member(client: KimaiClient, team_id: int, user_id: Optional[int]) -> List[TextContent]:
+async def _handle_add_member(client: KimaiClient, team_id: int, user_id: int | None) -> list[TextContent]:
     """Handle adding a member to a team."""
     if not user_id:
         raise ToolError("Error: 'user_id' parameter is required for add_member action")
@@ -81,7 +82,7 @@ async def _handle_add_member(client: KimaiClient, team_id: int, user_id: Optiona
     )]
 
 
-async def _handle_remove_member(client: KimaiClient, team_id: int, user_id: Optional[int]) -> List[TextContent]:
+async def _handle_remove_member(client: KimaiClient, team_id: int, user_id: int | None) -> list[TextContent]:
     """Handle removing a member from a team."""
     if not user_id:
         raise ToolError("Error: 'user_id' parameter is required for remove_member action")
@@ -94,7 +95,7 @@ async def _handle_remove_member(client: KimaiClient, team_id: int, user_id: Opti
     )]
 
 
-async def _handle_grant_access(client: KimaiClient, team_id: int, target: Optional[str], target_id: Optional[int]) -> List[TextContent]:
+async def _handle_grant_access(client: KimaiClient, team_id: int, target: str | None, target_id: int | None) -> list[TextContent]:
     """Handle granting access to a team."""
     if not target:
         raise ToolError("Error: 'target' parameter is required for grant action")
@@ -121,7 +122,7 @@ async def _handle_grant_access(client: KimaiClient, team_id: int, target: Option
     )]
 
 
-async def _handle_revoke_access(client: KimaiClient, team_id: int, target: Optional[str], target_id: Optional[int]) -> List[TextContent]:
+async def _handle_revoke_access(client: KimaiClient, team_id: int, target: str | None, target_id: int | None) -> list[TextContent]:
     """Handle revoking access from a team."""
     if not target:
         raise ToolError("Error: 'target' parameter is required for revoke action")

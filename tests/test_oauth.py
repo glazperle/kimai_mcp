@@ -16,7 +16,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from kimai_mcp.streamable_http_server import StreamableHTTPMCPServer
-from kimai_mcp.user_config import UsersConfig, UserConfig
+from kimai_mcp.user_config import UserConfig, UsersConfig
 
 PUBLIC_URL = "http://localhost:8000"
 REDIRECT_URI = "http://localhost:9876/callback"
@@ -635,7 +635,7 @@ def test_cleanup_removes_client_with_expired_secret(users_config):
 # OIDC federated login backend (integration)
 # ---------------------------------------------------------------------------
 
-from kimai_mcp.oidc import OIDCConfig, OIDCLoginState  # noqa: E402
+from kimai_mcp.oidc import OIDCConfig, OIDCLoginState
 
 OIDC_EMAIL = "alice@firma.de"
 

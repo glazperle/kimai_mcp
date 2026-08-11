@@ -1,15 +1,17 @@
 """Consolidated Timesheet tools for all timesheet operations."""
 
+import contextlib
 import json
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Optional
-from mcp.types import Tool, TextContent
-from ..client import KimaiClient, KimaiAPIError
-from ..models import TimesheetEditForm, TimesheetFilter, MetaFieldForm
-from .timesheet_analytics import TimesheetAnalytics
+from datetime import datetime, timedelta, timezone
+
+from mcp.types import TextContent, Tool
+
+from ..client import KimaiAPIError, KimaiClient
+from ..models import MetaFieldForm, TimesheetEditForm, TimesheetFilter
 from .batch_utils import execute_batch, format_batch_result
-from .user_discovery import resolve_accessible_users
 from .errors import ToolError
+from .timesheet_analytics import TimesheetAnalytics
+from .user_discovery import resolve_accessible_users
 
 
 def timesheet_tool() -> Tool:
@@ -180,7 +182,7 @@ NOTE: Creates timesheet entries without end time. Use 'timesheet' tool for compl
     )
 
 
-async def handle_timesheet(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_timesheet(client: KimaiClient, **params) -> list[TextContent]:
     """Handle consolidated timesheet operations."""
     action = params.get("action")
     
@@ -212,7 +214,7 @@ async def handle_timesheet(client: KimaiClient, **params) -> List[TextContent]:
         )
 
 
-async def handle_timer(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_timer(client: KimaiClient, **params) -> list[TextContent]:
     """Handle timer operations."""
     action = params.get("action")
     
@@ -233,7 +235,7 @@ async def handle_timer(client: KimaiClient, **params) -> List[TextContent]:
 
 
 # Timesheet action handlers
-async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[TextContent]:
+async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[TextContent]:
     """Handle timesheet list action."""
     from datetime import datetime
 
@@ -342,26 +344,25 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
             if len(users) > 10:
                 result += f"  ... and {len(users) - 10} more users\n"
             result += "\n"
-        except Exception as e:
+        # Listing users is supplementary context; any failure is reported inline
+        # instead of failing the timesheet listing itself.
+        except Exception as e:  # noqa: BLE001
             if isinstance(e, KimaiAPIError) and e.status_code == 403:
                 result += "Note: Unable to list users (insufficient permissions). Use user_scope='self' or specify a user ID.\n\n"
             else:
-                result += f"Note: Unable to list users: {str(e)}\n\n"
+                result += f"Note: Unable to list users: {e!s}\n\n"
     
     # Calculate statistics if requested
     if filters.get("calculate_stats"):
         # Auto-enable year breakdown if time span > 1 year
         breakdown_by_year = filters.get("breakdown_by_year", False)
         if not breakdown_by_year and filters.get("begin") and filters.get("end"):
-            try:
-                from datetime import datetime
+            # Unparsable filter dates just leave the breakdown off.
+            with contextlib.suppress(ValueError):
                 begin_date = datetime.fromisoformat(filters["begin"].replace('Z', '+00:00'))
                 end_date = datetime.fromisoformat(filters["end"].replace('Z', '+00:00'))
-                time_span = end_date - begin_date
-                if time_span.days > 365:  # More than 1 year
+                if (end_date - begin_date).days > 365:  # More than 1 year
                     breakdown_by_year = True
-            except Exception:
-                pass
         
         stats = TimesheetAnalytics.calculate_statistics(
             timesheets, 
@@ -373,7 +374,8 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
             projects = await client.get_projects()
             project_map = {p.id: p.name for p in projects}
             stats["project_names"] = project_map
-        except Exception:
+        # Project names are cosmetic; without them the report shows IDs.
+        except Exception:  # noqa: BLE001
             project_map = {}
         
         if filters.get("stats_format") == "json":
@@ -409,7 +411,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: Dict) -> List[Tex
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_timesheet_get(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+async def _handle_timesheet_get(client: KimaiClient, id: int | None) -> list[TextContent]:
     """Handle timesheet get action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for get action")
@@ -449,7 +451,7 @@ async def _handle_timesheet_get(client: KimaiClient, id: Optional[int]) -> List[
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[TextContent]:
+async def _handle_timesheet_create(client: KimaiClient, data: dict) -> list[TextContent]:
     """Handle timesheet create action."""
     from datetime import datetime
 
@@ -499,7 +501,7 @@ async def _handle_timesheet_create(client: KimaiClient, data: Dict) -> List[Text
     )]
 
 
-async def _handle_timesheet_update(client: KimaiClient, id: Optional[int], data: Dict) -> List[TextContent]:
+async def _handle_timesheet_update(client: KimaiClient, id: int | None, data: dict) -> list[TextContent]:
     """Handle timesheet update action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for update action")
@@ -521,7 +523,7 @@ async def _handle_timesheet_update(client: KimaiClient, id: Optional[int], data:
     )]
 
 
-async def _handle_timesheet_delete(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+async def _handle_timesheet_delete(client: KimaiClient, id: int | None) -> list[TextContent]:
     """Handle timesheet delete action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for delete action")
@@ -530,7 +532,7 @@ async def _handle_timesheet_delete(client: KimaiClient, id: Optional[int]) -> Li
     return [TextContent(type="text", text=f"Deleted timesheet ID {id}")]
 
 
-async def _handle_timesheet_duplicate(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+async def _handle_timesheet_duplicate(client: KimaiClient, id: int | None) -> list[TextContent]:
     """Handle timesheet duplicate action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for duplicate action")
@@ -542,7 +544,7 @@ async def _handle_timesheet_duplicate(client: KimaiClient, id: Optional[int]) ->
     )]
 
 
-async def _handle_timesheet_export_toggle(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+async def _handle_timesheet_export_toggle(client: KimaiClient, id: int | None) -> list[TextContent]:
     """Handle timesheet export toggle action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for export_toggle action")
@@ -555,7 +557,7 @@ async def _handle_timesheet_export_toggle(client: KimaiClient, id: Optional[int]
     )]
 
 
-async def _handle_timesheet_meta_update(client: KimaiClient, id: Optional[int], meta: List[Dict]) -> List[TextContent]:
+async def _handle_timesheet_meta_update(client: KimaiClient, id: int | None, meta: list[dict]) -> list[TextContent]:
     """Handle timesheet meta update action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for meta_update action")
@@ -575,7 +577,7 @@ async def _handle_timesheet_meta_update(client: KimaiClient, id: Optional[int], 
     )]
 
 
-async def _handle_timesheet_user_guide(client: KimaiClient, show_users: bool) -> List[TextContent]:
+async def _handle_timesheet_user_guide(client: KimaiClient, show_users: bool) -> list[TextContent]:
     """Handle timesheet user guide action."""
     guide = """# Timesheet User Selection Guide
 
@@ -645,18 +647,19 @@ When using the timesheet tool with action='list', you can control which users' t
 
             if len(users) > 20:
                 guide += f"\n... and {len(users) - 20} more users\n"
-        except Exception as e:
+        # The user guide stays useful even when user discovery fails.
+        except Exception as e:  # noqa: BLE001
             if isinstance(e, KimaiAPIError) and e.status_code == 403:
                 guide += "Unable to list users (insufficient permissions).\n"
                 guide += "You may still use user_scope='specific' with a user ID if you have permission.\n"
             else:
-                guide += f"Error fetching users: {str(e)}\n"
+                guide += f"Error fetching users: {e!s}\n"
 
     return [TextContent(type="text", text=guide)]
 
 
 # Timer action handlers
-async def _handle_timer_start(client: KimaiClient, data: Dict) -> List[TextContent]:
+async def _handle_timer_start(client: KimaiClient, data: dict) -> list[TextContent]:
     """Handle timer start action."""
     if not data.get("project") or not data.get("activity"):
         raise ToolError("Error: 'project' and 'activity' are required in data for start action")
@@ -680,7 +683,7 @@ async def _handle_timer_start(client: KimaiClient, data: Dict) -> List[TextConte
     )]
 
 
-async def _handle_timer_stop(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+async def _handle_timer_stop(client: KimaiClient, id: int | None) -> list[TextContent]:
     """Handle timer stop action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for stop action")
@@ -694,7 +697,7 @@ async def _handle_timer_stop(client: KimaiClient, id: Optional[int]) -> List[Tex
     )]
 
 
-async def _handle_timer_restart(client: KimaiClient, id: Optional[int]) -> List[TextContent]:
+async def _handle_timer_restart(client: KimaiClient, id: int | None) -> list[TextContent]:
     """Handle timer restart action."""
     if not id:
         raise ToolError("Error: 'id' parameter is required for restart action")
@@ -707,7 +710,7 @@ async def _handle_timer_restart(client: KimaiClient, id: Optional[int]) -> List[
     )]
 
 
-async def _handle_timer_active(client: KimaiClient) -> List[TextContent]:
+async def _handle_timer_active(client: KimaiClient) -> list[TextContent]:
     """Handle timer active action."""
     timesheets = await client.get_active_timesheets()
     
@@ -717,7 +720,8 @@ async def _handle_timer_active(client: KimaiClient) -> List[TextContent]:
     result = f"Found {len(timesheets)} active timer(s):\n\n"
     
     for ts in timesheets:
-        now = datetime.now(ts.begin.tzinfo) if ts.begin.tzinfo else datetime.now()
+        # tzinfo=None mirrors ts.begin being naive, so both sides stay comparable.
+        now = datetime.now(ts.begin.tzinfo)
         elapsed = (now - ts.begin).total_seconds() / 3600
         
         result += f"ID: {ts.id} - Project: {ts.project} / Activity: {ts.activity}\n"
@@ -733,7 +737,7 @@ async def _handle_timer_active(client: KimaiClient) -> List[TextContent]:
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_timer_recent(client: KimaiClient, size: int, begin: Optional[str]) -> List[TextContent]:
+async def _handle_timer_recent(client: KimaiClient, size: int, begin: str | None) -> list[TextContent]:
     """Handle timer recent action."""
     from datetime import datetime
     
@@ -750,7 +754,7 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: Optional[s
         begin=begin_datetime,
         page=1
     )
-    timesheets, fetched_all, last_page = await client.get_timesheets(filter_params)
+    timesheets, _fetched_all, _last_page = await client.get_timesheets(filter_params)
     
     result = f"Recent {len(timesheets)} timesheet(s):\n\n"
     
@@ -774,7 +778,7 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: Optional[s
 
 # Batch operations
 
-async def _handle_batch_delete(client: KimaiClient, ids: List[int]) -> List[TextContent]:
+async def _handle_batch_delete(client: KimaiClient, ids: list[int]) -> list[TextContent]:
     """Batch delete multiple timesheets."""
     if not ids:
         raise ToolError("Error: 'ids' parameter is required for batch_delete action")
@@ -788,7 +792,7 @@ async def _handle_batch_delete(client: KimaiClient, ids: List[int]) -> List[Text
     return [TextContent(type="text", text=result)]
 
 
-async def _handle_batch_export(client: KimaiClient, ids: List[int]) -> List[TextContent]:
+async def _handle_batch_export(client: KimaiClient, ids: list[int]) -> list[TextContent]:
     """Batch mark multiple timesheets as exported."""
     if not ids:
         raise ToolError("Error: 'ids' parameter is required for batch_export action")

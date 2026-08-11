@@ -1,12 +1,11 @@
 """Shared helper for discovering users accessible to the current API token."""
 
-from typing import List
 
 from ..client import KimaiClient
 from .batch_utils import execute_batch
 
 
-async def resolve_accessible_users(client: KimaiClient) -> List:
+async def resolve_accessible_users(client: KimaiClient) -> list:
     """Resolve all users the current user has access to (teams-first approach).
 
     Strategy:
@@ -27,7 +26,9 @@ async def resolve_accessible_users(client: KimaiClient) -> List:
     # Try to get users from teams (works for team leads and admins)
     try:
         teams = await client.get_teams()
-    except Exception:
+    # Teams are only the first discovery path; on any failure (403 for plain
+    # users, API error) we fall through to get_users below.
+    except Exception:  # noqa: BLE001
         teams = []
 
     if teams:

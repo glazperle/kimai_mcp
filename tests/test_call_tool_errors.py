@@ -11,16 +11,17 @@ The MCP SDK passes a handler-supplied ``CallToolResult`` through unchanged
 is equivalent to asserting on what the client receives.
 """
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 from mcp.types import CallToolResult
 
 from kimai_mcp.client import KimaiAPIError, KimaiClient
 from kimai_mcp.server import KimaiMCPServer
 from kimai_mcp.streamable_http_server import UserMCPSession
-from kimai_mcp.user_config import UserConfig
-from kimai_mcp.tools.errors import ToolError
 from kimai_mcp.tools import entity_manager, rate_manager
+from kimai_mcp.tools.errors import ToolError
+from kimai_mcp.user_config import UserConfig
 
 
 def _assert_error(result, *expected_substrings):

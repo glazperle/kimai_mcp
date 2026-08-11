@@ -12,8 +12,9 @@ import logging
 import random
 import time
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, ClassVar
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-def get_client_ip(scope: Scope, trusted_proxies: Optional[Iterable[str]] = None) -> str:
+def get_client_ip(scope: Scope, trusted_proxies: Iterable[str] | None = None) -> str:
     """Extract the client IP from an ASGI scope.
 
     SECURITY: The X-Forwarded-For / X-Real-IP headers are only honored when
@@ -100,7 +101,7 @@ class TokenBucketRateLimiter:
         """
         self.config = config
         # key -> (tokens, last_update_time)
-        self._buckets: Dict[str, Tuple[float, float]] = {}
+        self._buckets: dict[str, tuple[float, float]] = {}
         self._lock = asyncio.Lock()
 
     async def is_allowed(self, key: str) -> bool:
@@ -168,8 +169,8 @@ class RateLimitMiddleware:
     def __init__(
         self,
         app: ASGIApp,
-        config: Optional[RateLimitConfig] = None,
-        trusted_proxies: Optional[Iterable[str]] = None,
+        config: RateLimitConfig | None = None,
+        trusted_proxies: Iterable[str] | None = None,
     ):
         """Initialize the rate limiting middleware.
 
@@ -184,7 +185,7 @@ class RateLimitMiddleware:
         self.config = config or RateLimitConfig()
         self.limiter = TokenBucketRateLimiter(self.config)
         self.trusted_proxies = list(trusted_proxies) if trusted_proxies else []
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_task: asyncio.Task | None = None
 
     def _get_client_ip(self, scope: Scope) -> str:
         """Extract client IP from ASGI scope (proxy-header aware, see get_client_ip)."""
@@ -228,7 +229,7 @@ class RateLimitMiddleware:
 class SecurityHeadersMiddleware:
     """ASGI middleware to add security headers to all responses."""
 
-    SECURITY_HEADERS = {
+    SECURITY_HEADERS: ClassVar[dict[str, str]] = {
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
         "X-XSS-Protection": "1; mode=block",
@@ -237,7 +238,7 @@ class SecurityHeadersMiddleware:
         "Pragma": "no-cache",
     }
 
-    def __init__(self, app: ASGIApp, extra_headers: Optional[Dict[str, str]] = None):
+    def __init__(self, app: ASGIApp, extra_headers: dict[str, str] | None = None):
         """Initialize the security headers middleware.
 
         Args:
@@ -302,7 +303,7 @@ class SessionManager:
     - Sliding expiration (access extends TTL)
     """
 
-    def __init__(self, config: Optional[SessionConfig] = None):
+    def __init__(self, config: SessionConfig | None = None):
         """Initialize the session manager.
 
         Args:
@@ -310,9 +311,9 @@ class SessionManager:
         """
         self.config = config or SessionConfig()
         # session_id -> (session_object, last_access_time)
-        self._sessions: Dict[str, Tuple[Any, float]] = {}
+        self._sessions: dict[str, tuple[Any, float]] = {}
         self._lock = asyncio.Lock()
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_task: asyncio.Task | None = None
         self._running = False
 
     async def start(self) -> None:
@@ -352,7 +353,9 @@ class SessionManager:
                 await self.cleanup_expired()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            # The cleanup loop must survive any single failing iteration,
+            # otherwise sessions are never reaped again.
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Error in session cleanup: {e}")
 
     async def _cleanup_session(self, session_id: str, session: Any) -> None:
@@ -368,7 +371,9 @@ class SessionManager:
                 result = session.cleanup()
                 if asyncio.iscoroutine(result):
                     await result
-            except Exception as e:
+            # A session's own cleanup is user code; its failure must not stop
+            # the remaining sessions from being cleaned up.
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Error cleaning up session {session_id[:8]}: {e}")
 
     async def cleanup_expired(self) -> int:
@@ -432,7 +437,7 @@ class SessionManager:
             )
             return True
 
-    async def get(self, session_id: str) -> Optional[Any]:
+    async def get(self, session_id: str) -> Any | None:
         """Get session by ID, updating last access time.
 
         Implements sliding expiration - accessing a session extends its TTL.
@@ -451,7 +456,7 @@ class SessionManager:
                 return session
             return None
 
-    async def remove(self, session_id: str) -> Optional[Any]:
+    async def remove(self, session_id: str) -> Any | None:
         """Remove and return a session.
 
         Args:
@@ -514,9 +519,9 @@ class EnumerationProtection:
         self.max_404 = max_404_per_minute
         self.block_duration = block_duration_seconds
         # client_ip -> list of timestamps
-        self._404_counts: Dict[str, List[float]] = defaultdict(list)
+        self._404_counts: dict[str, list[float]] = defaultdict(list)
         # client_ip -> block_until_timestamp
-        self._blocked: Dict[str, float] = {}
+        self._blocked: dict[str, float] = {}
         self._lock = asyncio.Lock()
 
     async def is_blocked(self, client_ip: str) -> bool:

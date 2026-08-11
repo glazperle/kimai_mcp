@@ -1,7 +1,8 @@
 """Consolidated Comment tool for project and customer comments (Kimai 2.57+)."""
 
-from typing import List
-from mcp.types import Tool, TextContent
+
+from mcp.types import TextContent, Tool
+
 from ..client import KimaiClient
 from ..models import CommentForm
 from .errors import ToolError
@@ -56,7 +57,7 @@ Markdown is supported in comment messages. Pinned comments always appear first."
     )
 
 
-async def handle_comment(client: KimaiClient, **params) -> List[TextContent]:
+async def handle_comment(client: KimaiClient, **params) -> list[TextContent]:
     """Handle consolidated comment operations."""
     entity = params.get("entity")
     entity_id = params.get("entity_id")
@@ -105,7 +106,7 @@ async def handle_comment(client: KimaiClient, **params) -> List[TextContent]:
         )
 
 
-def _format_comment_list(comments: List, entity: str, entity_id: int) -> str:
+def _format_comment_list(comments: list, entity: str, entity_id: int) -> str:
     """Format a list of comments for display."""
     if not comments:
         return f"No comments found for {entity} ID {entity_id}"

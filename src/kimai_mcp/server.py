@@ -7,9 +7,9 @@ import logging
 import os
 import platform
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from kimai_mcp import __version__
 
@@ -21,14 +21,15 @@ try:
 except ImportError:
     pass
 
-from mcp.server import Server, NotificationOptions
+from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
-from mcp.types import Tool, TextContent, CallToolResult
-from .client import KimaiClient, KimaiAPIError
+from mcp.types import CallToolResult, TextContent, Tool
+
+from .client import KimaiAPIError, KimaiClient
+from .tools.errors import ToolError
 
 # Shared tool registry (single source of truth for both servers)
 from .tools.registry import all_tools, dispatch_tool
-from .tools.errors import ToolError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -62,9 +63,9 @@ def error_result(text: str) -> CallToolResult:
 class KimaiMCPServer:
     """Kimai MCP Server with consolidated tools (73 → 12 tools)."""
 
-    def __init__(self, base_url: Optional[str] = None, api_token: Optional[str] = None,
-                 default_user_id: Optional[str] = None,
-                 ssl_verify: Optional[Union[bool, str]] = None):
+    def __init__(self, base_url: str | None = None, api_token: str | None = None,
+                 default_user_id: str | None = None,
+                 ssl_verify: bool | str | None = None):
         """Initialize the consolidated Kimai MCP server.
 
         Args:
@@ -77,7 +78,7 @@ class KimaiMCPServer:
                 - str: Path to CA certificate file or directory
         """
         self.server = Server("kimai-mcp-consolidated")
-        self.client: Optional[KimaiClient] = None
+        self.client: KimaiClient | None = None
 
         # Register handlers
         self.server.list_tools()(self._list_tools)
@@ -119,13 +120,13 @@ class KimaiMCPServer:
         if not self.client:
             self.client = KimaiClient(self.base_url, self.api_token, ssl_verify=self.ssl_verify)
 
-    async def _list_tools(self) -> List[Tool]:
+    async def _list_tools(self) -> list[Tool]:
         """List consolidated MCP tools (12 tools instead of the original 73)."""
         return all_tools()
 
     async def _call_tool(
-        self, name: str, arguments: Optional[Dict[str, Any]] = None
-    ) -> Union[List[TextContent], CallToolResult]:
+        self, name: str, arguments: dict[str, Any] | None = None
+    ) -> list[TextContent] | CallToolResult:
         """Handle consolidated tool calls."""
         await self._ensure_client()
 
@@ -146,9 +147,9 @@ class KimaiMCPServer:
             logger.error(f"Arguments were: {arguments}")
             return error_result(format_api_error(e))
         except Exception as e:
-            logger.error(f"Error calling tool {name}: {str(e)}", exc_info=True)
+            logger.exception(f"Error calling tool {name}")
             logger.error(f"Arguments were: {arguments}")
-            return error_result(f"Error: {str(e)}")
+            return error_result(f"Error: {e!s}")
 
     async def run(self):
         """Run the consolidated MCP server."""
@@ -161,7 +162,7 @@ class KimaiMCPServer:
             logger.info(
                 f"Connected to Kimai {version.version} with 12 consolidated tools")
         except Exception as e:
-            logger.error(f"Failed to connect to Kimai: {str(e)}")
+            logger.error(f"Failed to connect to Kimai: {e!s}")
             raise
 
         # Configure server options
@@ -258,7 +259,9 @@ def write_config_to_file(config_path: Path, new_config: dict) -> bool:
         existing = {}
         if config_path.exists():
             # Create backup
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            # Local wall-clock time, so the backup name matches what the user
+            # sees in their file manager.
+            timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
             backup_path = config_path.with_suffix(f".backup-{timestamp}.json")
             shutil.copy(config_path, backup_path)
             print(f"  Backup created: {backup_path}")
@@ -277,7 +280,9 @@ def write_config_to_file(config_path: Path, new_config: dict) -> bool:
 
         print(f"  Configuration written to: {config_path}")
         return True
-    except Exception as e:
+    # Setup wizard: any failure (permissions, malformed existing config, ...)
+    # is reported to the user and turned into a False return.
+    except Exception as e:  # noqa: BLE001
         print(f"  Error writing config: {e}")
         return False
 
@@ -361,7 +366,7 @@ async def main():
         return
 
     # Parse SSL verify value
-    ssl_verify: Optional[Union[bool, str]] = None
+    ssl_verify: bool | str | None = None
     if args.ssl_verify:
         ssl_value = args.ssl_verify.lower()
         if ssl_value == "true":

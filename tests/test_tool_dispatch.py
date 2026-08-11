@@ -13,18 +13,16 @@ formatting code. Every test asserts that the handler returns a non-empty
 swallowed mock ``AttributeError`` leaked into the output.
 """
 
+import json
 from collections import defaultdict
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
-
-import json
 
 import pytest
 from mcp.types import TextContent, Tool
 
 from kimai_mcp import models as m
 from kimai_mcp.client import KimaiClient
-from kimai_mcp.tools.errors import ToolError
 from kimai_mcp.tools import (
     absence_manager,
     calendar_meta,
@@ -36,6 +34,7 @@ from kimai_mcp.tools import (
     team_access_manager,
     timesheet_consolidated,
 )
+from kimai_mcp.tools.errors import ToolError
 
 NOW = datetime(2026, 1, 15, 9, 0, 0, tzinfo=timezone.utc)
 LATER = datetime(2026, 1, 15, 17, 0, 0, tzinfo=timezone.utc)
@@ -237,7 +236,7 @@ def make_mock_client() -> AsyncMock:
 
     # Config / system
     client.get_version.return_value = m.Version(
-        **{"version": "2.36.0", "versionId": 23600, "copyright": "Kimai (c)"}
+        version="2.36.0", versionId=23600, copyright="Kimai (c)"
     )
     client.get_timesheet_config.return_value = m.TimesheetConfig()
     client.get_color_config.return_value = {"Red": "#ff0000"}
@@ -762,7 +761,7 @@ def test_schema_enums_match_dispatch_coverage(tool_name, tool_factory, prop):
 # Shared tool registry (single source of truth for both servers)
 # ---------------------------------------------------------------------------
 
-from kimai_mcp.tools import registry  # noqa: E402
+from kimai_mcp.tools import registry
 
 
 def test_registry_exposes_every_tested_tool():

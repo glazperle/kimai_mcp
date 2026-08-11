@@ -1,13 +1,14 @@
 """Project analysis tools for comprehensive timesheet analysis."""
 
 import asyncio
-from datetime import datetime
-from typing import Any, Dict, List, Set
 from collections import defaultdict
+from datetime import datetime
+from typing import Any
 
-from mcp.types import Tool, TextContent
-from ..client import KimaiClient, KimaiAPIError
-from ..models import TimesheetFilter, ProjectFilter
+from mcp.types import TextContent, Tool
+
+from ..client import KimaiAPIError, KimaiClient
+from ..models import ProjectFilter, TimesheetFilter
 from .errors import ToolError
 
 # Safety limit: stop fetching timesheets once this many entries were collected
@@ -39,7 +40,7 @@ def analyze_project_team_tool() -> Tool:
     )
 
 
-async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, Any]) -> List[TextContent]:
+async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle comprehensive project team analysis."""
     project_name = arguments['project_name']
     begin = datetime.fromisoformat(arguments['begin'])
@@ -95,9 +96,10 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
                 user_filter = 'all'  # Get all and filter later
             except ToolError:
                 raise
-            except Exception as e:
+            # Anything else is turned into a client-facing tool error naming the team.
+            except Exception as e:  # noqa: BLE001
                 raise ToolError(
-                    f"❌ Error accessing team {arguments['team']}: {str(e)}"
+                    f"❌ Error accessing team {arguments['team']}: {e!s}"
                 )
         
         # 3. Get timesheets for this project with user filtering
@@ -117,7 +119,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
                 client.get_users(full=False),  # Use optimized performance mode
                 client.get_activities()
             )
-            timesheets, fetched_all, last_page = timesheets
+            timesheets, _fetched_all, _last_page = timesheets
 
             # Post-process team filtering if needed
             if user_scope == 'team':
@@ -135,7 +137,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
             else:
                 # Surface unexpected API errors with more context
                 raise ToolError(
-                    f"❌ API Error while analyzing project '{project.name}': {str(e)}\n\nPlease check your Kimai connection and try again."
+                    f"❌ API Error while analyzing project '{project.name}': {e!s}\n\nPlease check your Kimai connection and try again."
                 )
 
         if not timesheets:
@@ -170,8 +172,8 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
         })
         
         total_project_duration = 0
-        unique_users: Set[int] = set()
-        unique_activities: Set[int] = set()
+        unique_users: set[int] = set()
+        unique_activities: set[int] = set()
         
         for ts in timesheets:
             user_id = ts.user
@@ -251,5 +253,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: Dict[str, 
     except KimaiAPIError:
         # Let the central handler format it via format_api_error (with isError).
         raise
-    except Exception as e:
-        raise ToolError(f"❌ Error during analysis: {str(e)}")
+    # Everything else becomes a tool error so the client sees isError instead of
+    # an opaque crash from the middle of the analysis.
+    except Exception as e:  # noqa: BLE001
+        raise ToolError(f"❌ Error during analysis: {e!s}")

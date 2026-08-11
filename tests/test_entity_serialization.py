@@ -7,11 +7,11 @@ because the dict/object branch was inverted.
 """
 import pytest
 
-from kimai_mcp.models import ProjectExtended, CustomerExtended, ActivityExtended
+from kimai_mcp.models import ActivityExtended, CustomerExtended, ProjectExtended
 from kimai_mcp.tools.entity_manager import (
-    ProjectEntityHandler,
-    CustomerEntityHandler,
     ActivityEntityHandler,
+    CustomerEntityHandler,
+    ProjectEntityHandler,
 )
 
 

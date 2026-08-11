@@ -1,7 +1,8 @@
 """Utility functions for batch operations."""
 
 import asyncio
-from typing import List, Callable, Any, Tuple, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 # Rate limiting: max parallel requests to avoid overloading Kimai API
 MAX_CONCURRENT = 10
@@ -10,10 +11,10 @@ T = TypeVar('T')
 
 
 async def execute_batch(
-    items: List[Any],
+    items: list[Any],
     operation: Callable[[Any], Any],
     max_concurrent: int = MAX_CONCURRENT
-) -> Tuple[List[Any], List[Tuple[Any, str]]]:
+) -> tuple[list[Any], list[tuple[Any, str]]]:
     """Execute batch operation with concurrency control.
 
     Args:
@@ -54,8 +55,8 @@ async def execute_batch(
 
 def format_batch_result(
     operation_name: str,
-    success: List[Any],
-    failed: List[Tuple[Any, str]],
+    success: list[Any],
+    failed: list[tuple[Any, str]],
     item_name: str = "items",
     max_errors_shown: int = 5
 ) -> str:

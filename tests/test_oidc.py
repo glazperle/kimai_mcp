@@ -14,9 +14,9 @@ import pytest
 # server dependencies are not installed (e.g. a base/[dev]-only environment).
 jwt = pytest.importorskip("jwt")
 pytest.importorskip("cryptography")
-from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import rsa
 
-from kimai_mcp.oidc import (  # noqa: E402
+from kimai_mcp.oidc import (
     OIDCClient,
     OIDCConfig,
     OIDCDiscoveryError,

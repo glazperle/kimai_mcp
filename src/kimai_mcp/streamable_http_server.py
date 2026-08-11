@@ -23,9 +23,28 @@ import contextlib
 import logging
 import os
 import re
+import sys
 from collections.abc import AsyncIterator
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional
 
+from mcp.server import Server
+from mcp.server.auth.middleware.bearer_auth import (
+    BearerAuthBackend,
+    RequireAuthMiddleware,
+)
+from mcp.server.auth.provider import ProviderTokenVerifier
+from mcp.server.auth.routes import (
+    build_resource_metadata_url,
+    create_auth_routes,
+    create_protected_resource_routes,
+)
+from mcp.server.auth.settings import (
+    AuthSettings,
+    ClientRegistrationOptions,
+    RevocationOptions,
+)
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.types import CallToolResult, TextContent, Tool
 from pydantic import AnyHttpUrl
 from starlette.applications import Starlette
 from starlette.middleware.authentication import AuthenticationMiddleware
@@ -34,24 +53,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from mcp.server import Server
-from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAuthMiddleware
-from mcp.server.auth.provider import ProviderTokenVerifier
-from mcp.server.auth.routes import (
-    build_resource_metadata_url,
-    create_auth_routes,
-    create_protected_resource_routes,
-)
-from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.types import Tool, TextContent, CallToolResult
-
-from .client import KimaiClient, KimaiAPIError
+from .client import KimaiAPIError, KimaiClient
 from .oauth import KimaiOAuthProvider
 from .oidc import OIDCConfig
-from .server import __version__, format_api_error, error_result
-from .tools.errors import ToolError
-from .user_config import UsersConfig, UserConfig
 from .security import (
     EnumerationProtection,
     RateLimitConfig,
@@ -60,9 +64,12 @@ from .security import (
     get_client_ip,
     random_delay,
 )
+from .server import __version__, error_result, format_api_error
+from .tools.errors import ToolError
 
 # Shared tool registry (single source of truth for both servers)
 from .tools.registry import all_tools, dispatch_tool
+from .user_config import UserConfig, UsersConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -80,9 +87,7 @@ def is_low_entropy_slug(slug: str) -> bool:
     """
     if len(slug) < 16:
         return True
-    if slug.isalpha() and slug.islower():
-        return True
-    return False
+    return bool(slug.isalpha() and slug.islower())
 
 
 class UserMCPSession:
@@ -97,7 +102,7 @@ class UserMCPSession:
         """
         self.user_slug = user_slug
         self.config = config
-        self.kimai_client: Optional[KimaiClient] = None
+        self.kimai_client: KimaiClient | None = None
 
         # Create MCP server for this user
         self.mcp_server = Server(f"kimai-mcp-{user_slug}")
@@ -107,7 +112,7 @@ class UserMCPSession:
         self.mcp_server.call_tool()(self._call_tool)
 
         # Session manager (created during initialization)
-        self.session_manager: Optional[StreamableHTTPSessionManager] = None
+        self.session_manager: StreamableHTTPSessionManager | None = None
 
     async def initialize(self) -> None:
         """Initialize the Kimai client and verify connection."""
@@ -140,13 +145,13 @@ class UserMCPSession:
             await self.kimai_client.close()
             self.kimai_client = None
 
-    async def _list_tools(self) -> List[Tool]:
+    async def _list_tools(self) -> list[Tool]:
         """List all available MCP tools."""
         return all_tools()
 
     async def _call_tool(
-        self, name: str, arguments: Optional[Dict[str, Any]] = None
-    ) -> Union[List[TextContent], CallToolResult]:
+        self, name: str, arguments: dict[str, Any] | None = None
+    ) -> list[TextContent] | CallToolResult:
         """Handle tool calls."""
         if self.kimai_client is None:
             return error_result("Error: Kimai client not initialized")
@@ -168,8 +173,8 @@ class UserMCPSession:
             # Use the shared helpers so stdio and remote transports stay identical
             return error_result(format_api_error(e))
         except Exception as e:
-            logger.error(f"Error for user '{self.user_slug}' calling tool {name}: {e}", exc_info=True)
-            return error_result(f"Error: {str(e)}")
+            logger.exception(f"Error for user '{self.user_slug}' calling tool {name}")
+            return error_result(f"Error: {e!s}")
 
 
 class MCPRoutingMiddleware:
@@ -195,10 +200,10 @@ class MCPRoutingMiddleware:
     def __init__(
         self,
         app: ASGIApp,
-        user_sessions: Dict[str, UserMCPSession],
-        oauth_mcp_app: Optional[ASGIApp] = None,
+        user_sessions: dict[str, UserMCPSession],
+        oauth_mcp_app: ASGIApp | None = None,
         legacy_slugs_enabled: bool = True,
-        trusted_proxies: Optional[List[str]] = None,
+        trusted_proxies: list[str] | None = None,
     ):
         """Initialize middleware.
 
@@ -302,11 +307,11 @@ class StreamableHTTPMCPServer:
         host: str = "0.0.0.0",
         port: int = 8000,
         rate_limit_rpm: int = 60,
-        public_url: Optional[str] = None,
-        trusted_proxies: Optional[List[str]] = None,
+        public_url: str | None = None,
+        trusted_proxies: list[str] | None = None,
         disable_legacy_slugs: bool = False,
-        oauth_state_file: Optional[str] = None,
-        oidc_config: Optional[OIDCConfig] = None,
+        oauth_state_file: str | None = None,
+        oidc_config: OIDCConfig | None = None,
     ):
         """Initialize the server.
 
@@ -329,7 +334,7 @@ class StreamableHTTPMCPServer:
         self.users_config = users_config
         self.host = host
         self.port = port
-        self.user_sessions: Dict[str, UserMCPSession] = {}
+        self.user_sessions: dict[str, UserMCPSession] = {}
         # Serializes on-demand (re)initialization of sessions for configured users
         # whose startup init failed (e.g. Kimai was briefly unreachable).
         self._session_init_lock = asyncio.Lock()
@@ -360,8 +365,8 @@ class StreamableHTTPMCPServer:
         )
 
         # References for the periodic security cleanup task
-        self._rate_limit_middleware: Optional[RateLimitMiddleware] = None
-        self._routing_middleware: Optional[MCPRoutingMiddleware] = None
+        self._rate_limit_middleware: RateLimitMiddleware | None = None
+        self._routing_middleware: MCPRoutingMiddleware | None = None
 
     async def initialize_users(self) -> None:
         """Initialize all user sessions."""
@@ -369,7 +374,9 @@ class StreamableHTTPMCPServer:
             session = UserMCPSession(slug, config)
             try:
                 await session.initialize()
-            except Exception as e:
+            # One unreachable Kimai instance or bad token must not prevent the
+            # other configured users from being served.
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Failed to initialize user '{slug}': {e}")
                 # Release resources (e.g. the httpx client) of the failed session
                 with contextlib.suppress(Exception):
@@ -388,7 +395,8 @@ class StreamableHTTPMCPServer:
             try:
                 await session.cleanup()
                 logger.info(f"Cleaned up session for user '{slug}'")
-            except Exception as e:
+            # Shutdown path: keep cleaning up the remaining users regardless.
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Error cleaning up user '{slug}': {e}")
 
     def _warn_low_entropy_slugs(self) -> None:
@@ -418,7 +426,9 @@ class StreamableHTTPMCPServer:
                 self.oauth_provider.cleanup_expired()
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            # The loop must survive a failing iteration, otherwise rate-limiter
+            # and OAuth state are never pruned again.
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Error in security cleanup task: {e}")
 
     @contextlib.asynccontextmanager
@@ -490,7 +500,7 @@ class StreamableHTTPMCPServer:
             "documentation": "https://github.com/glazperle/kimai_mcp",
         })
 
-    async def _ensure_session(self, slug: Optional[str]) -> Optional["UserMCPSession"]:
+    async def _ensure_session(self, slug: str | None) -> Optional["UserMCPSession"]:
         """Return an active session for the slug, initializing it on demand.
 
         Sessions whose startup init failed (e.g. Kimai temporarily unreachable)
@@ -513,7 +523,9 @@ class StreamableHTTPMCPServer:
             new_session = UserMCPSession(slug, self.users_config.users[slug])
             try:
                 await new_session.initialize()
-            except Exception as e:
+            # A failing on-demand init is answered with a 404/503 for this
+            # request; it must not propagate into the ASGI stack.
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"On-demand initialization failed for user '{slug}': {e}")
                 with contextlib.suppress(Exception):
                     await new_session.cleanup()
@@ -763,7 +775,7 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_oidc_config(args: argparse.Namespace) -> Optional[OIDCConfig]:
+def _build_oidc_config(args: argparse.Namespace) -> OIDCConfig | None:
     """Build an OIDCConfig from CLI/env if the oidc backend is selected, else None.
 
     Raises ValueError on a misconfigured oidc backend (handled by main()).
@@ -792,7 +804,7 @@ def _build_oidc_config(args: argparse.Namespace) -> Optional[OIDCConfig]:
         os.getenv("KIMAI_MCP_OIDC_ALLOW_UNVERIFIED_EMAIL", "").lower() in ("1", "true", "yes")
     )
 
-    kwargs: Dict[str, object] = {"issuer": issuer, "client_id": client_id}
+    kwargs: dict[str, object] = {"issuer": issuer, "client_id": client_id}
     if client_secret:
         kwargs["client_secret"] = client_secret
     if discovery_url:
@@ -870,10 +882,10 @@ def main() -> int:
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
         return 1
-    except Exception as e:
-        logger.error(f"Server error: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Server error")
         return 1
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())
