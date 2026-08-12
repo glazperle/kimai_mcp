@@ -22,8 +22,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: pip install -e ".[dev,server]"
+      # scripts/ is linted too: some ruff rules (the EXE family, which checks the
+      # executable bit) are no-ops on Windows, so a Linux runner is the only
+      # place they are ever evaluated.
       - name: Run linting
-        run: ruff check src/ tests/
+        run: ruff check src/ tests/ scripts/
       - name: Run tests
         if: hashFiles('tests/') != ''
         run: pytest tests/ -v
