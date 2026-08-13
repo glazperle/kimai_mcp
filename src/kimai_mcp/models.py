@@ -21,6 +21,25 @@ class KimaiModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class AccessTokenInfo(KimaiModel):
+    """Metadata of a personal API token.
+
+    Served by the ``ApiTokenBundle`` plugin (see ``kimai-plugin/ApiTokenBundle``);
+    core Kimai has no endpoint that lists or creates access tokens.
+    """
+
+    id: int
+    name: str | None = None
+    last_usage: str | None = Field(None, alias="lastUsage")
+    expires_at: str | None = Field(None, alias="expiresAt")
+
+
+class AccessTokenCreated(AccessTokenInfo):
+    """A freshly created API token - ``token`` is only ever returned once."""
+
+    token: str
+
+
 class User(KimaiModel):
     """User model (serializer group ``Default``).
 

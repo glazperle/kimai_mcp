@@ -10,6 +10,8 @@ from .models import (
     Absence,
     AbsenceFilter,
     AbsenceForm,
+    AccessTokenCreated,
+    AccessTokenInfo,
     Activity,
     ActivityEditForm,
     ActivityExtended,
@@ -954,7 +956,41 @@ class KimaiClient:
     async def delete_api_token(self, token_id: int) -> dict[str, Any]:
         """Delete an API token (only own tokens)."""
         return await self._request("DELETE", f"/users/api-token/{token_id}")
-    
+
+    async def create_api_token(
+        self,
+        user_id: int,
+        name: str,
+        expires_at: str | None = None,
+        replace_existing: bool = True,
+    ) -> AccessTokenCreated:
+        """Create an API token for a user and return it (shown only once).
+
+        Requires the ``ApiTokenBundle`` plugin (``kimai-plugin/ApiTokenBundle``)
+        on the Kimai server; core Kimai can only create tokens through its web
+        UI. The calling token must belong to a user holding
+        ``api-token_other_profile`` (ROLE_SUPER_ADMIN by default) unless it is
+        creating a token for its own account.
+
+        Raises:
+            KimaiAPIError: 404 if the plugin is not installed, 403 if the
+                calling token lacks the permission.
+        """
+        payload: dict[str, Any] = {"name": name, "replaceExisting": replace_existing}
+        if expires_at:
+            payload["expiresAt"] = expires_at
+        data = await self._request("POST", f"/users/{user_id}/api-token", json=payload)
+        return AccessTokenCreated(**data)
+
+    async def get_api_tokens(self, user_id: int) -> list[AccessTokenInfo]:
+        """List a user's API token metadata (never the token value).
+
+        Requires the ``ApiTokenBundle`` plugin, see :meth:`create_api_token`.
+        """
+        data = await self._request("GET", f"/users/{user_id}/api-token")
+        return [AccessTokenInfo(**item) for item in data]
+
+
     # Invoice endpoints
     
     async def get_invoices(self, filters: InvoiceFilter | None = None) -> list[Invoice]:
