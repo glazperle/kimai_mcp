@@ -234,6 +234,17 @@ def resolve_kimai_user(
             keys.add(normalize(local_part(user.email)))
         return {k for k in keys if k}
 
+    # A single given name is not an identifier. The normalized rule compares an
+    # address local part against usernames, *display names* and the local part of
+    # a possibly different mail domain, so "max@corp.example" would match a
+    # colleague whose Kimai alias is "Max" or whose address is
+    # "max@partner.example" - one candidate each, so the ambiguity guard never
+    # fires and the wrong person's token gets minted. Requiring at least two name
+    # parts keeps the case this rule exists for (anna.vondorf@ vs. the alias
+    # "Anna von Dorf") and drops the class that collides. Single-token addresses
+    # still reach the exact rules above, and the fuzzy tier below.
+    norm_local_is_evidence = len(name_parts(idp_local)) >= 2
+
     all_rules: dict[str, list[User]] = {
         "email": [u for u in candidates if u.email and u.email.strip().lower() == idp_email],
         "username==identity": [
@@ -242,7 +253,9 @@ def resolve_kimai_user(
         "username==local-part": [
             u for u in candidates if u.username.strip().lower() == idp_local
         ],
-        "normalized": [u for u in candidates if norm_local and norm_local in user_keys(u)],
+        "normalized": [
+            u for u in candidates if norm_local_is_evidence and norm_local in user_keys(u)
+        ],
         "display-name": [
             u
             for u in candidates

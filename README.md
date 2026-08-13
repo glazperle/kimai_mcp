@@ -144,7 +144,7 @@ kimai-mcp-streamable \
 | Mode | Rules |
 | ---- | ----- |
 | `exact` | Kimai `email` equals the identity; Kimai `username` equals the identity |
-| `normalized` (default) | …plus `username` equals the address local part, plus a folded comparison of username/alias/email that makes `anna.vondorf` and `Anna von Dorf` compare equal |
+| `normalized` (default) | …plus `username` equals the address local part, plus a folded comparison of username/alias/email that makes `anna.vondorf` and `Anna von Dorf` compare equal. The folded comparison needs an address of at least two name parts, so `max@` is never matched against a colleague whose alias is `Max` or whose address is `max@` on another mail domain |
 | `fuzzy` | …plus the `name` / `given_name`+`family_name` claims against the Kimai alias, plus single name parts (`anna@` vs. `anna.vondorf@`) |
 
 The `fuzzy` rules are heuristics — enable them only if you know the shape of your directory. The minted token is verified against `/api/users/me` and discarded if it resolves to a different user, but that guards against a wrong *token*, not a wrong *match*.

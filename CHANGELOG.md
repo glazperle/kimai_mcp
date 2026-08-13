@@ -22,7 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     resolves to a different user — but that guards a wrong *token*, not a wrong *match*, which is
     why the two name-based heuristics only run with `--provision-match fuzzy`. The default,
     `normalized`, compares emails, usernames and address local parts with umlaut/diacritic folding
-    (`anna.vondorf` == `Anna von Dorf`); `exact` restricts it to full equality.
+    (`anna.vondorf` == `Anna von Dorf`); `exact` restricts it to full equality. The folded
+    comparison requires an address of at least two name parts, because a single given name is not
+    an identifier: `max@corp.example` must not be matched to a colleague whose Kimai alias is
+    `Max` or whose address is `max@partner.example`. Those produce exactly one candidate, so the
+    ambiguity guard cannot catch them — the rule itself has to refuse.
   - **Off by default and strictly additive.** Every failure mode — no match, ambiguous match,
     plugin missing, admin token without permission, Kimai unreachable — answers with the same
     generic "not authorized" page the OIDC callback already returned, with the reason server-side

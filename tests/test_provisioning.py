@@ -93,6 +93,45 @@ def test_matches_normalized_alias():
     assert result.rule == "normalized"
 
 
+def test_normalized_rule_ignores_a_single_given_name_across_mail_domains():
+    """max@corp must not be matched to a colleague who is max@partner.
+
+    Only one candidate exists, so the ambiguity guard cannot help here - the
+    rule itself has to refuse, or the wrong person's token gets minted.
+    """
+    users = [user(9, "mschmidt", alias="Martin Schmidt", email="max@partner.example")]
+    result = resolve_kimai_user(
+        users,
+        "max@corp.example",
+        display_name="Max Mustermann",
+        given_name="Max",
+        family_name="Mustermann",
+    )
+    assert not result.matched
+    assert result.reason == "not_found"
+
+
+def test_normalized_rule_does_not_match_an_address_against_a_first_name_alias():
+    users = [user(5, "k.lehmann", alias="Max")]
+    result = resolve_kimai_user(users, "max@corp.example")
+    assert not result.matched
+
+
+def test_a_single_token_address_still_matches_an_exact_username():
+    """Tightening the normalized rule must not close the exact path above it."""
+    users = [user(4, "maximilian")]
+    result = resolve_kimai_user(users, "maximilian@example.com")
+    assert result.user.id == 4
+    assert result.rule == "username==local-part"
+
+
+def test_normalized_rule_still_folds_a_two_part_login():
+    users = [user(4, "annasmith")]
+    result = resolve_kimai_user(users, "anna.smith@example.com")
+    assert result.user.id == 4
+    assert result.rule == "normalized"
+
+
 def test_matches_display_name_claim():
     users = [user(11, "as2", alias="Anna Smith")]
     result = resolve_kimai_user(
