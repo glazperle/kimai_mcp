@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Automatic Kimai onboarding for OIDC logins** (`--auto-provision`, `provisioning.py`). Until now
+  every user had to exist in `users.json` before they could sign in, together with an API token an
+  administrator first clicked together in Kimai's web UI — two manual steps before a new colleague
+  can use the connector at all. With the flag set, an OIDC identity that matches no configured user
+  is resolved against Kimai's own user list and Kimai mints that user's personal API token on the
+  spot, so signing in with the identity provider is the only step a user ever performs.
+  - Matching runs six rules from strongest to weakest and stops at the first that matches. **Every
+    rule must produce exactly one candidate**; a rule that hits several users aborts with
+    "ambiguous" instead of guessing, because a wrong match would hand one employee another
+    employee's token. The minted token is checked against `/api/users/me` and discarded if it
+    resolves to a different user — but that guards a wrong *token*, not a wrong *match*, which is
+    why the two name-based heuristics only run with `--provision-match fuzzy`. The default,
+    `normalized`, compares emails, usernames and address local parts with umlaut/diacritic folding
+    (`anna.vondorf` == `Anna von Dorf`); `exact` restricts it to full equality. The folded
+    comparison requires an address of at least two name parts, because a single given name is not
+    an identifier: `max@corp.example` must not be matched to a colleague whose Kimai alias is
+    `Max` or whose address is `max@partner.example`. Those produce exactly one candidate, so the
+    ambiguity guard cannot catch them — the rule itself has to refuse.
+  - **Off by default and strictly additive.** Every failure mode — no match, ambiguous match,
+    plugin missing, admin token without permission, Kimai unreachable — answers with the same
+    generic "not authorized" page the OIDC callback already returned, with the reason server-side
+    in the log only. Enabling it cannot change behaviour for a deployment that works today.
+  - Provisioned users live in memory, like the OAuth access and refresh tokens; `--provision-store
+    FILE` keeps them across restarts (plaintext tokens, written `0600`). Re-provisioning is
+    idempotent — tokens are replaced by name — so a restart without the store costs one Kimai call
+    at the next sign-in and leaves no dead tokens in the user's profile. A hand-written
+    `users.json` entry always wins over a stored one.
+  - Configuration mirrors the `--oidc-*` family: `--provision-kimai-url`, `--provision-admin-token`,
+    `--provision-token-name`, `--provision-match`, `--provision-store`, `--provision-ssl-verify`,
+    each with a `KIMAI_MCP_PROVISION_*` environment variable. A half-configured feature aborts at
+    startup instead of silently rejecting every first sign-in.
+- **`kimai-plugin/ApiTokenBundle`** — a small Kimai plugin supplying the endpoint Kimai lacks:
+  `POST /api/users/{id}/api-token` (plus `GET` for metadata). Core Kimai can only *delete* tokens
+  through the API; creating one is a web-form action, so the alternative would have been driving an
+  admin web session through that HTML form. The plugin reuses Kimai's own `api-token` voter, i.e.
+  it grants nothing the Kimai UI would not — the calling token needs `api-token_other_profile`
+  (ROLE_SUPER_ADMIN by default). Requires Kimai 2.65+, is part of neither the Python package nor
+  the Docker image, and has no automated tests: this repository's CI has no PHP toolchain.
+- `KimaiClient.create_api_token()` / `get_api_tokens()` and the `AccessTokenInfo` /
+  `AccessTokenCreated` models — the client side of that plugin.
+- `UsersConfig.load(allow_empty=True)` and `UsersConfig.add_user()`. Without the first, a
+  provisioning-only deployment could not boot at all: both loaders and `initialize_users()`
+  insisted on at least one user existing before anybody had signed in.
+
 ## [2.16.0] - 2026-08-11
 
 Ports the server to MCP Python SDK 2.x, catches up with Kimai 2.62 - 2.65, and fixes a group of defects a review of the port surfaced. Several of them are long-standing and silent: the tool reported success while the field never reached Kimai.

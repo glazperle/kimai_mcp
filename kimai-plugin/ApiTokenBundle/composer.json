@@ -1,0 +1,27 @@
+{
+    "name": "kimai-mcp/api-token-bundle",
+    "description": "Adds the missing REST endpoint for creating a personal API token on behalf of a user (admin only).",
+    "type": "kimai-plugin",
+    "version": "1.0.0",
+    "keywords": [
+        "kimai",
+        "kimai-plugin"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Kimai MCP Contributors"
+        }
+    ],
+    "extra": {
+        "kimai": {
+            "require": 26500,
+            "name": "API Token Provisioning"
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "KimaiPlugin\\ApiTokenBundle\\": ""
+        }
+    }
+}

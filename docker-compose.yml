@@ -53,6 +53,15 @@ services:
       # Set to true to disable the deprecated /mcp/{slug} endpoints
       - KIMAI_MCP_DISABLE_LEGACY_SLUGS=${KIMAI_MCP_DISABLE_LEGACY_SLUGS:-false}
 
+      # Automatic onboarding of OIDC identities (needs --auth-backend oidc and the
+      # ApiTokenBundle plugin on the Kimai server; see kimai-plugin/ApiTokenBundle).
+      # Uncomment to enable - the admin token needs 'api-token_other_profile'.
+      # - KIMAI_MCP_AUTO_PROVISION=${KIMAI_MCP_AUTO_PROVISION:-false}
+      # - KIMAI_MCP_PROVISION_KIMAI_URL=${KIMAI_MCP_PROVISION_KIMAI_URL:-}
+      # - KIMAI_MCP_PROVISION_ADMIN_TOKEN=${KIMAI_MCP_PROVISION_ADMIN_TOKEN:-}
+      # - KIMAI_MCP_PROVISION_MATCH=${KIMAI_MCP_PROVISION_MATCH:-normalized}
+      # - KIMAI_MCP_PROVISION_STORE=${KIMAI_MCP_PROVISION_STORE:-/app/config/provisioned_users.json}
+
     # Ports
     ports:
       - "${SERVER_PORT:-8000}:8000"

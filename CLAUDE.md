@@ -64,7 +64,7 @@ Notes:
 - The SSE server (`sse_server.py`, command `kimai-mcp-server`) was **removed in v2.16.0**. It had been non-functional since v2.12.0 (broken transport wiring, and the SSE transport is no longer part of the MCP specification). The SDK still ships `mcp.server.sse`, so this was dead code in this project, not a forced removal.
 - `--kimai-user` / `KIMAI_DEFAULT_USER` is deprecated: accepted but ignored (warning is logged). Use the `user_scope` parameter of the tools instead.
 - The streamable server serves an OAuth-protected `/mcp` endpoint (DCR + PKCE, login form at `/oauth/login` with user slug + `auth_secret`). The legacy `/mcp/{slug}` endpoints still work but are deprecated and can be disabled with `--disable-legacy-slugs`.
-- `users.json` schema (see `src/kimai_mcp/user_config.py`): per slug `kimai_url`, `kimai_token`, optional `ssl_verify`, optional `auth_secret` (env override: `KIMAI_USER_<SLUG>_AUTH_SECRET`). Slugs must match `^[a-zA-Z0-9_-]+$`; keys starting with `_` are comments. The former `kimai_user_id` field was removed and is ignored when present.
+- `users.json` schema (see `src/kimai_mcp/user_config.py`): per slug `kimai_url`, `kimai_token`, optional `ssl_verify`, optional `auth_secret` (env override: `KIMAI_USER_<SLUG>_AUTH_SECRET`), optional `oidc_identity`. Slugs must match `^[a-zA-Z0-9_-]+$`; keys starting with `_` are comments. The former `kimai_user_id` field was removed and is ignored when present. With `--auto-provision`, users that are *not* in this file are added at runtime and exist only in memory unless `--provision-store` is set.
 
 ## Releasing a New Version
 
@@ -109,6 +109,11 @@ If PyPI deployment fails with "version already exists", the version numbers in t
 2. **Streamable HTTP Server (`streamable_http_server.py`)**: Multi-user remote server for Claude.ai Connectors. Routes the OAuth-protected `/mcp` endpoint (token subject = user slug) and the deprecated legacy `/mcp/{slug}` endpoints to per-user MCP sessions. Includes rate limiting, security headers, enumeration protection and trusted-proxy handling.
 
 3. **OAuth Provider (`oauth.py`)**: Embedded OAuth 2.1 authorization server (Dynamic Client Registration, mandatory PKCE S256, HTML login form at `/oauth/login` with user slug + `auth_secret`, opaque access tokens ~1h / refresh tokens ~30 days, in-memory token store, optional client persistence via state file).
+
+3a. **Automatic provisioning (`provisioning.py`)**: Optional (`--auto-provision`, off by default). Resolves a verified OIDC identity to an existing Kimai user and has Kimai mint that user's personal API token, so a user never has to be pre-declared in `users.json`. Hooks into exactly one place — the `match is None` branch of `oauth.py::handle_oidc_callback` — and returns the same `(slug, UserConfig)` shape as `get_user_by_oidc_identity()`, so every failure mode falls through to the pre-existing generic 403. Needs the `kimai-plugin/ApiTokenBundle` plugin on the Kimai server (core Kimai can only *delete* access tokens via the API) and an admin token with `api-token_other_profile`.
+   - Matching runs strongest-rule-first and **aborts on ambiguity instead of guessing** — a wrong match hands one employee another employee's token. The `/api/users/me` check on the minted token guards against a wrong *token*, not a wrong *match*, which is why the two name-based heuristics are behind `--provision-match fuzzy`.
+   - Provisioned users are in-memory by default (like the OAuth tokens); `--provision-store FILE` persists them, `0600`, hand-written config always wins.
+   - `UsersConfig.load(allow_empty=True)` and the softened `initialize_users()` check exist for this feature: a "sign in and nothing else" deployment has no users until someone signs in.
 
 4. **User Configuration (`user_config.py`)**: Multi-user configuration (`users.json` or env vars) with slug validation and per-user `auth_secret` support.
 
