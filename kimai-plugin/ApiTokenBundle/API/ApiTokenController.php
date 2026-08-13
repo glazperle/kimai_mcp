@@ -119,7 +119,14 @@ final class ApiTokenController extends BaseApiController
         $payload = $this->decodeBody($request);
         $name = $this->readName($payload);
         $expiresAt = $this->readExpiresAt($payload);
-        $replaceExisting = (bool) ($payload['replaceExisting'] ?? false);
+        // filter_var, not a (bool) cast: the string "false" casts to true, so a
+        // client sending {"replaceExisting": "false"} would get the opposite of
+        // what it asked for and have its existing token deleted.
+        $replaceExisting = filter_var(
+            $payload['replaceExisting'] ?? false,
+            \FILTER_VALIDATE_BOOL,
+            \FILTER_NULL_ON_FAILURE
+        ) ?? false;
 
         if ($replaceExisting) {
             foreach ($this->accessTokenRepository->findForUser($profile) as $existing) {

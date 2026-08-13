@@ -30,6 +30,7 @@ the feature cannot regress a working deployment.
 import asyncio
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -461,6 +462,11 @@ class ProvisionedUserStore:
             tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
             with tmp_path.open("w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+                # Without the fsync the rename can reach the disk before the
+                # data does, so a host crash leaves a correctly named but
+                # truncated file - the outcome the temp file exists to prevent.
+                f.flush()
+                os.fsync(f.fileno())
             # Set the mode before the rename so the file is never briefly
             # world-readable while it already holds tokens.
             tmp_path.chmod(0o600)
