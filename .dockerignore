@@ -67,5 +67,9 @@ tests/
 # Examples
 examples/
 
+# Kimai-side PHP plugin - deployed into the Kimai host's var/plugins/,
+# never into this server's image
+kimai-plugin/
+
 # CI/CD
 .github/

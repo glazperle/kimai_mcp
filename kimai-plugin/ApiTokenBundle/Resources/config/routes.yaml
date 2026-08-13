@@ -1,0 +1,4 @@
+apitoken.api:
+    resource: "@ApiTokenBundle/API/"
+    type: attribute
+    prefix: /api

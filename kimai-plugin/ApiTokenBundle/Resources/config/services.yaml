@@ -1,0 +1,19 @@
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+        public: false
+
+    # The API controller needs to be a service: autoconfigure gives it the
+    # controller.service_arguments tag, without which Symfony cannot inject the
+    # AccessTokenRepository and every request 500s.
+    KimaiPlugin\ApiTokenBundle\API\:
+        resource: '../../API/*'
+
+    # The bundle class itself, so Kimai lists the plugin. PluginManager iterates
+    # services tagged PluginInterface (the interface carries AutoconfigureTag),
+    # so a bundle that is not a service works but stays invisible in /api/plugins
+    # and the admin UI. Registered explicitly rather than through a namespace
+    # glob: a glob is evaluated at compile time and can abort a Kimai update
+    # mid-`composer install`.
+    KimaiPlugin\ApiTokenBundle\ApiTokenBundle: ~
