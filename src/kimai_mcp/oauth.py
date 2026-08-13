@@ -35,6 +35,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from .oidc import OIDCClient, OIDCConfig, OIDCError, OIDCLoginState
+from .provisioning import KimaiProvisioner
 from .user_config import UsersConfig, _env_key_for_slug
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         public_url: str,
         state_file: str | Path | None = None,
         oidc_config: OIDCConfig | None = None,
+        provisioner: KimaiProvisioner | None = None,
     ):
         """Initialize the provider.
 
@@ -132,12 +134,16 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             oidc_config: Optional OIDC relying-party config. When set, users
                 authenticate against an external OIDC provider instead of the
                 built-in slug + auth_secret login form.
+            provisioner: Optional automatic onboarding. When set, an OIDC
+                identity that matches no configured user is resolved against
+                Kimai and given its own API token instead of being rejected.
         """
         self.users_config = users_config
         self.public_url = public_url.rstrip("/")
         self.state_file = Path(state_file) if state_file else None
         # Federated OIDC login backend (None -> built-in local login form).
         self.oidc: OIDCClient | None = OIDCClient(oidc_config) if oidc_config else None
+        self.provisioner = provisioner
         # Pending federated logins keyed by the OIDC `state` we sent to the IdP.
         self._oidc_logins: dict[str, OIDCLoginState] = {}
 
@@ -411,6 +417,15 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
             return self._oidc_error("The identity provider did not return a usable identity.", 401)
 
         match = self.users_config.get_user_by_oidc_identity(identity)
+        if match is None and self.provisioner is not None:
+            # First sign-in: try to link a Kimai account and mint its token, so
+            # signing in with the IdP is all the user ever has to do. Every
+            # failure mode falls through to the same 403 below.
+            try:
+                match = await self.provisioner.provision(identity, claims, self.users_config)
+            # An onboarding problem must never break the login path itself.
+            except Exception:
+                logger.exception(f"Automatic provisioning failed for identity '{identity}'")
         if match is None:
             # Detailed reason is logged server-side only; the response stays generic
             # (consistent with the local login form's deliberate non-disclosure).

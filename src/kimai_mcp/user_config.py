@@ -108,7 +108,7 @@ class UsersConfig(BaseModel):
                 logger.info(f"Loaded oidc_identity for user '{slug}' from environment")
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "UsersConfig":
+    def from_file(cls, path: str | Path, *, allow_empty: bool = False) -> "UsersConfig":
         """Load users configuration from a JSON file.
 
         Expected format:
@@ -123,6 +123,12 @@ class UsersConfig(BaseModel):
             "kimai_token": "api_token_for_anna"
           }
         }
+
+        Args:
+            path: Path to the JSON file.
+            allow_empty: Accept a file that declares no users. Only meaningful
+                with automatic provisioning enabled, where the user set is
+                filled in at login time rather than declared up front.
         """
         path = Path(path)
         if not path.exists():
@@ -153,14 +159,14 @@ class UsersConfig(BaseModel):
                 logger.error(f"Error parsing config for user '{slug}': {e}")
                 raise ValueError(f"Invalid config for user '{slug}': {e}") from e
 
-        if not users:
+        if not users and not allow_empty:
             raise ValueError("No users configured in config file")
 
         cls._apply_env_overrides(users)
         return cls(users=users)
 
     @classmethod
-    def from_env(cls) -> "UsersConfig":
+    def from_env(cls, *, allow_empty: bool = False) -> "UsersConfig":
         """Load users configuration from environment variables.
 
         Supports two formats:
@@ -173,6 +179,10 @@ class UsersConfig(BaseModel):
            KIMAI_USER_MAX_TOKEN=xxx
            KIMAI_USER_MAX_SSL_VERIFY=true (optional)
            KIMAI_USER_MAX_AUTH_SECRET=oauth-login-secret (optional)
+
+        Args:
+            allow_empty: Accept an environment that declares no users. Only
+                meaningful with automatic provisioning enabled.
         """
         users = {}
 
@@ -191,7 +201,7 @@ class UsersConfig(BaseModel):
                         continue
                     users[slug] = UserConfig(**user_data)
                     logger.info(f"Loaded config for user '{slug}' from USERS_CONFIG")
-                if not users:
+                if not users and not allow_empty:
                     raise ValueError("No valid users configured in USERS_CONFIG")
                 cls._apply_env_overrides(users)
                 return cls(users=users)
@@ -228,7 +238,7 @@ class UsersConfig(BaseModel):
                 )
                 logger.info(f"Loaded config for user '{slug}' from env vars")
 
-        if not users:
+        if not users and not allow_empty:
             raise ValueError(
                 "No users configured. Set USERS_CONFIG or KIMAI_USER_*_URL/TOKEN env vars, "
                 "or use --users-config to specify a config file."
@@ -237,7 +247,9 @@ class UsersConfig(BaseModel):
         return cls(users=users)
 
     @classmethod
-    def load(cls, config_path: str | Path | None = None) -> "UsersConfig":
+    def load(
+        cls, config_path: str | Path | None = None, *, allow_empty: bool = False
+    ) -> "UsersConfig":
         """Load users configuration from file or environment.
 
         Priority:
@@ -245,21 +257,28 @@ class UsersConfig(BaseModel):
         2. USERS_CONFIG_FILE env var
         3. USERS_CONFIG env var (JSON)
         4. Individual KIMAI_USER_* env vars
+
+        Args:
+            config_path: Explicit path to a users config file.
+            allow_empty: Tolerate a configuration that declares no users at all.
+                Set when automatic provisioning is on: there the user set is
+                discovered at login time, so demanding one up front would make
+                the "sign in and nothing else" deployment impossible to boot.
         """
         # Check for explicit path
         if config_path:
             logger.info(f"Loading users config from: {config_path}")
-            return cls.from_file(config_path)
+            return cls.from_file(config_path, allow_empty=allow_empty)
 
         # Check for config file env var
         config_file_env = os.getenv("USERS_CONFIG_FILE")
         if config_file_env:
             logger.info(f"Loading users config from USERS_CONFIG_FILE: {config_file_env}")
-            return cls.from_file(config_file_env)
+            return cls.from_file(config_file_env, allow_empty=allow_empty)
 
         # Fall back to environment variables
         logger.info("Loading users config from environment variables")
-        return cls.from_env()
+        return cls.from_env(allow_empty=allow_empty)
 
     def get_user(self, slug: str) -> UserConfig | None:
         """Get configuration for a specific user."""
@@ -274,6 +293,22 @@ class UsersConfig(BaseModel):
             if config.oidc_identity and config.oidc_identity.strip().lower() == norm:
                 return slug, config
         return None
+
+    def add_user(self, slug: str, config: UserConfig) -> None:
+        """Register a user at runtime (used by automatic provisioning).
+
+        Raises:
+            ValueError: if the slug is unusable in a URL, or already taken.
+                Overwriting is refused rather than silently replacing a
+                hand-written configuration.
+        """
+        if not SLUG_PATTERN.match(slug):
+            raise ValueError(
+                f"Invalid user slug '{slug}': only letters, digits, '-' and '_' are allowed"
+            )
+        if slug in self.users:
+            raise ValueError(f"User slug '{slug}' is already configured")
+        self.users[slug] = config
 
     def list_users(self) -> list[str]:
         """List all configured user slugs."""

@@ -826,3 +826,236 @@ def test_oidc_callback_provider_error_rejected(make_client, oidc_users_config, m
         follow_redirects=False,
     )
     assert resp.status_code == 400, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Automatic provisioning (OIDC backend + --auto-provision)
+# ---------------------------------------------------------------------------
+
+import json
+
+from kimai_mcp.client import KimaiAPIError
+from kimai_mcp.models import AccessTokenCreated, Plugin, User
+from kimai_mcp.provisioning import ProvisioningConfig
+
+NEWCOMER_EMAIL = "bob.brown@example.com"
+
+
+def _kimai_user(user_id: int, username: str, email: str | None = None) -> User:
+    return User(id=user_id, username=username, email=email, enabled=True)
+
+
+def _make_provisioning_kimai(kimai_users, *, mint_error=None, probe_user=None):
+    """A network-free KimaiClient standing in for both admin client and probe.
+
+    The returned class exposes ``.calls``: every create_api_token() it saw.
+    """
+    calls: list[dict] = []
+
+    class _FakeKimai:
+        def __init__(self, base_url, api_token, **kwargs):
+            self.base_url = base_url
+            self.api_token = api_token
+
+        async def get_users(self, **kwargs):
+            return kimai_users
+
+        async def get_version(self):
+            return FakeVersion()
+
+        async def get_plugins(self):
+            return [Plugin(name="ApiTokenBundle", version="1.0.0")]
+
+        async def create_api_token(self, user_id: int, name: str, replace_existing: bool = True):
+            calls.append({"user_id": user_id, "name": name})
+            if mint_error is not None:
+                raise mint_error
+            return AccessTokenCreated(id=len(calls), name=name, token=f"minted-{user_id}")
+
+        async def get_current_user(self):
+            # Only the probe client is built from a minted token; the admin
+            # client asks the same question during the startup check.
+            if not self.api_token.startswith("minted-"):
+                return kimai_users[0]
+            if probe_user is not None:
+                return probe_user
+            uid = int(self.api_token.rsplit("-", 1)[-1])
+            return next(u for u in kimai_users if u.id == uid)
+
+        async def close(self):
+            pass
+
+    _FakeKimai.calls = calls
+    return _FakeKimai
+
+
+def _provisioning_client(make_client, monkeypatch, fake_kimai, *, users_config=None, **kwargs):
+    monkeypatch.setattr("kimai_mcp.oauth.OIDCClient", _make_fake_oidc(NEWCOMER_EMAIL))
+    monkeypatch.setattr("kimai_mcp.provisioning.KimaiClient", fake_kimai)
+    return make_client(
+        users_config=users_config if users_config is not None else UsersConfig(),
+        oidc_config=OIDCConfig(issuer="https://idp.test", client_id="cid"),
+        provisioning_config=ProvisioningConfig(
+            kimai_url="https://kimai.example.com", admin_token="admin-token", **kwargs
+        ),
+    )
+
+
+def _oidc_callback(http: TestClient, oidc_state: str):
+    return http.get(
+        "/oauth/oidc/callback",
+        params={"code": "idp-code", "state": oidc_state},
+        follow_redirects=False,
+    )
+
+
+def _sign_in(http: TestClient, client_id: str):
+    _, challenge = pkce_pair()
+    return _oidc_callback(http, _oidc_authorize(http, client_id, challenge))
+
+
+def test_provisioning_onboards_an_unknown_identity_end_to_end(make_client, monkeypatch):
+    """The whole point: an identity nobody configured signs in and reaches /mcp."""
+    fake = _make_provisioning_kimai([_kimai_user(7, "bob.brown", email=NEWCOMER_EMAIL)])
+    http = _provisioning_client(make_client, monkeypatch, fake)
+
+    client_info = register_client(http)
+    verifier, challenge = pkce_pair()
+    oidc_state = _oidc_authorize(http, client_info["client_id"], challenge)
+
+    resp = _oidc_callback(http, oidc_state)
+    assert resp.status_code == 302, resp.text
+    code = parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
+
+    resp = http.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT_URI,
+            "client_id": client_info["client_id"],
+            "code_verifier": verifier,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    access_token = resp.json()["access_token"]
+
+    # The runtime slug has to be picked up by the on-demand session path.
+    resp = http.post(
+        "/mcp",
+        json=INIT_PAYLOAD,
+        headers={**MCP_HEADERS, "Authorization": f"Bearer {access_token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert fake.calls == [{"user_id": 7, "name": "Kimai MCP (auto)"}]
+
+
+def test_provisioning_without_a_matching_kimai_user_stays_forbidden(make_client, monkeypatch):
+    fake = _make_provisioning_kimai([_kimai_user(1, "someone.else", email="else@example.com")])
+    users_config = UsersConfig()
+    http = _provisioning_client(make_client, monkeypatch, fake, users_config=users_config)
+
+    resp = _sign_in(http, register_client(http)["client_id"])
+
+    assert resp.status_code == 403, resp.text
+    assert users_config.users == {}
+
+
+def test_provisioning_refuses_an_ambiguous_match(make_client, monkeypatch):
+    fake = _make_provisioning_kimai(
+        [
+            _kimai_user(1, "bob.a", email=NEWCOMER_EMAIL),
+            _kimai_user(2, "bob.b", email=NEWCOMER_EMAIL),
+        ]
+    )
+    users_config = UsersConfig()
+    http = _provisioning_client(make_client, monkeypatch, fake, users_config=users_config)
+
+    resp = _sign_in(http, register_client(http)["client_id"])
+
+    assert resp.status_code == 403, resp.text
+    assert fake.calls == []
+    assert users_config.users == {}
+
+
+def test_provisioning_without_the_plugin_stays_forbidden(make_client, monkeypatch):
+    fake = _make_provisioning_kimai(
+        [_kimai_user(7, "bob.brown", email=NEWCOMER_EMAIL)],
+        mint_error=KimaiAPIError("Not Found", 404),
+    )
+    users_config = UsersConfig()
+    http = _provisioning_client(make_client, monkeypatch, fake, users_config=users_config)
+
+    resp = _sign_in(http, register_client(http)["client_id"])
+
+    assert resp.status_code == 403, resp.text
+    assert users_config.users == {}
+
+
+def test_provisioning_discards_a_token_that_belongs_to_someone_else(make_client, monkeypatch):
+    """The security invariant, asserted end-to-end and not only as a unit test."""
+    fake = _make_provisioning_kimai(
+        [_kimai_user(7, "bob.brown", email=NEWCOMER_EMAIL)],
+        probe_user=_kimai_user(99, "someone.else"),
+    )
+    users_config = UsersConfig()
+    http = _provisioning_client(make_client, monkeypatch, fake, users_config=users_config)
+
+    resp = _sign_in(http, register_client(http)["client_id"])
+
+    assert resp.status_code == 403, resp.text
+    assert users_config.users == {}
+
+
+def test_a_configured_identity_is_never_provisioned(make_client, monkeypatch, oidc_users_config):
+    """Hand-written configuration wins; Kimai admin is not contacted at all."""
+    oidc_users_config.users[USER_SLUG].oidc_identity = NEWCOMER_EMAIL
+    fake = _make_provisioning_kimai([_kimai_user(7, "bob.brown", email=NEWCOMER_EMAIL)])
+    http = _provisioning_client(make_client, monkeypatch, fake, users_config=oidc_users_config)
+
+    resp = _sign_in(http, register_client(http)["client_id"])
+
+    assert resp.status_code == 302, resp.text
+    assert fake.calls == []
+
+
+def test_second_sign_in_reuses_the_slug_and_mints_once(make_client, monkeypatch):
+    fake = _make_provisioning_kimai([_kimai_user(7, "bob.brown", email=NEWCOMER_EMAIL)])
+    users_config = UsersConfig()
+    http = _provisioning_client(make_client, monkeypatch, fake, users_config=users_config)
+
+    client_id = register_client(http)["client_id"]
+    for _ in range(2):
+        assert _sign_in(http, client_id).status_code == 302
+
+    assert len(fake.calls) == 1
+    assert len(users_config.users) == 1
+
+
+def test_provisioning_writes_nothing_without_a_store(make_client, monkeypatch, tmp_path):
+    fake = _make_provisioning_kimai([_kimai_user(7, "bob.brown", email=NEWCOMER_EMAIL)])
+    http = _provisioning_client(make_client, monkeypatch, fake)
+
+    assert _sign_in(http, register_client(http)["client_id"]).status_code == 302
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_provisioning_persists_to_the_store_when_configured(make_client, monkeypatch, tmp_path):
+    store = tmp_path / "provisioned.json"
+    fake = _make_provisioning_kimai([_kimai_user(7, "bob.brown", email=NEWCOMER_EMAIL)])
+    http = _provisioning_client(make_client, monkeypatch, fake, store_path=str(store))
+
+    assert _sign_in(http, register_client(http)["client_id"]).status_code == 302
+
+    persisted = json.loads(store.read_text(encoding="utf-8"))
+    assert persisted[NEWCOMER_EMAIL]["kimai_token"] == "minted-7"
+
+
+def test_server_boots_without_any_configured_user_when_provisioning_is_on(
+    make_client, monkeypatch
+):
+    """A "sign in and nothing else" deployment has no users until someone does."""
+    fake = _make_provisioning_kimai([_kimai_user(7, "bob.brown", email=NEWCOMER_EMAIL)])
+    http = _provisioning_client(make_client, monkeypatch, fake)
+    # Reaching the metadata endpoint at all means the lifespan came up.
+    assert http.get("/.well-known/oauth-authorization-server").status_code == 200

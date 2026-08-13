@@ -62,6 +62,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from .client import KimaiAPIError, KimaiClient
 from .oauth import KimaiOAuthProvider
 from .oidc import OIDCConfig
+from .provisioning import KimaiProvisioner, ProvisionedUserStore, ProvisioningConfig
 from .security import (
     EnumerationProtection,
     RateLimitConfig,
@@ -337,6 +338,7 @@ class StreamableHTTPMCPServer:
         disable_legacy_slugs: bool = False,
         oauth_state_file: str | None = None,
         oidc_config: OIDCConfig | None = None,
+        provisioning_config: ProvisioningConfig | None = None,
     ):
         """Initialize the server.
 
@@ -355,6 +357,9 @@ class StreamableHTTPMCPServer:
             oidc_config: Optional OIDC relying-party config. When set, the OAuth
                 login step federates to an external OIDC provider instead of the
                 built-in slug + auth_secret form.
+            provisioning_config: Optional automatic onboarding config. When set,
+                an OIDC identity without a configured user is resolved against
+                Kimai and given its own API token at first sign-in.
         """
         self.users_config = users_config
         self.host = host
@@ -374,6 +379,27 @@ class StreamableHTTPMCPServer:
 
         self.public_url = (public_url or f"http://localhost:{port}").rstrip("/")
 
+        # Automatic onboarding (optional). The store is loaded here rather than
+        # in main() so that a server constructed directly (tests, embedding)
+        # behaves the same as one started from the CLI.
+        self.provisioner: KimaiProvisioner | None = None
+        if provisioning_config is not None:
+            store = (
+                ProvisionedUserStore(provisioning_config.store_path)
+                if provisioning_config.store_path
+                else None
+            )
+            if store is not None:
+                store.load_into(users_config)
+            self.provisioner = KimaiProvisioner(provisioning_config, store)
+            if self.legacy_slugs_enabled:
+                logger.warning(
+                    "Automatic provisioning is enabled while the deprecated /mcp/{slug} "
+                    "routes are still served. Provisioned slugs are as strong as generated "
+                    "ones, but the slug alone is a credential on that route - consider "
+                    "--disable-legacy-slugs."
+                )
+
         # OAuth 2.1 authorization server settings (SDK scaffolding)
         self.auth_settings = AuthSettings(
             issuer_url=AnyHttpUrl(self.public_url),
@@ -387,6 +413,7 @@ class StreamableHTTPMCPServer:
             public_url=self.public_url,
             state_file=oauth_state_file,
             oidc_config=oidc_config,
+            provisioner=self.provisioner,
         )
 
         # Rate limiting configuration
@@ -417,7 +444,10 @@ class StreamableHTTPMCPServer:
             self.user_sessions[slug] = session
             logger.info(f"Initialized session for user '{slug}'")
 
-        if not self.user_sessions:
+        # With automatic provisioning the user set is discovered at login time,
+        # so "no sessions yet" is the normal state of a fresh deployment rather
+        # than a misconfiguration.
+        if not self.user_sessions and self.provisioner is None:
             raise RuntimeError("No user sessions could be initialized")
 
     async def cleanup_users(self) -> None:
@@ -509,6 +539,8 @@ class StreamableHTTPMCPServer:
         # Initialize users
         await self.initialize_users()
         self._warn_low_entropy_slugs()
+        if self.provisioner is not None:
+            await self.provisioner.check_prerequisites()
 
         # Periodic security cleanup (rate limiter / enumeration protection / OAuth)
         cleanup_task = asyncio.create_task(self._security_cleanup_loop())
@@ -823,6 +855,74 @@ def create_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # Automatic onboarding (optional; requires --auth-backend oidc and the
+    # ApiTokenBundle plugin on the Kimai server)
+    parser.add_argument(
+        "--auto-provision",
+        action="store_true",
+        help=(
+            "Give an OIDC identity without a configured user its own Kimai API token "
+            "at first sign-in instead of rejecting it. Requires --auth-backend oidc and "
+            "the ApiTokenBundle plugin on the Kimai server "
+            "(or set KIMAI_MCP_AUTO_PROVISION=true)"
+        ),
+    )
+    parser.add_argument(
+        "--provision-kimai-url",
+        metavar="URL",
+        help=(
+            "Kimai URL written into provisioned user configs "
+            "(required for --auto-provision; or KIMAI_MCP_PROVISION_KIMAI_URL)"
+        ),
+    )
+    parser.add_argument(
+        "--provision-admin-token",
+        metavar="TOKEN",
+        help=(
+            "Kimai API token used to mint per-user tokens. Needs the "
+            "'api-token_other_profile' permission (ROLE_SUPER_ADMIN by default). "
+            "Prefer the KIMAI_MCP_PROVISION_ADMIN_TOKEN env var over the CLI flag."
+        ),
+    )
+    parser.add_argument(
+        "--provision-token-name",
+        metavar="NAME",
+        help=(
+            "Name of the tokens this server creates, as shown in the user's Kimai "
+            "profile (default: 'Kimai MCP (auto)'; or KIMAI_MCP_PROVISION_TOKEN_NAME)"
+        ),
+    )
+    parser.add_argument(
+        "--provision-match",
+        choices=["exact", "normalized", "fuzzy"],
+        default=None,
+        help=(
+            "How hard to try when matching an identity to a Kimai user: 'exact' "
+            "(email or username equals the identity), 'normalized' (default, also "
+            "compares the address local part and folds dots/umlauts) or 'fuzzy' "
+            "(also compares display names and single name parts). "
+            "Or set KIMAI_MCP_PROVISION_MATCH."
+        ),
+    )
+    parser.add_argument(
+        "--provision-store",
+        metavar="FILE",
+        help=(
+            "JSON file persisting provisioned users across restarts. Holds Kimai API "
+            "tokens in plaintext and is written with mode 0600. Omit to keep them "
+            "in memory only, in which case users are re-provisioned on their next "
+            "sign-in. Or set KIMAI_MCP_PROVISION_STORE."
+        ),
+    )
+    parser.add_argument(
+        "--provision-ssl-verify",
+        metavar="VALUE",
+        help=(
+            "SSL verification for provisioning calls: true, false or a CA path "
+            "(default: true; or KIMAI_MCP_PROVISION_SSL_VERIFY)"
+        ),
+    )
+
     # Security settings
     parser.add_argument(
         "--rate-limit-rpm",
@@ -904,6 +1004,66 @@ def _build_oidc_config(args: argparse.Namespace) -> OIDCConfig | None:
     return OIDCConfig(**kwargs)
 
 
+def _build_provisioning_config(
+    args: argparse.Namespace, oidc_config: OIDCConfig | None
+) -> ProvisioningConfig | None:
+    """Build the automatic-onboarding config from CLI flags / env vars.
+
+    Returns None when the feature is off. Raises ValueError when it is on but
+    half-configured, rather than starting a server that rejects every
+    first-time sign-in for a reason only visible in the log.
+    """
+    enabled = args.auto_provision or (
+        os.getenv("KIMAI_MCP_AUTO_PROVISION", "").lower() in ("1", "true", "yes")
+    )
+    if not enabled:
+        return None
+
+    if oidc_config is None:
+        raise ValueError(
+            "--auto-provision requires --auth-backend oidc: there is no verified "
+            "identity to resolve against Kimai without a federated login."
+        )
+
+    kimai_url = args.provision_kimai_url or os.getenv("KIMAI_MCP_PROVISION_KIMAI_URL")
+    admin_token = args.provision_admin_token or os.getenv("KIMAI_MCP_PROVISION_ADMIN_TOKEN")
+    missing = [
+        name
+        for name, val in (
+            ("--provision-kimai-url", kimai_url),
+            ("--provision-admin-token", admin_token),
+        )
+        if not val
+    ]
+    if missing:
+        raise ValueError(
+            f"--auto-provision requires {', '.join(missing)} "
+            f"(or the matching KIMAI_MCP_PROVISION_* environment variables)"
+        )
+
+    kwargs: dict[str, object] = {"kimai_url": kimai_url, "admin_token": admin_token}
+    token_name = args.provision_token_name or os.getenv("KIMAI_MCP_PROVISION_TOKEN_NAME")
+    if token_name:
+        kwargs["token_name"] = token_name
+    match_mode = args.provision_match or os.getenv("KIMAI_MCP_PROVISION_MATCH")
+    if match_mode:
+        kwargs["match_mode"] = match_mode
+    store_path = args.provision_store or os.getenv("KIMAI_MCP_PROVISION_STORE")
+    if store_path:
+        kwargs["store_path"] = store_path
+    ssl_verify = args.provision_ssl_verify or os.getenv("KIMAI_MCP_PROVISION_SSL_VERIFY")
+    if ssl_verify:
+        kwargs["ssl_verify"] = ssl_verify
+
+    config = ProvisioningConfig(**kwargs)
+    logger.info(
+        f"Automatic provisioning enabled (Kimai: {config.kimai_url}, "
+        f"match mode: {config.match_mode}, "
+        f"store: {config.store_path or 'in-memory'})"
+    )
+    return config
+
+
 def main() -> int:
     """Main entry point."""
     # Load environment variables
@@ -935,9 +1095,13 @@ def main() -> int:
 
     try:
         oidc_config = _build_oidc_config(args)
+        provisioning_config = _build_provisioning_config(args, oidc_config)
 
-        # Load users config
-        users_config = UsersConfig.load(args.users_config)
+        # Load users config. With provisioning on, a configuration that declares
+        # no users is legitimate - they arrive at their first sign-in.
+        users_config = UsersConfig.load(
+            args.users_config, allow_empty=provisioning_config is not None
+        )
         logger.info(f"Loaded configuration for {len(users_config.users)} user(s)")
 
         # Create and run server
@@ -951,6 +1115,7 @@ def main() -> int:
             disable_legacy_slugs=disable_legacy_slugs,
             oauth_state_file=oauth_state_file,
             oidc_config=oidc_config,
+            provisioning_config=provisioning_config,
         )
         server.run()
         return 0
