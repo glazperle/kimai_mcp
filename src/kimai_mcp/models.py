@@ -722,8 +722,12 @@ class ProjectEditForm(KimaiModel):
     number: str | None = None
     order_number: str | None = Field(None, alias="orderNumber")
     order_date: str | None = Field(None, alias="orderDate")  # Format: YYYY-MM-DD
-    start: str | None = None  # Format: YYYY-MM-DD
-    end: str | None = None  # Format: YYYY-MM-DD
+    # Kimai accepts YYYY-MM-DD when creating, but the PATCH form rejects a
+    # date-only value ("Please enter a valid date."); updates need the full
+    # YYYY-MM-DDTHH:MM:SS form. Passed through verbatim - do not call
+    # .isoformat() on these, they are strings.
+    start: str | None = None
+    end: str | None = None
     invoice_text: str | None = Field(None, alias="invoiceText")
     teams: int | None = None  # Team ID
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")

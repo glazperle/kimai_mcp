@@ -481,11 +481,6 @@ class KimaiClient:
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
 
-            if filters.start:
-                params['start'] = filters.start.isoformat()
-            if filters.end:
-                params['end'] = filters.end.isoformat()
-                
             # Handle array parameters
             if filters.customers:
                 params['customers[]'] = filters.customers
@@ -503,22 +498,12 @@ class KimaiClient:
         """Create a new project."""
         payload = project.model_dump(exclude_none=True, by_alias=True)
 
-        if project.start:
-            payload['start'] = project.start.isoformat()
-        if project.end:
-            payload['end'] = project.end.isoformat()
-        
         data = await self._request("POST", "/projects", json=payload)
         return ProjectExtended(**data)
     
     async def update_project(self, project_id: int, project: ProjectEditForm) -> ProjectExtended:
         """Update an existing project."""
         payload = project.model_dump(exclude_none=True, by_alias=True)
-
-        if project.start:
-            payload['start'] = project.start.isoformat()
-        if project.end:
-            payload['end'] = project.end.isoformat()
 
         data = await self._request("PATCH", f"/projects/{project_id}", json=payload)
         return ProjectExtended(**data)

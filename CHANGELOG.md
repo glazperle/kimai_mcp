@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every project create/update carrying a date, and every date-filtered project listing, raised
+  `AttributeError`.** `ProjectEditForm.start`/`end` and `ProjectFilter.start`/`end` are declared
+  `str` ("Format: YYYY-MM-DD"), but `create_project`, `update_project` and `get_projects` called
+  `.isoformat()` on them, so anything setting a project timeframe failed outright with
+  `'str' object has no attribute 'isoformat'`. The calls were also redundant:
+  `model_dump()` had already placed those strings in the payload. Removed.
+  - Same root cause as the timesheet issue below — a model declaring one type while the code
+    assumes another — but a separate code path, so it is fixed separately.
+  - Documented while verifying against a live instance: Kimai accepts a date-only `YYYY-MM-DD`
+    when *creating* a project, but the PATCH form rejects it with "Please enter a valid date."
+    and requires the full `YYYY-MM-DDTHH:MM:SS` form. The model comment said only the former.
+
 - **`timer action=active` failed on every response** ([#24](https://github.com/glazperle/kimai_mcp/issues/24)).
   `GET /timesheets/active` and `GET /timesheets/recent` are declared as `TimesheetCollectionExpanded`
   in Kimai's `src/API/TimesheetController.php`. That schema carries the `Expanded` serializer group,
