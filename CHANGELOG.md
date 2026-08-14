@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ApiTokenBundle`: a failed token replacement could leave a user with no token at all.**
+  `replaceExisting=true` deleted the user's existing tokens of that name and then created the new
+  one, with a flush in between and no transaction around the pair. Anything failing in that window
+  (a dropped database connection, a PHP fatal, a request timeout) destroyed the old token without
+  writing the new one, and the user could not recover on their own because minting a token is an
+  admin-permission operation.
+  - The new token is now created *first* and the superseded ones deleted afterwards, both inside a
+    single `wrapInTransaction`. The two guards are deliberately redundant: the transaction makes the
+    pair atomic, and the ordering is what still holds if the transaction cannot be honoured, since
+    every partial outcome then leaves a working token behind rather than none.
+  - The tokens to delete are collected *before* the new one is created. Kimai's only unique
+    constraint is on the token value, not on `(user, name)`, so "same name" cannot distinguish the
+    old tokens from the new one and the deletion loop would otherwise remove what it just created.
+  - Only the plugin changed; the Python package is unaffected and needs no release.
+
 ## [2.17.0] - 2026-08-14
 
 Adds automatic Kimai onboarding for OIDC logins, and fixes `timer action=active`, which failed on

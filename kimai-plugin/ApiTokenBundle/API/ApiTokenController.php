@@ -13,6 +13,7 @@ use App\API\BaseApiController;
 use App\Entity\AccessToken;
 use App\Entity\User;
 use App\Repository\AccessTokenRepository;
+use Doctrine\ORM\EntityManagerInterface;
 use OpenApi\Attributes as OA;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -49,6 +50,7 @@ final class ApiTokenController extends BaseApiController
 
     public function __construct(
         private readonly AccessTokenRepository $accessTokenRepository,
+        private readonly EntityManagerInterface $entityManager,
     ) {
     }
 
@@ -128,10 +130,16 @@ final class ApiTokenController extends BaseApiController
             \FILTER_NULL_ON_FAILURE
         ) ?? false;
 
+        // Collected before the new token exists. findForUser() would otherwise
+        // return it as well and the deletion below would remove what it just
+        // created: Kimai's only unique constraint is on `token`, so a user may
+        // hold several tokens of the same name and "same name" is not enough to
+        // tell the old ones from the new one.
+        $superseded = [];
         if ($replaceExisting) {
             foreach ($this->accessTokenRepository->findForUser($profile) as $existing) {
                 if ($existing->getName() === $name) {
-                    $this->accessTokenRepository->deleteAccessToken($existing);
+                    $superseded[] = $existing;
                 }
             }
         }
@@ -142,7 +150,29 @@ final class ApiTokenController extends BaseApiController
             $accessToken->setExpiresAt($expiresAt);
         }
 
-        $this->accessTokenRepository->saveAccessToken($accessToken);
+        // Create first, delete second, and both in one transaction.
+        //
+        // Deleting first meant that anything failing in between - a dropped
+        // database connection, a PHP fatal, a request timeout - left the user
+        // with no token at all: the old one was already gone and the new one was
+        // never written. They could not fix that themselves either, because
+        // minting a token is an admin-permission operation.
+        //
+        // The two guards are deliberately redundant. The transaction makes the
+        // pair atomic and hides the brief window in which the user holds two
+        // tokens. The *order* is what still holds if the transaction cannot be
+        // honoured (a storage engine without transactional DDL, an exception
+        // escaping the commit): every partial outcome then leaves a working
+        // token behind rather than none. The cost of the failure mode it does
+        // allow - a stale token surviving - is bounded, because the next
+        // successful replace deletes it.
+        $this->entityManager->wrapInTransaction(function () use ($accessToken, $superseded): void {
+            $this->accessTokenRepository->saveAccessToken($accessToken);
+
+            foreach ($superseded as $existing) {
+                $this->accessTokenRepository->deleteAccessToken($existing);
+            }
+        });
 
         return new JsonResponse(
             $this->serializeToken($accessToken) + ['token' => $accessToken->getToken()],

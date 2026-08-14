@@ -32,8 +32,12 @@ automatically, so nobody has to copy a token by hand.
 
 * `name`: 2–50 characters, shown in the user's profile (default: `API token`).
 * `expiresAt`: `Y-m-d` or ISO 8601, must be in the future; omitted means no expiry.
-* `replaceExisting`: deletes that user's existing tokens **with the same name** first, so
-  re-provisioning does not pile up dead tokens.
+* `replaceExisting`: replaces that user's existing tokens **with the same name**, so
+  re-provisioning does not pile up dead tokens. The new token is created before the old ones
+  are deleted, and both happen in one transaction, so an interrupted request can never leave
+  the user without a working token; minting one is an admin operation they could not repeat
+  themselves. Note that Kimai's only unique constraint is on the token value, not on
+  (user, name), so several tokens may legitimately share a name.
 
 Response:
 
