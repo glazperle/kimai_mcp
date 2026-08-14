@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-08-14
+
+Adds automatic Kimai onboarding for OIDC logins, and fixes `timer action=active`, which failed on
+every response since the tool existed. The onboarding feature went through a hardening pass before
+release; the `### Security` section below is the result and is worth reading before enabling it.
+
 ### Added
 
 - **Automatic Kimai onboarding for OIDC logins** (`--auto-provision`, `provisioning.py`). Until now
@@ -52,8 +58,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `UsersConfig.load(allow_empty=True)` and `UsersConfig.add_user()`. Without the first, a
   provisioning-only deployment could not boot at all: both loaders and `initialize_users()`
   insisted on at least one user existing before anybody had signed in.
+- **`--provision-allowed-domains`** (`KIMAI_MCP_PROVISION_ALLOWED_DOMAINS`), a comma-separated list
+  of mail domains that may be onboarded. See the security note below for why it matters.
+
+### Security
+
+A review of the auto-provisioning feature above, before its first release, found the following.
+None of it can affect a deployment that leaves `--auto-provision` off, and all of it is fixed here.
+`tests/test_provisioning_hardening.py` carries a regression test for each.
+
+- **An outside account could be provisioned as one of your employees.** Every matching rule except
+  the two `exact` ones compares the address *local part* against Kimai usernames and aliases, so it
+  is blind to the domain the identity came from. With an issuer that can assert more than one
+  (Entra's `common`/`organizations` endpoints, B2B guests, Google without an `hd` claim, social
+  connections), `anna.vondorf@somewhere-else.example` matched the Kimai user `anna.vondorf` as the
+  *single* candidate, so the ambiguity guard never fired and that employee's personal API token was
+  handed over. The new `--provision-allowed-domains` bounds it; unset keeps the previous behaviour
+  and now warns at startup that it is only safe for a single-tenant issuer.
+- **The fuzzy `display-name` rule could be aimed at a colleague.** It matches on `name` /
+  `given_name` / `family_name`, which are IdP-side profile fields a user can usually edit, and a
+  missing `family_name` collapses the comparison to a bare given name. Setting a display name to a
+  colleague's Kimai alias (aliases appear in every exported timesheet) produced exactly one
+  candidate and minted that colleague's token. It now carries the same "at least two name parts"
+  guard as the `normalized` rule.
+- **The provisioned-user store could be committed.** `.gitignore` covered only `config/users.json`,
+  so `config/provisioned_users.json` and `config/oauth_clients.json` were untracked but not
+  ignored. Both hold plaintext secrets, and `docker-compose.yml` mounts `./config` into the
+  container, so they appear inside a clone's working tree during normal operation: one
+  `git add -A` published every user's Kimai token. `config/` is ignored now, with the examples
+  re-admitted by name so a secret file added later is excluded by default rather than by somebody
+  remembering to update this list.
+- **Tokens were written before the file was locked down.** The store created its temp file at the
+  process umask (typically `0644`), wrote and `fsync`ed the plaintext tokens into it, and applied
+  `chmod(0600)` only afterwards, so any other uid could read it during a window the `fsync`
+  deliberately widened; a `SIGKILL` in between stranded a world-readable `.tmp` full of tokens.
+  Writes now go through `user_config.atomic_write_json()`, which creates at `0600` via `os.open`,
+  `fsync`s both the file and its directory, and clears a stale temp file. `oauth.py` uses it too:
+  it persisted `client_secret` values with neither `fsync` nor `0600`.
+- The admin token's `view_user` permission, which `GET /api/users` requires, was never probed. A
+  token holding `api-token_other_profile` but not `view_user` logged a reassuring line at startup
+  and then failed every single sign-in. Both are checked now, and README documents both.
 
 ### Fixed
+
+- **Auto-provisioning robustness**, from the same pre-release review as the section above.
+  - A short given name silently disabled the `normalized` rule: the "at least two name parts"
+    guard counted parts *after* the four-character floor had already dropped them, so
+    `max.mustermann@` reduced to one part and fell through to a 403, although the folded forms
+    match. Hit every short given name (max., tim., jan., eva., uwe., ben., leo.).
+  - A persisted store could never recover from a token Kimai stopped accepting. `provision()`
+    short-circuits on a stored entry before contacting Kimai, and the OIDC callback only calls it
+    when nothing matches, so a revoked token (an admin deleted it, or a second replica re-minted it
+    under the same name) survived every restart and every fresh sign-in, answering 503 forever.
+    A 401 from Kimai now drops the session, and for a provisioned user its configuration and store
+    entry too, so the next sign-in provisions again. Declared users keep their configuration and
+    only lose the cached session.
+  - Provisioned sessions grew without bound. Each directory member who signed in once cost a
+    `KimaiClient` connection pool, an MCP server, a session manager and a task, and nothing ever
+    released them. Idle ones are dropped after an hour and rebuilt on the next request.
+  - A store that was valid JSON of the wrong shape (`[]`, `null`, a string value) raised
+    `AttributeError` from `load_into()`, which runs synchronously in the server's `__init__` and so
+    stopped the whole multi-user server, taking every hand-configured user with it.
+  - `ProvisioningConfig.ssl_verify` copied `UserConfig`'s type but not its validator, so the
+    documented `false` stayed the *string* `"false"`, which httpx reads as a CA bundle path and
+    rejects in its own constructor during startup. The coercion is shared now.
+  - `check_prerequisites()` constructed its client outside its own `try`, so it could raise despite
+    documenting that it never does; in the lifespan that is "Application startup failed" rather
+    than a logged warning. Same pattern in `provision()`.
+  - The startup fail-fast keyed on whether provisioning was enabled rather than on whether anyone
+    was declared, so 50 users in `users.json` plus an unreachable Kimai started anyway and served
+    `/health` 200 with `user_count: 0` - no restart, no alert.
+  - One process-wide lock spanned every network round trip of a provisioning run, although its
+    stated purpose is only to stop one identity minting two tokens. Thirty first-time sign-ins
+    serialized strictly, outliving the five-minute TTL of the OIDC login state. It is per identity
+    now.
+  - `normalize()` transliterated before NFKD and never composed, so decomposed input (macOS, some
+    AD/LDAP exports) folded `Müller` to `muller` while the composed spelling folded to `mueller` -
+    a silent 403 depending on how the directory stored the name.
+  - `oauth.py` used `del` on a `_pending` entry that `cleanup_expired()` can remove concurrently,
+    which became reachable once provisioning inserted a lock and three Kimai round trips before it:
+    a bare 500 after the token had already been minted.
+  - `docker-compose.yml`'s "uncomment to enable" block omitted the OIDC variables provisioning
+    requires, so following it literally produced a container that exits 1 on every start - with
+    `restart: unless-stopped`, a boot loop whose only symptom is one log line.
 
 - **`timer action=active` failed on every response** ([#24](https://github.com/glazperle/kimai_mcp/issues/24),
   [#25](https://github.com/glazperle/kimai_mcp/pull/25)).
