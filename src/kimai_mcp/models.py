@@ -192,7 +192,14 @@ class Activity(KimaiModel):
 
 
 class TimesheetEntity(KimaiModel):
-    """Timesheet entity model."""
+    """Timesheet as served by the ``Not_Expanded`` schemas.
+
+    That is ``TimesheetCollection`` (``GET /timesheets``) and ``TimesheetEntity``
+    (``GET /timesheets/{id}``, create, update), where ``activity``, ``project``
+    and ``user`` are ids. The two ``Expanded`` endpoints send objects instead --
+    see :class:`TimesheetExpanded`.
+    """
+
     id: int | None = None
     activity: int
     project: int
@@ -210,6 +217,36 @@ class TimesheetEntity(KimaiModel):
     billable: bool = True
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
     break_duration: int | None = Field(None, alias="break")
+
+
+class ProjectExpanded(Project):
+    """Project whose ``customer`` is an object (serializer group ``Expanded``)."""
+
+    customer: Customer | None = None
+
+
+class ActivityExpanded(Activity):
+    """Activity whose ``project`` is an object, customer included."""
+
+    project: ProjectExpanded | None = None
+
+
+class TimesheetExpanded(TimesheetEntity):
+    """Timesheet as served by the ``Expanded`` schemas.
+
+    ``GET /timesheets/active`` and ``GET /timesheets/recent`` are declared as
+    ``TimesheetCollectionExpanded`` in Kimai's ``src/API/TimesheetController.php``.
+    The ``Expanded`` serializer group replaces the relation ids with the full
+    objects, and it does so recursively: the project carries its customer, and
+    the activity carries a project which carries that customer again.
+
+    Parsing those responses with :class:`TimesheetEntity` raises three
+    ``int_type`` validation errors and loses the whole response (issue #24).
+    """
+
+    activity: ActivityExpanded
+    project: ProjectExpanded
+    user: User | None = None
 
 
 class TimesheetEditForm(KimaiModel):
@@ -685,8 +722,12 @@ class ProjectEditForm(KimaiModel):
     number: str | None = None
     order_number: str | None = Field(None, alias="orderNumber")
     order_date: str | None = Field(None, alias="orderDate")  # Format: YYYY-MM-DD
-    start: str | None = None  # Format: YYYY-MM-DD
-    end: str | None = None  # Format: YYYY-MM-DD
+    # Kimai accepts YYYY-MM-DD when creating, but the PATCH form rejects a
+    # date-only value ("Please enter a valid date."); updates need the full
+    # YYYY-MM-DDTHH:MM:SS form. Passed through verbatim - do not call
+    # .isoformat() on these, they are strings.
+    start: str | None = None
+    end: str | None = None
     invoice_text: str | None = Field(None, alias="invoiceText")
     teams: int | None = None  # Team ID
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")

@@ -43,6 +43,7 @@ from .models import (
     TimesheetConfig,
     TimesheetEditForm,
     TimesheetEntity,
+    TimesheetExpanded,
     TimesheetFilter,
     User,
     UserCreateForm,
@@ -362,14 +363,21 @@ class KimaiClient:
 
         return all_timesheets, fetched_all, page
     
-    async def get_active_timesheets(self) -> list[TimesheetEntity]:
-        """Get active timesheets for current user."""
+    async def get_active_timesheets(self) -> list[TimesheetExpanded]:
+        """Get active timesheets for current user.
+
+        Kimai declares this endpoint as ``TimesheetCollectionExpanded``, so the
+        relations arrive as objects rather than ids (issue #24).
+        """
         data = await self._request("GET", "/timesheets/active")
-        return [TimesheetEntity(**item) for item in data]
-    
-    async def get_recent_timesheets(self, begin: datetime | None = None, size: int = 10) -> list[TimesheetEntity]:
+        return [TimesheetExpanded(**item) for item in data]
+
+    async def get_recent_timesheets(self, begin: datetime | None = None, size: int = 10) -> list[TimesheetExpanded]:
         """Get recent timesheet activities.
-        
+
+        Declared as ``TimesheetCollectionExpanded`` like ``/timesheets/active``,
+        so the relations arrive expanded here too.
+
         Args:
             begin: Only records after this date
             size: Number of entries to return
@@ -377,9 +385,9 @@ class KimaiClient:
         params = {"size": size}
         if begin:
             params["begin"] = begin.isoformat()
-        
+
         data = await self._request("GET", "/timesheets/recent", params=params)
-        return [TimesheetEntity(**item) for item in data]
+        return [TimesheetExpanded(**item) for item in data]
     
     async def get_timesheet(self, timesheet_id: int) -> TimesheetEntity:
         """Get a single timesheet by ID."""
@@ -473,11 +481,6 @@ class KimaiClient:
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
 
-            if filters.start:
-                params['start'] = filters.start.isoformat()
-            if filters.end:
-                params['end'] = filters.end.isoformat()
-                
             # Handle array parameters
             if filters.customers:
                 params['customers[]'] = filters.customers
@@ -495,22 +498,12 @@ class KimaiClient:
         """Create a new project."""
         payload = project.model_dump(exclude_none=True, by_alias=True)
 
-        if project.start:
-            payload['start'] = project.start.isoformat()
-        if project.end:
-            payload['end'] = project.end.isoformat()
-        
         data = await self._request("POST", "/projects", json=payload)
         return ProjectExtended(**data)
     
     async def update_project(self, project_id: int, project: ProjectEditForm) -> ProjectExtended:
         """Update an existing project."""
         payload = project.model_dump(exclude_none=True, by_alias=True)
-
-        if project.start:
-            payload['start'] = project.start.isoformat()
-        if project.end:
-            payload['end'] = project.end.isoformat()
 
         data = await self._request("PATCH", f"/projects/{project_id}", json=payload)
         return ProjectExtended(**data)

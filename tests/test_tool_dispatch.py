@@ -118,6 +118,30 @@ def make_mock_client() -> AsyncMock:
         begin=NOW,
         end=None,
     )
+    # /timesheets/active and /timesheets/recent are Expanded schemas: the
+    # relations are objects there, not ids (issue #24).
+    expanded_project = m.ProjectExpanded(id=1, name="Test Project", customer=customer)
+    running_expanded_ts = m.TimesheetExpanded(
+        id=11,
+        activity=m.ActivityExpanded(
+            id=1, name="Development", project=expanded_project
+        ),
+        project=expanded_project,
+        user=user,
+        begin=NOW,
+        end=None,
+    )
+    completed_expanded_ts = m.TimesheetExpanded(
+        id=10,
+        activity=m.ActivityExpanded(
+            id=1, name="Development", project=expanded_project
+        ),
+        project=expanded_project,
+        user=user,
+        begin=NOW,
+        end=LATER,
+        duration=28800,
+    )
     rate = m.Rate(id=5, user=user, rate=50.0, internalRate=40.0, isFixed=False)
     comment = m.Comment(
         id=1, message="hello", createdBy=user, createdAt=NOW, pinned=True
@@ -140,8 +164,8 @@ def make_mock_client() -> AsyncMock:
     # Timesheets / timer
     client.get_timesheets.return_value = ([completed_ts], True, 1)
     client.get_timesheet.return_value = completed_ts
-    client.get_active_timesheets.return_value = [running_ts]
-    client.get_recent_timesheets.return_value = [completed_ts]
+    client.get_active_timesheets.return_value = [running_expanded_ts]
+    client.get_recent_timesheets.return_value = [completed_expanded_ts]
     client.create_timesheet.return_value = running_ts
     client.update_timesheet.return_value = completed_ts
     client.delete_timesheet.return_value = None

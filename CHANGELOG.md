@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every project create/update carrying a date, and every date-filtered project listing, raised
+  `AttributeError`.** `ProjectEditForm.start`/`end` and `ProjectFilter.start`/`end` are declared
+  `str` ("Format: YYYY-MM-DD"), but `create_project`, `update_project` and `get_projects` called
+  `.isoformat()` on them, so anything setting a project timeframe failed outright with
+  `'str' object has no attribute 'isoformat'`. The calls were also redundant:
+  `model_dump()` had already placed those strings in the payload. Removed.
+  - Same root cause as the timesheet issue below — a model declaring one type while the code
+    assumes another — but a separate code path, so it is fixed separately.
+  - Documented while verifying against a live instance: Kimai accepts a date-only `YYYY-MM-DD`
+    when *creating* a project, but the PATCH form rejects it with "Please enter a valid date."
+    and requires the full `YYYY-MM-DDTHH:MM:SS` form. The model comment said only the former.
+
+- **`timer action=active` failed on every response** ([#24](https://github.com/glazperle/kimai_mcp/issues/24)).
+  `GET /timesheets/active` and `GET /timesheets/recent` are declared as `TimesheetCollectionExpanded`
+  in Kimai's `src/API/TimesheetController.php`. That schema carries the `Expanded` serializer group,
+  so `project`, `activity` and `user` arrive as objects rather than ids. Both were parsed with
+  `TimesheetEntity`, whose relations are typed `int`, so Pydantic rejected the entire response with
+  three `int_type` errors — the request itself had succeeded, the data was only ever visible inside
+  the error. The expansion is recursive (the project carries its customer, and the activity carries
+  a project which carries that customer again), so coercing the three top-level fields back to ids
+  would not have been enough.
+  - New `TimesheetExpanded`, `ProjectExpanded` and `ActivityExpanded` models describe the `Expanded`
+    schemas. `TimesheetEntity` keeps describing the `Not_Expanded` ones (`GET /timesheets`,
+    `GET /timesheets/{id}`, create, update) and is unchanged. `client.get_active_timesheets()` and
+    `client.get_recent_timesheets()` now return `TimesheetExpanded`.
+  - `timer action=active` now names the relations it already had in hand: it prints
+    `Customer / Project` and the activity name instead of interpolating bare ids.
+  - `timer action=recent` was never affected — its handler builds a `TimesheetFilter` and calls
+    `get_timesheets()`, so it reads the plain collection endpoint. The defect in
+    `get_recent_timesheets()` was latent and is fixed alongside it.
+  - `scripts/audit_api_models.py` reported clean throughout, because it mapped every Timesheet alias
+    onto `TimesheetEntity` and compares field *names* only: an `activity` that arrives as an object
+    still has the right name. The `Expanded` aliases now point at the new models, and
+    `TimesheetExpanded` is mapped for the first time. A type-level assertion on relation fields would
+    catch this class of gap in general; that is left as a follow-up.
+
 ### Added
 
 - **Automatic Kimai onboarding for OIDC logins** (`--auto-provision`, `provisioning.py`). Until now
