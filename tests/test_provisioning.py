@@ -514,6 +514,7 @@ def _args(**overrides):
         "provision_match": None,
         "provision_store": None,
         "provision_ssl_verify": None,
+        "provision_allowed_domains": None,
     }
     return argparse.Namespace(**{**defaults, **overrides})
 

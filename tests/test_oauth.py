@@ -1033,10 +1033,25 @@ def test_second_sign_in_reuses_the_slug_and_mints_once(make_client, monkeypatch)
 
 
 def test_provisioning_writes_nothing_without_a_store(make_client, monkeypatch, tmp_path):
+    """In-memory mode provisions the user but leaves no file behind.
+
+    The tmp_path assertion alone proved nothing: no store_path is passed here,
+    so the server never knew that directory and it was empty either way. What
+    makes the test bite is asserting that provisioning *did* happen (so the
+    absence of a file is a choice, not a failed sign-in) and that the store the
+    sibling test exercises really is absent.
+    """
+    users_config = UsersConfig()
     fake = _make_provisioning_kimai([_kimai_user(7, "bob.brown", email=NEWCOMER_EMAIL)])
-    http = _provisioning_client(make_client, monkeypatch, fake)
+    http = _provisioning_client(make_client, monkeypatch, fake, users_config=users_config)
 
     assert _sign_in(http, register_client(http)["client_id"]).status_code == 302
+
+    # The user exists, in memory only.
+    assert len(users_config.users) == 1
+    match = users_config.get_user_by_oidc_identity(NEWCOMER_EMAIL)
+    assert match is not None
+    assert match[1].kimai_token == "minted-7"
     assert list(tmp_path.iterdir()) == []
 
 

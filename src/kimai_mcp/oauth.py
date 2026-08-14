@@ -36,7 +36,7 @@ from starlette.routing import Route
 
 from .oidc import OIDCClient, OIDCConfig, OIDCError, OIDCLoginState
 from .provisioning import KimaiProvisioner
-from .user_config import UsersConfig, _env_key_for_slug
+from .user_config import UsersConfig, _env_key_for_slug, atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -199,11 +199,11 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
                     for client_id, client in self._clients.items()
                 }
             }
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
-            with tmp_path.open("w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            tmp_path.replace(self.state_file)
+            # Registered clients carry client_secret values, so this file gets
+            # the same treatment as the provisioned-user store: created 0600,
+            # fsynced, atomically renamed. It previously used the process umask
+            # and no fsync at all.
+            atomic_write_json(self.state_file, data)
         # Persistence is a convenience; a failing write must not break the
         # in-memory registration that just succeeded.
         except Exception as e:  # noqa: BLE001
@@ -435,7 +435,12 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
 
         # Success: consume the transaction and issue an authorization code (same
         # path as the local login form, with the OIDC-resolved slug as subject).
-        del self._pending[login.txn]
+        # pop, not del: cleanup_expired() removes expired _pending entries
+        # concurrently, and provisioning now inserts a lock plus several Kimai
+        # round trips between the freshness check in _get_pending and this
+        # line. Losing that race raised KeyError, i.e. a bare 500 for the user
+        # after the token had already been minted.
+        self._pending.pop(login.txn, None)
         logger.info(f"OIDC login successful for user '{slug}' (client {pending.client_id})")
         return self._issue_auth_code(pending, slug)
 

@@ -30,12 +30,12 @@ the feature cannot regress a working deployment.
 import asyncio
 import json
 import logging
-import os
 import re
 import secrets
 import time
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -44,7 +44,13 @@ from pydantic import BaseModel, Field, field_validator
 
 from .client import KimaiAPIError, KimaiClient
 from .models import User
-from .user_config import SLUG_PATTERN, UserConfig, UsersConfig
+from .user_config import (
+    SLUG_PATTERN,
+    UserConfig,
+    UsersConfig,
+    atomic_write_json,
+    parse_ssl_verify,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +120,31 @@ class ProvisioningConfig(BaseModel):
             "sign-in, which is idempotent."
         ),
     )
+    allowed_domains: list[str] | None = Field(
+        None,
+        description=(
+            "Mail domains an identity must come from to be provisioned. Unset "
+            "means every identity the IdP asserts is accepted, which is only "
+            "safe for a single-tenant issuer."
+        ),
+    )
+
+    @field_validator("allowed_domains", mode="before")
+    @classmethod
+    def parse_allowed_domains(cls, v: Any) -> list[str] | None:
+        """Accept a comma-separated string (env var / CLI) or a list."""
+        if v is None:
+            return None
+        items = v.split(",") if isinstance(v, str) else list(v)
+        domains = [d.strip().lower().lstrip("@") for d in items]
+        domains = [d for d in domains if d]
+        return domains or None
+
+    # Same coercion UserConfig applies. This field mirrors that one, and copying
+    # the type without the validator let the two models disagree about one
+    # setting: the documented "false" survived as a string here and httpx read
+    # it as a CA bundle path, raising in its constructor during startup.
+    _parse_ssl_verify = field_validator("ssl_verify", mode="before")(parse_ssl_verify)
 
     @field_validator("kimai_url")
     @classmethod
@@ -143,7 +174,13 @@ def normalize(value: str | None) -> str:
     """
     if not value:
         return ""
-    text = value.strip().lower()
+    # NFC first, so the transliteration below sees composed characters. Without
+    # it the table never matches decomposed input (NFD, as produced by macOS
+    # and some AD/LDAP exports): "Müller" kept its "u" and the combining
+    # diaeresis was then dropped by NFKD, folding to "muller", while the NFC
+    # spelling of the same name folds to "mueller". Two normalized forms for one
+    # person means a silent 403 depending on how the directory stored it.
+    text = unicodedata.normalize("NFC", value.strip().lower())
     for src, dst in _TRANSLITERATIONS.items():
         text = text.replace(src, dst)
     decomposed = unicodedata.normalize("NFKD", text)
@@ -156,15 +193,36 @@ def local_part(email: str) -> str:
     return email.split("@", 1)[0]
 
 
-def name_parts(value: str | None) -> set[str]:
+def name_parts(value: str | None, *, min_length: int = MIN_NAME_PART_LENGTH) -> set[str]:
     """Normalized name parts of a login or display name.
 
     ``anna.von-dorf`` -> ``{anna, dorf}`` (``von`` is below the length floor).
+
+    ``min_length=1`` keeps every part. Callers that ask "does this look like
+    more than a bare given name?" want that: the floor exists to stop a short
+    *fragment* from being treated as evidence of identity, not to stop a short
+    part from being counted as a part. Counting after the floor made the
+    question "are there two parts of at least four characters", which silently
+    answers "no" for ``max.mustermann`` - see :func:`is_multi_part_name`.
     """
     if not value:
         return set()
     parts = (normalize(part) for part in _NAME_PART_SEPARATORS.split(value))
-    return {part for part in parts if len(part) >= MIN_NAME_PART_LENGTH}
+    return {part for part in parts if len(part) >= min_length}
+
+
+def is_multi_part_name(value: str | None) -> bool:
+    """Whether ``value`` carries more than a single given name.
+
+    The guard on the weaker rules: a lone first name is not an identifier, so
+    "max@corp.example" must not match a colleague whose Kimai alias is "Max".
+    Counts *all* parts, including short ones. The earlier version counted the
+    output of :func:`name_parts`, i.e. after the four-character floor had
+    already dropped things, so any address with a short given name
+    (max., tim., jan., eva., uwe., ben., kim., leo., amy., ida.) failed the
+    guard and switched off a rule that would have matched correctly.
+    """
+    return len(name_parts(value, min_length=1)) >= 2
 
 
 @dataclass
@@ -173,6 +231,7 @@ class ResolveResult:
 
     user: User | None = None
     # "matched" | "ambiguous" | "not_found" | "unsupported_identity"
+    # | "domain_not_allowed"
     reason: str = "not_found"
     # Name of the rule that matched, for logs and support questions.
     rule: str | None = None
@@ -192,6 +251,7 @@ def resolve_kimai_user(
     given_name: str | None = None,
     family_name: str | None = None,
     match_mode: str = "normalized",
+    allowed_domains: list[str] | None = None,
 ) -> ResolveResult:
     """Find the one Kimai user belonging to an OIDC identity.
 
@@ -202,6 +262,8 @@ def resolve_kimai_user(
         given_name / family_name: ``given_name`` / ``family_name`` claims.
         match_mode: ``exact``, ``normalized`` (default) or ``fuzzy`` - see the
             module docstring for why the last two rules are not on by default.
+        allowed_domains: If given, the identity's mail domain must be one of
+            these. See the domain check below for why that matters.
 
     The rules run from strongest to weakest and stop at the first one that
     matches anything. Rules that hit several users abort with
@@ -218,12 +280,34 @@ def resolve_kimai_user(
         )
         return ResolveResult(reason="unsupported_identity")
 
+    idp_email = identity.strip().lower()
+    idp_local = local_part(idp_email)
+
+    # Every rule below the two exact ones compares the *local part* against
+    # Kimai usernames and aliases, so it says nothing about which domain the
+    # identity came from. With an issuer that asserts more than one domain
+    # (Entra's common/organizations endpoints, B2B guests, Google without an hd
+    # check, Auth0 social connections), "anna.vondorf@somewhere-else.example"
+    # therefore matches the Kimai user "anna.vondorf" as the *single* candidate,
+    # so the ambiguity guard never fires and that employee's personal API token
+    # is handed over. The /api/users/me probe in provision_token cannot catch it
+    # either: it proves the token belongs to the user we already picked wrongly.
+    #
+    # Unset keeps the previous behaviour, which is only safe when the issuer is
+    # single-tenant; check_prerequisites warns about exactly that at startup.
+    if allowed_domains:
+        idp_domain = idp_email.split("@", 1)[1]
+        if idp_domain not in allowed_domains:
+            logger.warning(
+                f"Refusing to provision '{identity}': domain '{idp_domain}' is not in "
+                f"--provision-allowed-domains ({', '.join(allowed_domains)})"
+            )
+            return ResolveResult(reason="domain_not_allowed")
+
     candidates = [u for u in users if u.enabled]
     if not candidates:
         return ResolveResult(reason="not_found")
 
-    idp_email = identity.strip().lower()
-    idp_local = local_part(idp_email)
     norm_local = normalize(idp_local)
     norm_display = normalize(display_name)
     norm_full_name = normalize(f"{given_name or ''}{family_name or ''}")
@@ -244,7 +328,17 @@ def resolve_kimai_user(
     # parts keeps the case this rule exists for (anna.vondorf@ vs. the alias
     # "Anna von Dorf") and drops the class that collides. Single-token addresses
     # still reach the exact rules above, and the fuzzy tier below.
-    norm_local_is_evidence = len(name_parts(idp_local)) >= 2
+    norm_local_is_evidence = is_multi_part_name(idp_local)
+
+    # The same reasoning for the fuzzy display-name rule, which was missing it.
+    # Its inputs are worse than the address: `name`, `given_name` and
+    # `family_name` are IdP-side profile fields a user can usually edit, and a
+    # missing family_name collapses norm_full_name to a bare given name. Without
+    # the guard, setting a display name to a colleague's Kimai alias (aliases are
+    # visible in every exported timesheet) produced exactly one candidate and
+    # minted that colleague's token.
+    display_is_evidence = is_multi_part_name(display_name)
+    full_name_is_evidence = is_multi_part_name(f"{given_name or ''} {family_name or ''}")
 
     all_rules: dict[str, list[User]] = {
         "email": [u for u in candidates if u.email and u.email.strip().lower() == idp_email],
@@ -261,7 +355,15 @@ def resolve_kimai_user(
             u
             for u in candidates
             if normalize(u.alias)
-            and normalize(u.alias) in {k for k in (norm_display, norm_full_name) if k}
+            and normalize(u.alias)
+            in {
+                k
+                for k, is_evidence in (
+                    (norm_display, display_is_evidence),
+                    (norm_full_name, full_name_is_evidence),
+                )
+                if k and is_evidence
+            }
         ],
         "name-part": [u for u in candidates if _name_part_match(idp_local, u)],
     }
@@ -418,8 +520,28 @@ class ProvisionedUserStore:
             logger.error(f"Failed to load provisioned users from {self.path}: {e}")
             return 0
 
+        # Valid JSON of the wrong shape is not a corrupt file to json.load, so
+        # it used to get past the guard above and then raise AttributeError on
+        # .items() or .get(). load_into runs synchronously from the server's
+        # __init__, so that took down the whole multi-user process and every
+        # hand-configured user with it - the blast radius this guard exists to
+        # prevent. A hand-edit, a truncated restore or a config-management
+        # template that rendered a list all produce it.
+        if not isinstance(data, dict):
+            logger.error(
+                f"Ignoring {self.path}: expected a JSON object of identities, "
+                f"got {type(data).__name__}"
+            )
+            return 0
+
         loaded = 0
         for identity, entry in data.items():
+            if not isinstance(entry, dict):
+                logger.error(
+                    f"Skipping provisioned user '{identity}' from {self.path}: "
+                    f"expected an object, got {type(entry).__name__}"
+                )
+                continue
             if users.get_user_by_oidc_identity(identity) is not None:
                 continue
             slug = entry.get("slug")
@@ -451,6 +573,14 @@ class ProvisionedUserStore:
             if self.path.exists():
                 with self.path.open(encoding="utf-8") as f:
                     data = json.load(f)
+            # Read-modify-write, so a store whose shape is wrong would drop
+            # every existing entry rather than merge into it.
+            if not isinstance(data, dict):
+                logger.error(
+                    f"Replacing {self.path}: expected a JSON object of identities, "
+                    f"got {type(data).__name__}"
+                )
+                data = {}
             data[identity.strip().lower()] = {
                 "slug": slug,
                 "kimai_url": config.kimai_url,
@@ -458,23 +588,34 @@ class ProvisionedUserStore:
                 "ssl_verify": config.ssl_verify,
                 "created_at": int(time.time()),
             }
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
-            with tmp_path.open("w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-                # Without the fsync the rename can reach the disk before the
-                # data does, so a host crash leaves a correctly named but
-                # truncated file - the outcome the temp file exists to prevent.
-                f.flush()
-                os.fsync(f.fileno())
-            # Set the mode before the rename so the file is never briefly
-            # world-readable while it already holds tokens.
-            tmp_path.chmod(0o600)
-            tmp_path.replace(self.path)
+            atomic_write_json(self.path, data)
         # Persistence is a convenience; a failing write must not invalidate the
         # in-memory provisioning that just succeeded.
         except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to persist provisioned user to {self.path}: {e}")
+
+    def remove(self, identity: str) -> None:
+        """Forget one identity, so the next sign-in provisions it from scratch.
+
+        Needed because ``provision()`` short-circuits on a stored entry before
+        it ever contacts Kimai. Without this, a token Kimai no longer accepts
+        (an admin deleted it, or another replica replaced it by name) stayed in
+        the file forever: the user's every request answered 503 and signing in
+        again did not help, because the stale entry still matched.
+        """
+        if not self.path.exists():
+            return
+        try:
+            with self.path.open(encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return
+            if data.pop(identity.strip().lower(), None) is None:
+                return
+            atomic_write_json(self.path, data)
+            logger.info(f"Removed stale provisioned user '{identity}' from {self.path}")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Failed to remove provisioned user from {self.path}: {e}")
 
 
 class KimaiProvisioner:
@@ -485,8 +626,35 @@ class KimaiProvisioner:
         self.store = store
         # Two parallel sign-ins of the same identity would otherwise mint two
         # tokens, the second silently invalidating the first (tokens are
-        # replaced by name).
-        self._lock = asyncio.Lock()
+        # replaced by name). That invariant is per identity, so the lock is too:
+        # a single process-wide one also serialized *unrelated* identities
+        # across a TLS handshake, a full directory listing, the matching pass,
+        # the mint, the verification probe and an fsynced write. On a rollout
+        # day the queue outlived the five-minute TTL of the OIDC login state,
+        # so users waiting in it got "Invalid or expired sign-in state" and
+        # retried, adding more work to the same queue.
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._waiters: dict[str, int] = {}
+        self._locks_guard = asyncio.Lock()
+
+    @asynccontextmanager
+    async def _identity_lock(self, identity: str) -> AsyncIterator[None]:
+        """Hold the lock belonging to one identity, and only that one."""
+        key = identity.strip().lower()
+        async with self._locks_guard:
+            lock = self._locks.setdefault(key, asyncio.Lock())
+            # Waiters counted while the map is guarded, so the entry cannot be
+            # dropped between a waiter arriving and acquiring.
+            self._waiters[key] = self._waiters.get(key, 0) + 1
+        try:
+            async with lock:
+                yield
+        finally:
+            async with self._locks_guard:
+                self._waiters[key] -= 1
+                if self._waiters[key] == 0:
+                    del self._waiters[key]
+                    self._locks.pop(key, None)
 
     def _client(self) -> KimaiClient:
         return KimaiClient(
@@ -508,9 +676,24 @@ class KimaiProvisioner:
 
         Never raises: a Kimai that is briefly unreachable at boot must not stop
         the server, and provisioning failures are already handled per request.
+        This runs inside the lifespan before the yield, where an exception is
+        not a logged warning but "Application startup failed", so the client
+        construction belongs inside the try as much as the calls do - httpx
+        raises there for a bad CA path or a malformed proxy setting.
         """
-        client = self._client()
+        client = None
         try:
+            if not self.config.allowed_domains:
+                logger.warning(
+                    "Automatic provisioning accepts identities from any domain the identity "
+                    "provider asserts. That is only safe for a single-tenant issuer: with a "
+                    "multi-tenant one (Entra common/organizations, B2B guests, Google without "
+                    "an hd claim, social connections) an outside account whose address local "
+                    "part equals a Kimai username is provisioned as that user. Set "
+                    "--provision-allowed-domains to restrict it."
+                )
+
+            client = self._client()
             version = await client.get_version()
             me = await client.get_current_user()
             logger.info(
@@ -525,10 +708,29 @@ class KimaiProvisioner:
                     "return 404 and every first-time sign-in will be rejected. "
                     "See kimai-plugin/ApiTokenBundle/README.md."
                 )
+
+            # The permission the runtime path needs, which the probes above do
+            # not cover: GET /api/users carries IsGranted('view_user'), on top
+            # of the api-token_other_profile that minting needs. Without this
+            # probe an admin token missing it passes startup with a reassuring
+            # log line and then fails on every single callback instead.
+            try:
+                await client.get_users()
+            except KimaiAPIError as e:
+                if e.status_code == 403:
+                    logger.error(
+                        "The provisioning admin token cannot list Kimai users: "
+                        "GET /api/users requires the 'view_user' permission. Every "
+                        "first-time sign-in will be rejected until the token's role "
+                        "has it."
+                    )
+                else:
+                    raise
         except Exception as e:  # noqa: BLE001
             logger.error(f"Could not verify the provisioning prerequisites: {e}")
         finally:
-            await client.close()
+            if client is not None:
+                await client.close()
 
     async def provision(
         self, identity: str, claims: Mapping[str, Any], users: UsersConfig
@@ -542,14 +744,15 @@ class KimaiProvisioner:
         sign-in response must not reveal whether an identity matched a Kimai
         account.
         """
-        async with self._lock:
+        async with self._identity_lock(identity):
             # Another request may have provisioned this identity while we waited.
             existing = users.get_user_by_oidc_identity(identity)
             if existing is not None:
                 return existing
 
-            client = self._client()
+            client = None
             try:
+                client = self._client()
                 kimai_users = await client.get_users()
                 result = resolve_kimai_user(
                     kimai_users,
@@ -558,6 +761,7 @@ class KimaiProvisioner:
                     given_name=claims.get("given_name"),
                     family_name=claims.get("family_name"),
                     match_mode=self.config.match_mode,
+                    allowed_domains=self.config.allowed_domains,
                 )
                 if result.user is None:
                     return None
@@ -569,10 +773,28 @@ class KimaiProvisioner:
                     token_name=self.config.token_name,
                     ssl_verify=self.config.ssl_verify,
                 )
+            except KimaiAPIError as e:
+                # get_users() is the one call here whose permission the startup
+                # probe cannot vouch for at the moment of use. Naming it beats
+                # the stack trace oauth.py's blanket handler would otherwise log
+                # while the operator sees only the generic 403 page.
+                if e.status_code == 403:
+                    logger.error(
+                        f"Cannot provision '{identity}': the provisioning admin token was "
+                        "refused by Kimai (403). GET /api/users needs 'view_user' and "
+                        "minting needs 'api-token_other_profile'."
+                    )
+                else:
+                    logger.error(
+                        f"Cannot provision '{identity}': Kimai returned "
+                        f"{e.status_code} ({e.message})"
+                    )
+                return None
             finally:
                 # A super-admin token has no business sitting in a long-lived
                 # idle connection, so the client lives for one callback only.
-                await client.close()
+                if client is not None:
+                    await client.close()
 
             if token is None:
                 return None

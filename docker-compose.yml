@@ -53,20 +53,43 @@ services:
       # Set to true to disable the deprecated /mcp/{slug} endpoints
       - KIMAI_MCP_DISABLE_LEGACY_SLUGS=${KIMAI_MCP_DISABLE_LEGACY_SLUGS:-false}
 
-      # Automatic onboarding of OIDC identities (needs --auth-backend oidc and the
-      # ApiTokenBundle plugin on the Kimai server; see kimai-plugin/ApiTokenBundle).
-      # Uncomment to enable - the admin token needs 'api-token_other_profile'.
+      # Automatic onboarding of OIDC identities. Needs the ApiTokenBundle plugin
+      # on the Kimai server (see kimai-plugin/ApiTokenBundle) and an admin token
+      # holding 'api-token_other_profile' and 'view_user'.
+      #
+      # Uncomment BOTH blocks: provisioning requires the OIDC auth backend, and
+      # the server exits 1 at startup without it ("--auto-provision requires
+      # --auth-backend oidc"). With restart: unless-stopped that is a boot loop
+      # whose only symptom is one log line, so the OIDC block is not optional
+      # here even though it is a separate feature.
+      #
+      # - KIMAI_MCP_AUTH_BACKEND=oidc
+      # - KIMAI_MCP_OIDC_ISSUER=${KIMAI_MCP_OIDC_ISSUER:-}
+      # - KIMAI_MCP_OIDC_CLIENT_ID=${KIMAI_MCP_OIDC_CLIENT_ID:-}
+      # - KIMAI_MCP_OIDC_CLIENT_SECRET=${KIMAI_MCP_OIDC_CLIENT_SECRET:-}
+      #
       # - KIMAI_MCP_AUTO_PROVISION=${KIMAI_MCP_AUTO_PROVISION:-false}
       # - KIMAI_MCP_PROVISION_KIMAI_URL=${KIMAI_MCP_PROVISION_KIMAI_URL:-}
       # - KIMAI_MCP_PROVISION_ADMIN_TOKEN=${KIMAI_MCP_PROVISION_ADMIN_TOKEN:-}
       # - KIMAI_MCP_PROVISION_MATCH=${KIMAI_MCP_PROVISION_MATCH:-normalized}
       # - KIMAI_MCP_PROVISION_STORE=${KIMAI_MCP_PROVISION_STORE:-/app/config/provisioned_users.json}
+      # - KIMAI_MCP_PROVISION_TOKEN_NAME=${KIMAI_MCP_PROVISION_TOKEN_NAME:-Kimai MCP (auto)}
+      # - KIMAI_MCP_PROVISION_SSL_VERIFY=${KIMAI_MCP_PROVISION_SSL_VERIFY:-true}
+      #
+      # Restrict which mail domains may be onboarded. Strongly recommended: the
+      # matching rules compare the address local part against Kimai usernames,
+      # so with a multi-tenant issuer an outside account can otherwise be
+      # provisioned as the employee whose username it happens to equal.
+      # - KIMAI_MCP_PROVISION_ALLOWED_DOMAINS=${KIMAI_MCP_PROVISION_ALLOWED_DOMAINS:-}
 
     # Ports
     ports:
       - "${SERVER_PORT:-8000}:8000"
 
-    # Mount the config directory (users.json read, oauth_clients.json written)
+    # Mount the config directory. users.json is read; oauth_clients.json and
+    # provisioned_users.json are written here and hold plaintext secrets, so
+    # this is a directory to back up and to keep out of version control (the
+    # repository's .gitignore already excludes it).
     volumes:
       - ./config:/app/config
       # Optional: Mount CA certificates for custom SSL

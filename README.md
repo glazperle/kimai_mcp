@@ -118,7 +118,7 @@ When mapping by `email`, the `id_token` must also assert `email_verified: true`,
 
 #### Automatic onboarding (optional)
 
-The mapping above still has to be maintained by hand, and each entry needs an API token that an administrator first created in Kimai's web UI. With `--auto-provision`, an identity that matches no configured user is instead resolved against Kimai's own user list and given its own personal API token at first sign-in — after that, signing in with the IdP is the only step a user ever performs.
+The mapping above still has to be maintained by hand, and each entry needs an API token that an administrator first created in Kimai's web UI. With `--auto-provision`, an identity that matches no configured user is instead resolved against Kimai's own user list and given its own personal API token at first sign-in; after that, signing in with the IdP is the only step a user ever performs.
 
 ```bash
 kimai-mcp-streamable \
@@ -135,11 +135,11 @@ kimai-mcp-streamable \
 
 **Requirements**
 
-* **The [`ApiTokenBundle`](kimai-plugin/ApiTokenBundle/README.md) plugin on your Kimai server.** Core Kimai can only *delete* access tokens through the API; creating one is a web-form action. The plugin adds `POST /api/users/{id}/api-token` behind Kimai's own permission check. Without it every first-time sign-in is rejected — the server probes for the plugin at startup and says so once.
-* **An admin token** (`--provision-admin-token`) belonging to a user with `api-token_other_profile`, which is ROLE_SUPER_ADMIN in Kimai's default role mapping.
+* **The [`ApiTokenBundle`](kimai-plugin/ApiTokenBundle/README.md) plugin on your Kimai server.** Core Kimai can only *delete* access tokens through the API; creating one is a web-form action. The plugin adds `POST /api/users/{id}/api-token` behind Kimai's own permission check. Without it every first-time sign-in is rejected, and the server probes for the plugin at startup and says so once.
+* **An admin token** (`--provision-admin-token`) belonging to a user with `api-token_other_profile` (to mint the token) **and** `view_user` (to list users at all: `GET /api/users` carries its own permission check). ROLE_SUPER_ADMIN has both in Kimai's default role mapping. The server probes for each at startup rather than failing on the first sign-in.
 * `--auth-backend oidc`. There is no verified identity to resolve without a federated login.
 
-**How an identity is matched.** Rules run from strongest to weakest and stop at the first one that matches. A rule matching more than one Kimai user aborts instead of guessing — a wrong match would hand one employee another employee's token. `--provision-match` selects how far to go:
+**How an identity is matched.** Rules run from strongest to weakest and stop at the first one that matches. A rule matching more than one Kimai user aborts instead of guessing, because a wrong match would hand one employee another employee's token. `--provision-match` selects how far to go:
 
 | Mode | Rules |
 | ---- | ----- |
@@ -147,11 +147,17 @@ kimai-mcp-streamable \
 | `normalized` (default) | …plus `username` equals the address local part, plus a folded comparison of username/alias/email that makes `anna.vondorf` and `Anna von Dorf` compare equal. The folded comparison needs an address of at least two name parts, so `max@` is never matched against a colleague whose alias is `Max` or whose address is `max@` on another mail domain |
 | `fuzzy` | …plus the `name` / `given_name`+`family_name` claims against the Kimai alias, plus single name parts (`anna@` vs. `anna.vondorf@`) |
 
-The `fuzzy` rules are heuristics — enable them only if you know the shape of your directory. The minted token is verified against `/api/users/me` and discarded if it resolves to a different user, but that guards against a wrong *token*, not a wrong *match*.
+The `fuzzy` rules are heuristics; enable them only if you know the shape of your directory. The minted token is verified against `/api/users/me` and discarded if it resolves to a different user, but that guards against a wrong *token*, not a wrong *match*.
 
-Whatever prevents an onboarding — no match, ambiguous match, plugin missing, missing permission, Kimai unreachable — the response is the same generic "not authorized" page as before, with the actual reason in the server log only. The feature is off by default and cannot change behaviour for an existing deployment.
+**Restrict the domains.** Every rule except the two `exact` ones compares the address *local part*, which says nothing about where the identity came from. If your issuer can assert more than one domain (Microsoft Entra's `common`/`organizations` endpoints, B2B guest accounts, Google without an `hd` claim, Auth0 or Okta social connections), then an outside account named `anna.vondorf@somewhere-else.example` matches the Kimai user `anna.vondorf` as the *single* candidate, so the ambiguity guard never fires and that employee's personal API token is handed over. Set `--provision-allowed-domains corp.example,corp.de` to bound it. Leaving it unset is only safe with a single-tenant issuer, and the server logs a warning at startup to that effect.
+
+Whatever prevents an onboarding (no match, ambiguous match, plugin missing, missing permission, Kimai unreachable), the response is the same generic "not authorized" page as before, with the actual reason in the server log only. The feature is off by default and cannot change behaviour for an existing deployment.
 
 **Persistence.** Provisioned users live in memory by default, like the OAuth access and refresh tokens: after a restart the next sign-in re-provisions them, which is idempotent (tokens are replaced by name, so nothing piles up in the Kimai profile). Pass `--provision-store FILE` to keep them across restarts; that file holds Kimai API tokens in plaintext and is written with mode `0600`. A hand-written `users.json` entry always wins over a stored one.
+
+A stored token that Kimai stops accepting, because an admin deleted it or a second replica re-minted it under the same name, is detected and discarded: the session is dropped, the entry is removed from the store, and the user's next sign-in provisions them again. Running several replicas against one Kimai still means they re-mint each other's tokens (Kimai replaces tokens *by name*), which now costs a re-provisioning rather than a session stuck in permanent failure. Give each replica its own `--provision-token-name` to avoid it entirely.
+
+**Idle sessions.** A provisioned user's session is released after an hour without requests and rebuilt on their next one. Without that, every directory member who ever signed in kept a Kimai connection pool and a session manager for the lifetime of the process.
 
 **Slugs.** Provisioned users get a random slug of the same strength as the ones `users.example.json` tells you to generate, and no `auth_secret`, so the local login form cannot be used for them. The slug alone is a credential on the deprecated `/mcp/{slug}` routes, so run auto-provisioning with `--disable-legacy-slugs`; the server warns at startup when both are active.
 
@@ -193,7 +199,8 @@ Options for the Streamable HTTP server (`kimai-mcp-streamable`):
 | `--oidc-allow-unverified-email` | `KIMAI_MCP_OIDC_ALLOW_UNVERIFIED_EMAIL` | Accept the `email` claim without `email_verified: true` |
 | `--auto-provision` | `KIMAI_MCP_AUTO_PROVISION` | Onboard unknown OIDC identities automatically (requires `--auth-backend oidc` and the ApiTokenBundle plugin) |
 | `--provision-kimai-url URL` | `KIMAI_MCP_PROVISION_KIMAI_URL` | Kimai URL written into provisioned user configs (required for `--auto-provision`) |
-| `--provision-admin-token TOKEN` | `KIMAI_MCP_PROVISION_ADMIN_TOKEN` | Admin token used to mint per-user tokens; needs `api-token_other_profile` (prefer the env var) |
+| `--provision-admin-token TOKEN` | `KIMAI_MCP_PROVISION_ADMIN_TOKEN` | Admin token used to mint per-user tokens; needs `api-token_other_profile` and `view_user` (prefer the env var) |
+| `--provision-allowed-domains DOMAINS` | `KIMAI_MCP_PROVISION_ALLOWED_DOMAINS` | Comma-separated mail domains that may be onboarded. Strongly recommended unless the issuer is single-tenant |
 | `--provision-token-name NAME` | `KIMAI_MCP_PROVISION_TOKEN_NAME` | Name of the created tokens as shown in the Kimai profile (default: `Kimai MCP (auto)`) |
 | `--provision-match {exact,normalized,fuzzy}` | `KIMAI_MCP_PROVISION_MATCH` | How far to go when matching an identity to a Kimai user (default: `normalized`) |
 | `--provision-store FILE` | `KIMAI_MCP_PROVISION_STORE` | Persist provisioned users across restarts (plaintext tokens, written `0600`) |

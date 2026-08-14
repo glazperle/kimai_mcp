@@ -5,7 +5,7 @@ Adds the one REST endpoint Kimai is missing: **creating** a personal API token f
 Kimai's own API can only delete tokens (`DELETE /api/users/api-token/{id}`); creating one is a
 web-form action (`ProfileController::createAccessToken`, route `user_profile_access_token`).
 Without this plugin, automated onboarding would have to drive an admin **web session** through
-that HTML form — CSRF token, login throttling, 2FA and all — and would break on any Kimai UI
+that HTML form (CSRF token, login throttling, 2FA and all) and would break on any Kimai UI
 change. This bundle exposes the same operation, with the same permission check, as a normal API
 endpoint.
 
@@ -17,7 +17,7 @@ automatically, so nobody has to copy a token by hand.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/users/{id}/api-token` | Token metadata of that user (`id`, `name`, `lastUsage`, `expiresAt`) — never the token value |
+| `GET` | `/api/users/{id}/api-token` | Token metadata of that user (`id`, `name`, `lastUsage`, `expiresAt`); never the token value |
 | `POST` | `/api/users/{id}/api-token` | Creates a token and returns it **once**, `201` |
 
 `POST` body (all fields optional):
@@ -30,9 +30,9 @@ automatically, so nobody has to copy a token by hand.
 }
 ```
 
-* `name` — 2–50 characters, shown in the user's profile (default: `API token`).
-* `expiresAt` — `Y-m-d` or ISO 8601, must be in the future; omitted means no expiry.
-* `replaceExisting` — deletes that user's existing tokens **with the same name** first, so
+* `name`: 2–50 characters, shown in the user's profile (default: `API token`).
+* `expiresAt`: `Y-m-d` or ISO 8601, must be in the future; omitted means no expiry.
+* `replaceExisting`: deletes that user's existing tokens **with the same name** first, so
   re-provisioning does not pile up dead tokens.
 
 Response:
@@ -49,7 +49,7 @@ Response:
 
 ## Permissions
 
-Both endpoints require the `api-token` voter for the target profile — i.e. the calling API token
+Both endpoints require the `api-token` voter for the target profile, i.e. the calling API token
 must belong to a user with `api-token_other_profile`, which in Kimai's default role mapping only
 **ROLE_SUPER_ADMIN** has (`PROFILE_OTHER` in `config/packages/kimai.yaml`). Callers can always
 manage their own tokens (`api-token_own_profile`). This is exactly the check
@@ -83,7 +83,7 @@ The endpoints also appear in Kimai's Swagger UI (`/api/doc`) under the *User* ta
 
 Requires Kimai **2.65.0** (`extra.kimai.require: 26500`) or newer. It relies on three stable
 internals: the `AccessToken` entity, `AccessTokenRepository`, and the `api-token` voter attribute.
-After a Kimai upgrade, re-run the verification call above — the MCP server treats a `404`/`403`
+After a Kimai upgrade, re-run the verification call above; the MCP server treats a `404`/`403`
 from this endpoint as "auto-provisioning unavailable" and answers the sign-in with its usual
 "not authorized" page, so a broken plugin degrades onboarding rather than breaking the server.
 The server also probes for this bundle at startup (`--auto-provision`) and logs an explicit error

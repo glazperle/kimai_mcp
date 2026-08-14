@@ -185,8 +185,19 @@ test_tools_registration.py
 .env.local
 .env.production
 config.json
-config/users.json
 api_documentation.json
+
+# Everything the server collects in config/ holds plaintext secrets: Kimai API
+# tokens (users.json, provisioned_users.json) and OAuth client_secret values
+# (oauth_clients.json). docker-compose mounts ./config into the container, so
+# these appear inside the working tree of a clone during normal operation, and
+# only users.json used to be ignored. Ignore the directory and re-admit the
+# examples by name, so a file added later is excluded by default rather than by
+# somebody remembering to come back here.
+config/*
+!config/*.example.json
+!config/*.example
+!config/README.md
 
 # Tool caches. They contain absolute local paths, so keep them out of a public
 # repository even though the tools also self-ignore.

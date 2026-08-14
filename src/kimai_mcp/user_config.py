@@ -22,6 +22,76 @@ def _env_key_for_slug(slug: str, suffix: str) -> str:
     return f"KIMAI_USER_{slug.upper().replace('-', '_')}_{suffix}"
 
 
+def atomic_write_json(path: Path, data: object, *, mode: int = 0o600) -> None:
+    """Write ``data`` as JSON so the file is never readable by anyone else.
+
+    Every caller of this persists secrets (Kimai API tokens, OAuth client
+    secrets), which drives all four properties:
+
+    * ``os.open`` with ``mode`` creates the temp file **already** restricted.
+      Creating it via ``open()`` and calling ``chmod`` afterwards leaves it at
+      the process umask (usually 0644) for the whole write, and an fsync
+      deliberately widens that window. A SIGKILL in between used to strand a
+      world-readable ``.tmp`` full of plaintext tokens forever.
+    * ``fsync`` on the file, so a crash cannot leave the rename pointing at
+      truncated content.
+    * ``fsync`` on the *directory*, so the rename itself survives a host crash.
+      Without it the store can revert to its previous contents, which then
+      re-provisions users and invalidates tokens live sessions still hold.
+    * A stale ``.tmp`` from an earlier crash is removed rather than reused.
+
+    ``mode`` is advisory on Windows, where the ACL rather than the mode bits
+    decides; the atomicity and the fsyncs still apply.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.unlink(missing_ok=True)
+
+    fd = os.open(tmp_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    tmp_path.replace(path)
+
+    # Directory fsync is POSIX-only; Windows has no handle for it.
+    if hasattr(os, "O_DIRECTORY"):
+        dir_fd = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+
+def parse_ssl_verify(v: bool | str) -> bool | str:
+    """Coerce an ssl_verify setting from a string, or pass a CA path through.
+
+    Free-standing rather than a method, because every model carrying this field
+    needs the same coercion: the value almost always arrives from an env var or
+    a CLI argument, so the documented ``"false"`` reaches Pydantic as a string.
+    A ``bool | str`` field accepts it as-is under the smart union, and httpx
+    then treats ``"false"`` as a path to a CA bundle and raises in its own
+    constructor. ProvisioningConfig once declared the field without this and
+    the two models disagreed about the same setting.
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        lower_v = v.lower()
+        if lower_v == "true":
+            return True
+        elif lower_v == "false":
+            return False
+        # Treat as path to certificate
+        return v
+    return True
+
+
 class UserConfig(BaseModel):
     """Configuration for a single user's Kimai connection."""
 
@@ -53,21 +123,7 @@ class UserConfig(BaseModel):
             raise ValueError("Kimai URL must start with http:// or https://")
         return v
 
-    @field_validator("ssl_verify", mode="before")
-    @classmethod
-    def parse_ssl_verify(cls, v: bool | str) -> bool | str:
-        """Parse SSL verify value from string or bool."""
-        if isinstance(v, bool):
-            return v
-        if isinstance(v, str):
-            lower_v = v.lower()
-            if lower_v == "true":
-                return True
-            elif lower_v == "false":
-                return False
-            # Treat as path to certificate
-            return v
-        return True
+    _parse_ssl_verify = field_validator("ssl_verify", mode="before")(parse_ssl_verify)
 
 
 class UsersConfig(BaseModel):
@@ -76,6 +132,16 @@ class UsersConfig(BaseModel):
     users: dict[str, UserConfig] = Field(
         default_factory=dict,
         description="Map of user slug to user configuration"
+    )
+    provisioned_slugs: set[str] = Field(
+        default_factory=set,
+        exclude=True,
+        description=(
+            "Slugs that were added at runtime by automatic provisioning rather "
+            "than declared in users.json. Their credentials are disposable: a "
+            "token Kimai no longer accepts can be dropped and re-minted on the "
+            "next sign-in, which must never happen to a hand-written entry."
+        ),
     )
 
     @field_validator("users")
@@ -294,8 +360,13 @@ class UsersConfig(BaseModel):
                 return slug, config
         return None
 
-    def add_user(self, slug: str, config: UserConfig) -> None:
+    def add_user(self, slug: str, config: UserConfig, *, provisioned: bool = True) -> None:
         """Register a user at runtime (used by automatic provisioning).
+
+        Args:
+            provisioned: Whether this entry may be dropped and re-created
+                automatically. True for everything added at runtime, which is
+                every current caller; see :attr:`provisioned_slugs`.
 
         Raises:
             ValueError: if the slug is unusable in a URL, or already taken.
@@ -309,6 +380,21 @@ class UsersConfig(BaseModel):
         if slug in self.users:
             raise ValueError(f"User slug '{slug}' is already configured")
         self.users[slug] = config
+        if provisioned:
+            self.provisioned_slugs.add(slug)
+
+    def remove_provisioned_user(self, slug: str) -> UserConfig | None:
+        """Forget a provisioned user, so the next sign-in provisions it again.
+
+        Refuses hand-written entries: their token is what the operator put
+        there, and dropping it would turn an outage into a silent config
+        change. Returns the removed config, or None if there was nothing to
+        remove.
+        """
+        if slug not in self.provisioned_slugs:
+            return None
+        self.provisioned_slugs.discard(slug)
+        return self.users.pop(slug, None)
 
     def list_users(self) -> list[str]:
         """List all configured user slugs."""
