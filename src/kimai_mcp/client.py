@@ -43,6 +43,7 @@ from .models import (
     TimesheetConfig,
     TimesheetEditForm,
     TimesheetEntity,
+    TimesheetExpanded,
     TimesheetFilter,
     User,
     UserCreateForm,
@@ -362,14 +363,21 @@ class KimaiClient:
 
         return all_timesheets, fetched_all, page
     
-    async def get_active_timesheets(self) -> list[TimesheetEntity]:
-        """Get active timesheets for current user."""
+    async def get_active_timesheets(self) -> list[TimesheetExpanded]:
+        """Get active timesheets for current user.
+
+        Kimai declares this endpoint as ``TimesheetCollectionExpanded``, so the
+        relations arrive as objects rather than ids (issue #24).
+        """
         data = await self._request("GET", "/timesheets/active")
-        return [TimesheetEntity(**item) for item in data]
-    
-    async def get_recent_timesheets(self, begin: datetime | None = None, size: int = 10) -> list[TimesheetEntity]:
+        return [TimesheetExpanded(**item) for item in data]
+
+    async def get_recent_timesheets(self, begin: datetime | None = None, size: int = 10) -> list[TimesheetExpanded]:
         """Get recent timesheet activities.
-        
+
+        Declared as ``TimesheetCollectionExpanded`` like ``/timesheets/active``,
+        so the relations arrive expanded here too.
+
         Args:
             begin: Only records after this date
             size: Number of entries to return
@@ -377,9 +385,9 @@ class KimaiClient:
         params = {"size": size}
         if begin:
             params["begin"] = begin.isoformat()
-        
+
         data = await self._request("GET", "/timesheets/recent", params=params)
-        return [TimesheetEntity(**item) for item in data]
+        return [TimesheetExpanded(**item) for item in data]
     
     async def get_timesheet(self, timesheet_id: int) -> TimesheetEntity:
         """Get a single timesheet by ID."""

@@ -735,7 +735,13 @@ async def _handle_timer_active(client: KimaiClient) -> list[TextContent]:
         now = datetime.now(ts.begin.tzinfo)
         elapsed = (now - ts.begin).total_seconds() / 3600
         
-        result += f"ID: {ts.id} - Project: {ts.project} / Activity: {ts.activity}\n"
+        # /timesheets/active is an Expanded schema, so name the relations
+        # instead of printing bare ids (issue #24).
+        project = ts.project.name
+        if ts.project.customer:
+            project = f"{ts.project.customer.name} / {project}"
+
+        result += f"ID: {ts.id} - Project: {project} / Activity: {ts.activity.name}\n"
         result += f"  Started: {ts.begin.strftime('%Y-%m-%d %H:%M')}\n"
         result += f"  Elapsed: {elapsed:.2f} hours\n"
         
