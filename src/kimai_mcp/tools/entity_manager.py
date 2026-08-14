@@ -350,18 +350,15 @@ OTHER:
                                     },
                                     "orderDate": {
                                         "type": "string",
-                                        "format": "date",
-                                        "description": "The date when the project was ordered or officially started (YYYY-MM-DD format). Note: Times are not included."
+                                        "description": "The date when the project was ordered. Use YYYY-MM-DD for action=create and YYYY-MM-DDTHH:MM:SS for action=update (see 'start'). Times are not stored."
                                     },
                                     "start": {
                                         "type": "string",
-                                        "format": "date",
-                                        "description": "The official start date of the project (YYYY-MM-DD). Timesheets cannot be recorded before this date."
+                                        "description": "The official start date of the project. Timesheets cannot be recorded before this date. NOTE: the accepted format differs per action - action=create takes YYYY-MM-DD, action=update requires the full YYYY-MM-DDTHH:MM:SS form and answers 'Please enter a valid date.' to a date-only value. Kimai binds the two forms with different date formats (ProjectController: DATE_ONLY_FORMAT on POST, HTML5 DATE_FORMAT on PATCH); this asymmetry exists on projects only."
                                     },
                                     "end": {
                                         "type": "string",
-                                        "format": "date",
-                                        "description": "The projected or actual end date of the project (YYYY-MM-DD). Timesheets cannot be recorded after this date."
+                                        "description": "The projected or actual end date of the project. Timesheets cannot be recorded after this date. Same per-action format split as 'start': YYYY-MM-DD to create, YYYY-MM-DDTHH:MM:SS to update."
                                     },
                                     "customer": {
                                         "description": "The unique ID of the customer to whom this project belongs, required for create action.",

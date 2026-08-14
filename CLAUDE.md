@@ -310,6 +310,7 @@ See `examples/usage_examples.md` for more detailed examples.
 - `team_access` revoke actions need the `permissions` permission on the customer/project/activity since **Kimai 2.65**, on top of `edit` on the team; a token that could revoke on 2.64 may get a 403 now
 - `entity type=user action=set_preferences` can fail with 403 (not only 404) since **Kimai 2.63** tightened the work-contract guard
 - `filters.full` for customer listings needs the `details_customer` permission; without it Kimai returns the short form silently rather than an error
+- A project's `start` / `end` / `orderDate` take **a different format per action**: `YYYY-MM-DD` on create, but the full `YYYY-MM-DDTHH:MM:SS` on update, which answers `"Please enter a valid date."` to a date-only value. `ProjectController` binds the same form with `DATE_ONLY_FORMAT` on POST and the HTML5 `DATE_FORMAT` on PATCH; projects are the only entity where the two differ. Stated in the `entity` project schema
 - Some advanced API parameters not yet implemented (see individual tool schemas)
 
 ### API Compliance Guidelines

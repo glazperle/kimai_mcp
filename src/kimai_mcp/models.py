@@ -653,6 +653,12 @@ class MetaFieldForm(KimaiModel):
 # carries them and the base models above parse them. These subclasses are kept
 # as the return types of the create/update client methods, where the response is
 # the full entity, but they no longer add fields of their own.
+#
+# Ext*ended* is not Ext*panded*: `ProjectExpanded` / `ActivityExpanded` above are
+# a different thing entirely. Those carry Kimai's `Expanded` serializer group, in
+# which the relation is a nested object rather than an id, and they are named
+# after Kimai's own schema aliases. The `*Extended` models here say nothing about
+# the relations; they only mark "this response is the full entity".
 
 class CustomerExtended(Customer):
     """Customer as returned by get/create/update (full entity)."""
