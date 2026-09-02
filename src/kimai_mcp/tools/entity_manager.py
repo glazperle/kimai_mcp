@@ -27,6 +27,41 @@ from .user_discovery import resolve_accessible_users
 
 logger = logging.getLogger(__name__)
 
+# Budget block shared by the customer and project data schemas (activities take
+# the same three fields, but have no typed data schema to hang them on). Those
+# schemas are additionalProperties:false, so a field that is missing here cannot
+# be written at all - it is rejected by validate_arguments before the handler
+# runs, not merely left undocumented.
+#
+# `timeBudget` is one field with two meanings (see models._normalize_time_budget):
+# Kimai serializes it as seconds but parses a bare number on write as hours.
+_BUDGET_SCHEMA = {
+    "budget": {
+        "type": "number",
+        "description": "Money budget, in the customer's currency. 0 removes it.",
+    },
+    "timeBudget": {
+        "type": ["integer", "string"],
+        "description": (
+            "Time budget. An integer is SECONDS, the same unit action=get "
+            "returns, so a value read from Kimai can be written straight back "
+            "(7200 = 2 hours). A string is a Kimai duration string, where a "
+            'bare number is HOURS: "2", "2.0", "2h" and "2:00" all mean two '
+            'hours, while "90m" and "1:30" mean 90 minutes. 0 removes the '
+            "budget. https://www.kimai.org/documentation/duration-format.html"
+        ),
+    },
+    "budgetType": {
+        "type": "string",
+        "enum": ["month"],
+        "description": (
+            "Set to 'month' to make 'budget' and 'timeBudget' a recurring "
+            "monthly allowance. Omit for one total budget over the whole "
+            "lifetime of the entity."
+        ),
+    },
+}
+
 # Preference aliases for more intuitive names
 PREFERENCE_ALIASES = {
     # Vacation
@@ -122,7 +157,12 @@ USER PREFERENCES (action=set_preferences, type=user only):
                 },
                 "data": {
                     "type": "object",
-                    "description": "Data for create/update actions (entity-specific fields)",
+                    "description": (
+                        "Data for create/update actions (entity-specific fields). "
+                        "Note for 'timeBudget': an integer is seconds (the unit "
+                        "action=get reports), a string is a Kimai duration where a "
+                        'bare number is hours - "2" and 7200 both mean two hours.'
+                    ),
                     "additionalProperties": True
                 },
                 "month": {
@@ -292,6 +332,7 @@ OTHER:
                                         "format": "App\\Entity\\InvoiceTemplate id",
                                         "description": "ID of the invoice template to use for this customer"
                                     },
+                                    **_BUDGET_SCHEMA,
                                     "metaFields": {
                                         "type": "array",
                                         "description": "Custom meta fields for this customer",
@@ -383,6 +424,7 @@ OTHER:
                                         "default": True,
                                         "description": "Determines if time and expenses recorded against this project are considered billable to the customer."
                                     },
+                                    **_BUDGET_SCHEMA,
                                     "metaFields": {
                                         "type": "array",
                                         "description": "Custom meta fields for this project",
@@ -580,6 +622,10 @@ class BaseEntityHandler:
         """Render the budget block shared by customers, projects and activities.
 
         Kimai sends 0 for "no budget", so only non-zero values are shown.
+
+        The time budget is printed in hours *and* in the raw seconds Kimai
+        sent, because those seconds are what an update takes back (a bare
+        number in a duration *string* would be read as hours instead).
         """
         out = ""
         budget = getattr(entity, 'budget', None)
@@ -591,7 +637,7 @@ class BaseEntityHandler:
             out += f"Budget: {amount}{period}\n"
         time_budget = getattr(entity, 'time_budget', None)
         if time_budget:
-            out += f"Time Budget: {time_budget / 3600:.2f} hours\n"
+            out += f"Time Budget: {time_budget / 3600:.2f} hours ({time_budget} seconds)\n"
         return out
 
     @staticmethod
