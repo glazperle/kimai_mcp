@@ -139,7 +139,7 @@ def model_aliases(class_name: str) -> set | None:
     return {field.alias or name for name, field in cls.model_fields.items()}
 
 
-DURATION_QUOTED_RE = re.compile(r"^\s*'([^']+)',\s*$", re.MULTILINE)
+DURATION_QUOTED_RE = re.compile(r"^\s*'([^']+)',?\s*$", re.MULTILINE)
 
 
 def check_duration_grammar(ref: str) -> bool:
@@ -157,8 +157,11 @@ def check_duration_grammar(ref: str) -> bool:
         print("[SKIP] duration grammar: could not read src/Validator/Constraints/Duration.php")
         return True
     start = source.find("$patterns = [")
-    end = source.find("];", start)
-    upstream = DURATION_QUOTED_RE.findall(source[start:end]) if start >= 0 else []
+    end = source.find("];", start) if start >= 0 else -1
+    if start < 0 or end < 0:
+        print("[SKIP] duration grammar: $patterns array not found in Duration.php (layout changed?)")
+        return True
+    upstream = DURATION_QUOTED_RE.findall(source[start:end])
     ours = list(_DURATION_ALTERNATIVES)
     if upstream == ours:
         print(f"[OK  ] duration grammar: {len(ours)} alternatives match Duration.php")

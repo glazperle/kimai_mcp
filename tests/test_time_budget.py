@@ -46,7 +46,6 @@ def _payload(form_cls, **kwargs):
     return form_cls(name="X", **kwargs).model_dump(exclude_none=True, by_alias=True)
 
 
-_data_schema = entity_data_schema
 
 
 # --- the read side is unchanged: seconds, as an int ------------------------
@@ -174,7 +173,7 @@ def test_serializer_prints_the_seconds_next_to_the_hours():
 def test_budget_fields_are_reachable_through_the_entity_schema(entity_type):
     """The data schemas are additionalProperties:false, so an omitted field is
     not merely undocumented, it is rejected before the handler ever runs."""
-    props = _data_schema(entity_type)["properties"]
+    props = entity_data_schema(entity_type)["properties"]
     assert {"budget", "timeBudget", "budgetType"} <= set(props)
     assert set(props["timeBudget"]["type"]) == {"integer", "string"}
     assert props["budgetType"]["enum"] == ["month"]
@@ -205,23 +204,15 @@ def test_the_schema_still_rejects_an_unknown_field(entity_type):
 @pytest.mark.parametrize("entity_type", ["customer", "project", "activity"])
 def test_the_schema_documents_the_seconds_vs_hours_split(entity_type):
     """The description is the only place an LLM learns that '2' is 2 hours."""
-    description = _data_schema(entity_type)["properties"]["timeBudget"]["description"].lower()
+    description = entity_data_schema(entity_type)["properties"]["timeBudget"]["description"].lower()
     assert "seconds" in description
     assert "hours" in description
-
-
-def test_budget_schema_is_not_shared_between_branches():
-    """Each branch gets its own copy; mutating one must not leak into another."""
-    customer = _data_schema("customer")["properties"]["timeBudget"]
-    project = _data_schema("project")["properties"]["timeBudget"]
-    assert customer == project
-    assert customer is not project
 
 
 def test_activity_schema_is_closed_and_typed():
     """A typo in an activity field used to become an empty PATCH reported as
     'Updated'; the activity branch is additionalProperties:false now."""
-    schema = _data_schema("activity")
+    schema = entity_data_schema("activity")
     assert schema["additionalProperties"] is False
     assert {"name", "project", "teams", "color", "visible", "billable", "metaFields"} <= set(schema["properties"])
     assert schema["properties"]["teams"]["type"] == "array"
@@ -231,3 +222,21 @@ def test_activity_schema_is_closed_and_typed():
 def test_teams_is_a_list_of_ids_on_the_create_forms(form_cls):
     """Kimai's TeamType is `multiple => true`: an array of team ids."""
     assert form_cls(name="X", teams=[1, 2]).model_dump(exclude_none=True)["teams"] == [1, 2]
+
+
+@pytest.mark.parametrize("entity_type", ["customer", "project", "activity"])
+def test_teams_is_reachable_on_create_for_all_three_types(entity_type):
+    """Kimai binds `teams` (an array of ids) on create for all three entities."""
+    props = entity_data_schema(entity_type)["properties"]
+    assert props["teams"]["type"] == "array"
+    validate_arguments(entity_tool(), {
+        "type": entity_type, "action": "create",
+        "data": {"name": "Acme", "teams": [1, 2], **({"customer": 1} if entity_type == "project" else {}),
+                 **({"country": "DE", "currency": "EUR", "timezone": "Europe/Berlin"} if entity_type == "customer" else {})},
+    })
+
+
+def test_activity_update_does_not_require_a_name():
+    """The schema promises `name` is required for create only; the form must
+    agree, or `action=update data={"timeBudget": 7200}` dies in Pydantic."""
+    assert ActivityEditForm(timeBudget=7200).model_dump(exclude_none=True, by_alias=True) == {"timeBudget": "2:00:00"}

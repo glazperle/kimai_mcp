@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.2] - 2026-09-03
+
 ### Added
 
 - **Typed `data` schema for `entity type=activity`.** Activities were the only entity type without
@@ -23,14 +25,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`teams` on the customer, project and activity edit forms is a list of team ids**, not a single
-  int: Kimai's `TeamType` is bound with `multiple => true`. The field is only bound on create.
+  int: Kimai's `TeamType` is bound with `multiple => true`. The field is now also in all three
+  `data` schemas (it was in none, so it could not be sent at all). Kimai binds it on create only;
+  the extra-fields hint names it for `action=update` and points to `team_access`.
+- **`entity type=activity action=update` no longer requires `name`.** `ActivityEditForm.name` was
+  a required `str`, unlike the customer and project forms, so an update that only touched another
+  field (`data={"timeBudget": 7200}`) passed the schema and died in Pydantic with `Field required`.
 
 ### Changed
 
-- The budget block is spliced into each entity schema through a deep copy so the branches no
-  longer share one dict; the three `time_budget` field comments and the generic `data` description
-  were reduced to a pointer to `_normalize_duration`; the tests share one `entity_data_schema()`
-  helper (`tests/schema_helpers.py`).
+- The budget and `metaFields` blocks of the three entity schemas come from small factory
+  functions instead of three hand-synced copies; the three `time_budget` field comments were
+  reduced to a pointer to `_normalize_duration`; the `timeBudget` note was dropped from the generic
+  `data` description because every entity with `timeBudget` now has a typed branch carrying it;
+  the tests share one `entity_data_schema()` helper (`tests/schema_helpers.py`).
 
 ## [2.17.1] - 2026-09-03
 

@@ -1,6 +1,5 @@
 """Consolidated Entity Manager tool for all CRUD operations."""
 import builtins
-import copy
 import logging
 
 from mcp.types import TextContent, Tool
@@ -36,44 +35,53 @@ logger = logging.getLogger(__name__)
 # `timeBudget` is one field with two meanings (see models._normalize_duration):
 # Kimai serializes it as seconds but parses a bare number on write as hours.
 #
-# Spliced into each schema through _budget_schema(), which deep-copies, so no
-# two branches share a dict and a later mutation of one cannot leak into the
-# others.
-_BUDGET_SCHEMA = {
-    "budget": {
-        "type": "number",
-        "description": "Money budget, in the customer's currency. 0 removes it.",
-    },
-    "timeBudget": {
-        "type": ["integer", "string"],
-        "description": (
-            "Time budget. An integer is SECONDS, the same unit action=get "
-            "returns, so a value read from Kimai can be written straight back "
-            "(7200 = 2 hours). A string is a Kimai duration string, where a "
-            'bare number is HOURS: "2.0", "2h" and "2:00" all mean two hours, '
-            'while "90m" and "1:30" mean 90 minutes. A bare-digit string such '
-            'as "7200" is rejected as ambiguous. 0 removes the budget. Kimai '
-            "only accepts these fields when the token holds the 'budget' resp. "
-            "'time' permission for the entity. "
-            "https://www.kimai.org/documentation/duration-format.html"
-        ),
-    },
-    "budgetType": {
-        "type": "string",
-        "enum": ["month"],
-        "description": (
-            "Set to 'month' to make 'budget' and 'timeBudget' a recurring "
-            "monthly allowance. Omit to leave the stored type unchanged (a new "
-            "entity then gets one total budget over its whole lifetime). "
-            "Reverting 'month' to a lifetime budget is not possible through "
-            "this tool; use the Kimai UI for that."
-        ),
-    },
-}
-
-
 def _budget_schema() -> dict:
-    return copy.deepcopy(_BUDGET_SCHEMA)
+    return {
+        "budget": {
+            "type": "number",
+            "description": "Money budget, in the customer's currency. 0 removes it.",
+        },
+        "timeBudget": {
+            "type": ["integer", "string"],
+            "description": (
+                "Time budget. An integer is SECONDS, the same unit action=get "
+                "returns, so a value read from Kimai can be written straight back "
+                "(7200 = 2 hours). A string is a Kimai duration string, where a "
+                'bare number is HOURS: "2.0", "2h" and "2:00" all mean two hours, '
+                'while "90m" and "1:30" mean 90 minutes. A bare-digit string such '
+                'as "7200" is rejected as ambiguous. 0 removes the budget. Kimai '
+                "only accepts these fields when the token holds the 'budget' resp. "
+                "'time' permission for the entity. "
+                "https://www.kimai.org/documentation/duration-format.html"
+            ),
+        },
+        "budgetType": {
+            "type": "string",
+            "enum": ["month"],
+            "description": (
+                "Set to 'month' to make 'budget' and 'timeBudget' a recurring "
+                "monthly allowance. Omit to leave the stored type unchanged (a new "
+                "entity then gets one total budget over its whole lifetime). "
+                "Reverting 'month' to a lifetime budget is not possible through "
+                "this tool; use the Kimai UI for that."
+            ),
+        },
+    }
+
+
+def _meta_fields_schema(entity: str) -> dict:
+    return {
+        "type": "array",
+        "description": f"Custom meta fields for this {entity}",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "value": {"type": "string"}
+            },
+            "required": ["name", "value"]
+        }
+    }
 
 
 # Preference aliases for more intuitive names
@@ -341,19 +349,13 @@ OTHER:
                                         "format": "App\\Entity\\InvoiceTemplate id",
                                         "description": "ID of the invoice template to use for this customer"
                                     },
-                                    **_budget_schema(),
-                                    "metaFields": {
+                                    "teams": {
                                         "type": "array",
-                                        "description": "Custom meta fields for this customer",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "name": {"type": "string"},
-                                                "value": {"type": "string"}
-                                            },
-                                            "required": ["name", "value"]
-                                        }
-                                    }
+                                        "items": {"type": "integer"},
+                                        "description": "IDs of the teams that get access to the customer. Kimai binds this field on create only; on update it is rejected as an extra field, use the team_access tool instead."
+                                    },
+                                    **_budget_schema(),
+                                    "metaFields": _meta_fields_schema("customer")
                                 },
                                 "additionalProperties": False
                             }
@@ -433,19 +435,13 @@ OTHER:
                                         "default": True,
                                         "description": "Determines if time and expenses recorded against this project are considered billable to the customer."
                                     },
-                                    **_budget_schema(),
-                                    "metaFields": {
+                                    "teams": {
                                         "type": "array",
-                                        "description": "Custom meta fields for this project",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "name": {"type": "string"},
-                                                "value": {"type": "string"}
-                                            },
-                                            "required": ["name", "value"]
-                                        }
-                                    }
+                                        "items": {"type": "integer"},
+                                        "description": "IDs of the teams that get access to the project. Kimai binds this field on create only; on update it is rejected as an extra field, use the team_access tool instead."
+                                    },
+                                    **_budget_schema(),
+                                    "metaFields": _meta_fields_schema("project")
                                 },
                                 "additionalProperties": False
                             }
@@ -492,7 +488,7 @@ OTHER:
                                     "teams": {
                                         "type": "array",
                                         "items": {"type": "integer"},
-                                        "description": "IDs of the teams that get access to the activity. Kimai binds this field on create only; use the team_access tool afterwards."
+                                        "description": "IDs of the teams that get access to the activity. Kimai binds this field on create only; on update it is rejected as an extra field, use the team_access tool instead."
                                     },
                                     "color": {
                                         "type": "string",
@@ -509,18 +505,7 @@ OTHER:
                                         "description": "Determines if time recorded against this activity is considered billable."
                                     },
                                     **_budget_schema(),
-                                    "metaFields": {
-                                        "type": "array",
-                                        "description": "Custom meta fields for this activity",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "name": {"type": "string"},
-                                                "value": {"type": "string"}
-                                            },
-                                            "required": ["name", "value"]
-                                        }
-                                    }
+                                    "metaFields": _meta_fields_schema("activity")
                                 },
                                 "additionalProperties": False
                             }

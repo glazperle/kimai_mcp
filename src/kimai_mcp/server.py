@@ -58,7 +58,9 @@ def format_api_error(e: KimaiAPIError) -> str:
             "Settings > Timesheet; and 'budget' / 'timeBudget' / 'budgetType' on a "
             "customer, project or activity, which Kimai only adds when the token holds "
             "the 'budget' resp. 'time' permission for that entity (budget_project, "
-            "time_project, ...). Retry without that field, or grant the permission."
+            "time_project, ...). On action=update also 'teams' (bound on create only; "
+            "use team_access) and 'project' on a global activity. Retry without that "
+            "field, or grant the permission."
         )
     if details:
         text += f"\nDetails: {details}"

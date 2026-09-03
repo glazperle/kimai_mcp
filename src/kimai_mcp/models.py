@@ -856,7 +856,7 @@ class ProjectEditForm(KimaiModel):
 
 class ActivityEditForm(KimaiModel):
     """Form for creating/editing activities."""
-    name: str  # Required
+    name: str | None = None  # Required for creation
     project: int | None = None  # Project ID (None = global activity)
     comment: str | None = None
     visible: bool | None = None
