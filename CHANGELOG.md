@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Typed `data` schema for `entity type=activity`.** Activities were the only entity type without
+  one, so their write fields were undocumented for the caller and a typo in a field name became an
+  empty PATCH reported as `Updated` (the `ActivityEditForm` ignores extras). The branch mirrors
+  Kimai's `ActivityEditForm` (2.65.0): `name`, `number`, `comment`, `invoiceText`, `project`,
+  `teams`, `color`, `visible`, `billable`, the budget block and `metaFields`, with
+  `additionalProperties: false` like the customer and project branches.
+- **`scripts/audit_api_models.py` pins the duration grammar.** `models._DURATION_ALTERNATIVES` is
+  a hand transcription of the `$patterns` array in Kimai's `src/Validator/Constraints/Duration.php`
+  and is used to reject input locally, so a widened upstream grammar would make the client refuse a
+  duration Kimai accepts. The audit now compares the two verbatim and fails on a difference.
+
+### Fixed
+
+- **`teams` on the customer, project and activity edit forms is a list of team ids**, not a single
+  int: Kimai's `TeamType` is bound with `multiple => true`. The field is only bound on create.
+
+### Changed
+
+- The budget block is spliced into each entity schema through a deep copy so the branches no
+  longer share one dict; the three `time_budget` field comments and the generic `data` description
+  were reduced to a pointer to `_normalize_duration`; the tests share one `entity_data_schema()`
+  helper (`tests/schema_helpers.py`).
+
 ## [2.17.1] - 2026-09-03
 
 ### Fixed

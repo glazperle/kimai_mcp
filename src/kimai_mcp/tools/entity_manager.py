@@ -1,5 +1,6 @@
 """Consolidated Entity Manager tool for all CRUD operations."""
 import builtins
+import copy
 import logging
 
 from mcp.types import TextContent, Tool
@@ -27,14 +28,17 @@ from .user_discovery import resolve_accessible_users
 
 logger = logging.getLogger(__name__)
 
-# Budget block shared by the customer and project data schemas (activities take
-# the same three fields, but have no typed data schema to hang them on). Those
+# Budget block shared by the customer, project and activity data schemas. Those
 # schemas are additionalProperties:false, so a field that is missing here cannot
 # be written at all - it is rejected by validate_arguments before the handler
 # runs, not merely left undocumented.
 #
-# `timeBudget` is one field with two meanings (see models._normalize_time_budget):
+# `timeBudget` is one field with two meanings (see models._normalize_duration):
 # Kimai serializes it as seconds but parses a bare number on write as hours.
+#
+# Spliced into each schema through _budget_schema(), which deep-copies, so no
+# two branches share a dict and a later mutation of one cannot leak into the
+# others.
 _BUDGET_SCHEMA = {
     "budget": {
         "type": "number",
@@ -66,6 +70,11 @@ _BUDGET_SCHEMA = {
         ),
     },
 }
+
+
+def _budget_schema() -> dict:
+    return copy.deepcopy(_BUDGET_SCHEMA)
+
 
 # Preference aliases for more intuitive names
 PREFERENCE_ALIASES = {
@@ -162,13 +171,7 @@ USER PREFERENCES (action=set_preferences, type=user only):
                 },
                 "data": {
                     "type": "object",
-                    "description": (
-                        "Data for create/update actions (entity-specific fields). "
-                        "Note for 'timeBudget': an integer is seconds (the unit "
-                        "action=get reports), a string is a Kimai duration where a "
-                        'bare number is hours - "2h" and 7200 both mean two hours; '
-                        'a bare-digit string like "7200" is rejected as ambiguous.'
-                    ),
+                    "description": "Data for create/update actions (entity-specific fields)",
                     "additionalProperties": True
                 },
                 "month": {
@@ -338,7 +341,7 @@ OTHER:
                                         "format": "App\\Entity\\InvoiceTemplate id",
                                         "description": "ID of the invoice template to use for this customer"
                                     },
-                                    **_BUDGET_SCHEMA,
+                                    **_budget_schema(),
                                     "metaFields": {
                                         "type": "array",
                                         "description": "Custom meta fields for this customer",
@@ -430,10 +433,85 @@ OTHER:
                                         "default": True,
                                         "description": "Determines if time and expenses recorded against this project are considered billable to the customer."
                                     },
-                                    **_BUDGET_SCHEMA,
+                                    **_budget_schema(),
                                     "metaFields": {
                                         "type": "array",
                                         "description": "Custom meta fields for this project",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": {"type": "string"},
+                                                "value": {"type": "string"}
+                                            },
+                                            "required": ["name", "value"]
+                                        }
+                                    }
+                                },
+                                "additionalProperties": False
+                            }
+                        },
+                        "required": ["data"]
+                    },
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "type": {"const": "activity"},
+                            "action": {"enum": ["create", "update"]}
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "data": {
+                                "type": "object",
+                                "description": "Data structure required for creating or updating an 'activity' entity.",
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "description": "The name of the activity, required for create action.",
+                                        "minLength": 2,
+                                        "maxLength": 150
+                                    },
+                                    "number": {
+                                        "type": "string",
+                                        "maxLength": 10,
+                                        "description": "An internal tracking number or code for the activity."
+                                    },
+                                    "comment": {
+                                        "type": "string",
+                                        "description": "Any additional notes or descriptive comments regarding the activity."
+                                    },
+                                    "invoiceText": {
+                                        "type": "string",
+                                        "description": "Custom text that should appear on invoices generated for this activity."
+                                    },
+                                    "project": {
+                                        "type": "integer",
+                                        "description": "ID of the project this activity belongs to. Omit for a global activity. Kimai binds this field on create, and on update only for activities that are not global."
+                                    },
+                                    "teams": {
+                                        "type": "array",
+                                        "items": {"type": "integer"},
+                                        "description": "IDs of the teams that get access to the activity. Kimai binds this field on create only; use the team_access tool afterwards."
+                                    },
+                                    "color": {
+                                        "type": "string",
+                                        "description": "The assigned display color for the activity in HTML hex format (e.g., #dd1d00). If left empty, a color might be auto-calculated."
+                                    },
+                                    "visible": {
+                                        "type": "boolean",
+                                        "description": "Controls the visibility of the activity. If False, timesheets usually cannot be recorded against it.",
+                                        "default": True
+                                    },
+                                    "billable": {
+                                        "type": "boolean",
+                                        "default": True,
+                                        "description": "Determines if time recorded against this activity is considered billable."
+                                    },
+                                    **_budget_schema(),
+                                    "metaFields": {
+                                        "type": "array",
+                                        "description": "Custom meta fields for this activity",
                                         "items": {
                                             "type": "object",
                                             "properties": {

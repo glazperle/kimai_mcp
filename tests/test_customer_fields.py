@@ -30,17 +30,16 @@ from kimai_mcp.tools.entity_manager import (
     ProjectEntityHandler,
     entity_tool,
 )
+from tests.schema_helpers import entity_data_schema
 
 CUSTOMER_SCHEMA_TITLE = "Schema for creating/editing customer entities."
 
 
 def _customer_data_schema() -> dict:
     """The create/update data schema for type=customer out of the tool schema."""
-    for branch in entity_tool().input_schema["allOf"]:
-        data = branch.get("then", {}).get("properties", {}).get("data", {})
-        if data.get("description") == CUSTOMER_SCHEMA_TITLE:
-            return data
-    raise AssertionError("customer create/update schema not found")
+    schema = entity_data_schema("customer")
+    assert schema["description"] == CUSTOMER_SCHEMA_TITLE
+    return schema
 
 
 def test_customer_model_parses_new_fields():

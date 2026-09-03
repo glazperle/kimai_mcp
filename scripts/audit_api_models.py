@@ -17,6 +17,9 @@ It needs no Kimai instance, only the ``gh`` CLI for the raw file access.
 
 Exit code is 1 when a schema exposes a field no model carries, so it can gate
 an API-compliance review. Fields listed in EXPECTED_UNMODELLED are ignored;
+the duration grammar that models._DURATION_ALTERNATIVES transcribes from
+src/Validator/Constraints/Duration.php is compared verbatim as well, because
+the client rejects input against it before Kimai ever sees the request;
 add to that list (with a reason) rather than silencing the whole check.
 """
 
@@ -136,6 +139,35 @@ def model_aliases(class_name: str) -> set | None:
     return {field.alias or name for name, field in cls.model_fields.items()}
 
 
+DURATION_QUOTED_RE = re.compile(r"^\s*'([^']+)',\s*$", re.MULTILINE)
+
+
+def check_duration_grammar(ref: str) -> bool:
+    """Compare the local copy of Kimai's duration regex with the upstream one.
+
+    `models._DURATION_ALTERNATIVES` is a hand transcription of the `$patterns`
+    array in `src/Validator/Constraints/Duration.php`. It is used to reject
+    input locally, so a widened upstream grammar would make this client refuse
+    a duration Kimai accepts, with a confident message and no 400 to notice.
+    """
+    from kimai_mcp.models import _DURATION_ALTERNATIVES
+
+    source = fetch("src/Validator/Constraints/Duration.php", ref)
+    if not source:
+        print("[SKIP] duration grammar: could not read src/Validator/Constraints/Duration.php")
+        return True
+    start = source.find("$patterns = [")
+    end = source.find("];", start)
+    upstream = DURATION_QUOTED_RE.findall(source[start:end]) if start >= 0 else []
+    ours = list(_DURATION_ALTERNATIVES)
+    if upstream == ours:
+        print(f"[OK  ] duration grammar: {len(ours)} alternatives match Duration.php")
+        return True
+    print("[GAP ] duration grammar differs from Duration.php")
+    print(json.dumps({"upstream": upstream, "ours": ours}, indent=2))
+    return False
+
+
 def main() -> int:
     ref = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_REF
     aliases = parse_schema_aliases(ref)
@@ -168,10 +200,13 @@ def main() -> int:
         if missing:
             gaps.append({"schema": alias, "model": model_name, "missing": sorted(missing)})
 
+    print()
+    grammar_ok = check_duration_grammar(ref)
+
     print(f"\n{len(gaps)} schema(s) expose fields no model carries")
     if gaps:
         print(json.dumps(gaps, indent=2))
-    return 1 if gaps else 0
+    return 1 if gaps or not grammar_ok else 0
 
 
 if __name__ == "__main__":

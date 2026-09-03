@@ -377,9 +377,7 @@ class TimesheetEditForm(KimaiModel):
     tags: str | None = None
     exported: bool | None = None
     billable: bool | None = None
-    # int = seconds (what the read models report), str = Kimai duration format
-    # where a bare number is hours. See _normalize_duration.
-    break_duration: BreakDuration = Field(None, alias="break")
+    break_duration: BreakDuration = Field(None, alias="break")  # see _normalize_duration
 
 
 class TimesheetFilter(KimaiModel):
@@ -802,9 +800,7 @@ class CustomerEditForm(KimaiModel):
     visible: bool | None = None
     billable: bool | None = None
     budget: float | None = None
-    # int = seconds (what the read models report), str = Kimai duration format
-    # where a bare number is hours. See _normalize_time_budget.
-    time_budget: TimeBudget = Field(None, alias="timeBudget")
+    time_budget: TimeBudget = Field(None, alias="timeBudget")  # see _normalize_duration
     budget_type: Literal["month"] | None = Field(None, alias="budgetType")
     color: str | None = None
     phone: str | None = None
@@ -828,7 +824,7 @@ class CustomerEditForm(KimaiModel):
     # Kimai 2.63+ (kimai/kimai#5857, #5855)
     language: str | None = None  # e.g. "de", "en"
     invoice_email: str | None = Field(None, alias="invoiceEmail")
-    teams: int | None = None  # Team ID
+    teams: list[int] | None = None  # Team IDs; Kimai binds this on create only
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
 
 
@@ -840,9 +836,7 @@ class ProjectEditForm(KimaiModel):
     visible: bool | None = None
     billable: bool | None = None
     budget: float | None = None
-    # int = seconds (what the read models report), str = Kimai duration format
-    # where a bare number is hours. See _normalize_time_budget.
-    time_budget: TimeBudget = Field(None, alias="timeBudget")
+    time_budget: TimeBudget = Field(None, alias="timeBudget")  # see _normalize_duration
     budget_type: Literal["month"] | None = Field(None, alias="budgetType")
     color: str | None = None
     global_activities: bool | None = Field(None, alias="globalActivities")
@@ -856,7 +850,7 @@ class ProjectEditForm(KimaiModel):
     start: str | None = None
     end: str | None = None
     invoice_text: str | None = Field(None, alias="invoiceText")
-    teams: int | None = None  # Team ID
+    teams: list[int] | None = None  # Team IDs; Kimai binds this on create only
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
 
 
@@ -868,12 +862,10 @@ class ActivityEditForm(KimaiModel):
     visible: bool | None = None
     billable: bool | None = None
     budget: float | None = None
-    # int = seconds (what the read models report), str = Kimai duration format
-    # where a bare number is hours. See _normalize_time_budget.
-    time_budget: TimeBudget = Field(None, alias="timeBudget")
+    time_budget: TimeBudget = Field(None, alias="timeBudget")  # see _normalize_duration
     budget_type: Literal["month"] | None = Field(None, alias="budgetType")
     color: str | None = None
     number: str | None = None
     invoice_text: str | None = Field(None, alias="invoiceText")
-    teams: int | None = None  # Team ID
+    teams: list[int] | None = None  # Team IDs; Kimai binds this on create only
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")

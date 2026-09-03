@@ -36,6 +36,7 @@ from kimai_mcp.models import (
 from kimai_mcp.tools.entity_manager import CustomerEntityHandler, entity_tool
 from kimai_mcp.tools.errors import ToolError
 from kimai_mcp.tools.registry import validate_arguments
+from tests.schema_helpers import entity_data_schema
 
 EDIT_FORMS = [CustomerEditForm, ProjectEditForm, ActivityEditForm]
 
@@ -45,15 +46,7 @@ def _payload(form_cls, **kwargs):
     return form_cls(name="X", **kwargs).model_dump(exclude_none=True, by_alias=True)
 
 
-def _data_schema(entity_type: str) -> dict:
-    for branch in entity_tool().input_schema["allOf"]:
-        given = branch.get("if", {}).get("properties", {})
-        if given.get("type", {}).get("const") != entity_type:
-            continue
-        data = branch.get("then", {}).get("properties", {}).get("data")
-        if data is not None:
-            return data
-    raise AssertionError(f"{entity_type} create/update schema not found")
+_data_schema = entity_data_schema
 
 
 # --- the read side is unchanged: seconds, as an int ------------------------
@@ -177,7 +170,7 @@ def test_serializer_prints_the_seconds_next_to_the_hours():
 
 # --- the tool schema has to let the value through at all -------------------
 
-@pytest.mark.parametrize("entity_type", ["customer", "project"])
+@pytest.mark.parametrize("entity_type", ["customer", "project", "activity"])
 def test_budget_fields_are_reachable_through_the_entity_schema(entity_type):
     """The data schemas are additionalProperties:false, so an omitted field is
     not merely undocumented, it is rejected before the handler ever runs."""
@@ -197,7 +190,7 @@ def test_validate_arguments_accepts_a_budget(entity_type):
     })
 
 
-@pytest.mark.parametrize("entity_type", ["customer", "project"])
+@pytest.mark.parametrize("entity_type", ["customer", "project", "activity"])
 def test_the_schema_still_rejects_an_unknown_field(entity_type):
     """Guard against 'fixing' this by loosening additionalProperties."""
     with pytest.raises(ToolError):
@@ -209,9 +202,32 @@ def test_the_schema_still_rejects_an_unknown_field(entity_type):
         })
 
 
-@pytest.mark.parametrize("entity_type", ["customer", "project"])
+@pytest.mark.parametrize("entity_type", ["customer", "project", "activity"])
 def test_the_schema_documents_the_seconds_vs_hours_split(entity_type):
     """The description is the only place an LLM learns that '2' is 2 hours."""
     description = _data_schema(entity_type)["properties"]["timeBudget"]["description"].lower()
     assert "seconds" in description
     assert "hours" in description
+
+
+def test_budget_schema_is_not_shared_between_branches():
+    """Each branch gets its own copy; mutating one must not leak into another."""
+    customer = _data_schema("customer")["properties"]["timeBudget"]
+    project = _data_schema("project")["properties"]["timeBudget"]
+    assert customer == project
+    assert customer is not project
+
+
+def test_activity_schema_is_closed_and_typed():
+    """A typo in an activity field used to become an empty PATCH reported as
+    'Updated'; the activity branch is additionalProperties:false now."""
+    schema = _data_schema("activity")
+    assert schema["additionalProperties"] is False
+    assert {"name", "project", "teams", "color", "visible", "billable", "metaFields"} <= set(schema["properties"])
+    assert schema["properties"]["teams"]["type"] == "array"
+
+
+@pytest.mark.parametrize("form_cls", EDIT_FORMS)
+def test_teams_is_a_list_of_ids_on_the_create_forms(form_cls):
+    """Kimai's TeamType is `multiple => true`: an array of team ids."""
+    assert form_cls(name="X", teams=[1, 2]).model_dump(exclude_none=True)["teams"] == [1, 2]

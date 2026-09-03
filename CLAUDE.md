@@ -205,7 +205,7 @@ python scripts/audit_api_models.py 2.66.0
 KIMAI_URL=https://kimai.example.com KIMAI_API_TOKEN=... python scripts/verify_against_kimai.py
 ```
 
-The offline audit derives each response schema from the serializer groups, so it catches "Kimai serializes a field our model drops". It is a lower bound: entity properties that come from PHP traits (`color`, `budget`, `timeBudget`, `budgetType`) are invisible to it, which is what the online check covers. Fields Kimai sends that are deliberately not modelled (`color-safe`, `apiToken`) are listed in both scripts with the reason; extend that list rather than weakening the check.
+The offline audit derives each response schema from the serializer groups, so it catches "Kimai serializes a field our model drops". It also compares `models._DURATION_ALTERNATIVES` verbatim with the `$patterns` array in `src/Validator/Constraints/Duration.php`, because the client rejects duration input against that transcription before Kimai sees it. It is a lower bound: entity properties that come from PHP traits (`color`, `budget`, `timeBudget`, `budgetType`) are invisible to it, which is what the online check covers. Fields Kimai sends that are deliberately not modelled (`color-safe`, `apiToken`) are listed in both scripts with the reason; extend that list rather than weakening the check.
 
 ### API Version Update (December 2024)
 
@@ -299,9 +299,9 @@ entity type=user action=set_preferences id=5 preferences=[
 ]
 ```
 
-**Work Contract auto-initialization (Kimai ≥ 2.61.0):** As of Kimai server [PR #5894](https://github.com/kimai/kimai/pull/5894) (fixes issue [#5751](https://github.com/kimai/kimai/issues/5751)), the API auto-initializes work-contract preferences for users who never configured one in the UI. `set_preferences` now works out of the box — **no UI pre-configuration required**.
+**Work Contract auto-initialization (Kimai ≥ 2.61.0):** As of Kimai server [PR #5894](https://github.com/kimai/kimai/pull/5894) (fixes issue [#5751](https://github.com/kimai/kimai/issues/5751)), the API auto-initializes work-contract preferences for users who never configured one in the UI. `set_preferences` now works out of the box, **no UI pre-configuration required**.
 - On older Kimai (**< 2.61.0**), `set_preferences` returns 404 for un-configured users; configure the work contract once in the UI first (the tool returns a hint with the exact URL).
-- Caveat: auto-init covers `work_contract_type`, `work_monday`..`work_sunday`, `public_holiday_group`, `holidays`, `work_start_day`, `work_last_day` — but **not** `hours_per_week`. For a week-based contract, set `work_contract_type="week"` first (separate request), then set `hours_per_week`.
+- Caveat: auto-init covers `work_contract_type`, `work_monday`..`work_sunday`, `public_holiday_group`, `holidays`, `work_start_day`, `work_last_day`, but **not** `hours_per_week`. For a week-based contract, set `work_contract_type="week"` first (separate request), then set `hours_per_week`.
 - Since **Kimai 2.63** the work-contract preferences are guarded more strictly (2.63 security note "Make sure that WorkContract preferences are correctly guarded"), so a 403 here means the token lacks the work-contract permission, as opposed to the 404 that signals an un-initialized contract on Kimai < 2.61.0.
 
 See `examples/usage_examples.md` for more detailed examples.
@@ -332,7 +332,6 @@ The write path is `DurationType` → `DurationStringToSecondsTransformer` → `D
 - `entity type=user action=set_preferences` can fail with 403 (not only 404) since **Kimai 2.63** tightened the work-contract guard
 - `filters.full` for customer listings needs the `details_customer` permission; without it Kimai returns the short form silently rather than an error
 - A project's `start` / `end` / `orderDate` take **a different format per action**: `YYYY-MM-DD` on create, but the full `YYYY-MM-DDTHH:MM:SS` on update, which answers `"Please enter a valid date."` to a date-only value. `ProjectController` binds the same form with `DATE_ONLY_FORMAT` on POST and the HTML5 `DATE_FORMAT` on PATCH; projects are the only entity where the two differ. Stated in the `entity` project schema
-- `entity type=activity` has no typed `data` schema, so the activity budget fields are accepted but undocumented for the caller; the generic `data` description carries the `timeBudget` unit note instead
 - `budgetType` cannot be reverted from `month` to a lifetime budget through the tool: Kimai's PATCH keeps missing fields (`clearMissing=false`), and the client drops `None` values, so `null` never reaches the form. Use the Kimai UI
 - Some advanced API parameters not yet implemented (see individual tool schemas)
 
@@ -344,7 +343,7 @@ When modifying tools:
 3. **Method Names**: Ensure client method names match actual API endpoints
 4. **Data Models**: Verify Pydantic models match API schemas with proper aliases
 5. **Parameter Validation**: Check API documentation for supported parameters
-6. **Write schemas are closed**: the customer and project `data` sub-schemas are `additionalProperties: false` and `tools/registry.py::validate_arguments` enforces them, so a field missing from the schema is not merely undocumented: it cannot be sent at all. Adding a field to an `*EditForm` without adding it to the schema leaves it unreachable (this is how `budget`/`timeBudget`/`budgetType` were unwritable before #27)
+6. **Write schemas are closed**: the customer, project and activity `data` sub-schemas are `additionalProperties: false` and `tools/registry.py::validate_arguments` enforces them, so a field missing from the schema is not merely undocumented: it cannot be sent at all. Adding a field to an `*EditForm` without adding it to the schema leaves it unreachable (this is how `budget`/`timeBudget`/`budgetType` were unwritable before #27)
 
 ### Common API Patterns
 - **Filtering**: Most list endpoints support begin/end date filters in ISO format
