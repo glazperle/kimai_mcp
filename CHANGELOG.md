@@ -7,7 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.1] - 2026-09-03
+
 ### Fixed
+
+- **`timeBudget` round-trip overshot by a factor of 3600, and the budget fields were unwritable on
+  customers and projects** (#27, #28). Kimai serializes `timeBudget` as an integer number of
+  *seconds*, but binds it on write to `DurationType`, where a bare number is read as *decimal hours*
+  (`Duration::parseDurationString()` routes anything numeric to `parseDecimalFormat()`, which
+  multiplies by 3600). Writing back the `7200` that `action=get` reported would have set a budget of
+  7200 hours; sending JSON `7200` instead of `"7200"` makes no difference because Symfony's
+  `Form::submit()` casts every scalar to a string first.
+  - The three `*EditForm.time_budget` fields now take `int | str`: an **int is seconds**, matching
+    the read models, and is rendered as an unambiguous `H:MM:SS` colon duration on the wire; a
+    **str keeps Kimai's duration format** unchanged (`"2"`, `"2.0"`, `"2h"` and `"2:00"` all mean
+    two hours) and is validated locally against Kimai's `Duration` constraint so a malformed value
+    says what is wrong instead of drawing a bare 400.
+  - `budget`, `timeBudget` and `budgetType` were missing from the customer and project `data`
+    schemas, which are `additionalProperties: false`, so `validate_arguments` rejected them before
+    the handler ran. Only activities got as far as the Pydantic error the issue describes. All three
+    fields are in both schemas now, with the unit split spelled out in the descriptions.
+  - The `entity` output prints the time budget in hours *and* seconds
+    (`Time Budget: 2.00 hours (7200 seconds)`), since the seconds are what an update takes back.
+  - Thanks to @andrewmitchell-automations for the report, the analysis and the fix.
+  - Follow-ups from the pre-release review: a bare-digit *string* (`"7200"`) is now rejected as
+    ambiguous rather than forwarded, because Kimai would read it as 7200 hours and it is exactly
+    what a caller produces by copying the seconds from a `get` and sending them as a string. `""`
+    passes through and clears the budget, as it does in Kimai, and surrounding whitespace is
+    stripped instead of rejected.
+- **`break` on timesheets had the same 3600x problem.** Kimai binds `break` to the same
+  `DurationType` (`src/Form/TimesheetEditForm.php`), so the integer seconds this server sent were
+  parsed as decimal hours: a 15-minute break sent as `900` was stored as 900 hours and reported as
+  success. `TimesheetEditForm.break_duration` now runs through the same normalizer (int = seconds,
+  rendered as `H:MM:SS`; duration strings with a unit pass through; bare-digit strings are
+  rejected), and the `timesheet` schema documents the unit.
+- **`This form should not contain extra fields.` now also explains the budget permission gate.**
+  Kimai only adds `budget` / `timeBudget` / `budgetType` to the API form when the token holds the
+  `budget` resp. `time` permission for the entity; the hint used to blame `break` and a settings
+  toggle, neither of which applies in that case.
+- **`budgetType` description corrected.** Omitting the field on update leaves the stored type
+  unchanged (Kimai's PATCH keeps missing fields) rather than reverting to a lifetime budget;
+  reverting `month` is not possible through the tool and is listed as a limitation.
 
 - **`ApiTokenBundle`: a failed token replacement could leave a user with no token at all.**
   `replaceExisting=true` deleted the user's existing tokens of that name and then created the new

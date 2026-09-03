@@ -46,9 +46,12 @@ _BUDGET_SCHEMA = {
             "Time budget. An integer is SECONDS, the same unit action=get "
             "returns, so a value read from Kimai can be written straight back "
             "(7200 = 2 hours). A string is a Kimai duration string, where a "
-            'bare number is HOURS: "2", "2.0", "2h" and "2:00" all mean two '
-            'hours, while "90m" and "1:30" mean 90 minutes. 0 removes the '
-            "budget. https://www.kimai.org/documentation/duration-format.html"
+            'bare number is HOURS: "2.0", "2h" and "2:00" all mean two hours, '
+            'while "90m" and "1:30" mean 90 minutes. A bare-digit string such '
+            'as "7200" is rejected as ambiguous. 0 removes the budget. Kimai '
+            "only accepts these fields when the token holds the 'budget' resp. "
+            "'time' permission for the entity. "
+            "https://www.kimai.org/documentation/duration-format.html"
         ),
     },
     "budgetType": {
@@ -56,8 +59,10 @@ _BUDGET_SCHEMA = {
         "enum": ["month"],
         "description": (
             "Set to 'month' to make 'budget' and 'timeBudget' a recurring "
-            "monthly allowance. Omit for one total budget over the whole "
-            "lifetime of the entity."
+            "monthly allowance. Omit to leave the stored type unchanged (a new "
+            "entity then gets one total budget over its whole lifetime). "
+            "Reverting 'month' to a lifetime budget is not possible through "
+            "this tool; use the Kimai UI for that."
         ),
     },
 }
@@ -161,7 +166,8 @@ USER PREFERENCES (action=set_preferences, type=user only):
                         "Data for create/update actions (entity-specific fields). "
                         "Note for 'timeBudget': an integer is seconds (the unit "
                         "action=get reports), a string is a Kimai duration where a "
-                        'bare number is hours - "2" and 7200 both mean two hours.'
+                        'bare number is hours - "2h" and 7200 both mean two hours; '
+                        'a bare-digit string like "7200" is rejected as ambiguous.'
                     ),
                     "additionalProperties": True
                 },

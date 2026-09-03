@@ -31,6 +31,7 @@ from kimai_mcp.models import (
     CustomerEditForm,
     Project,
     ProjectEditForm,
+    TimesheetEditForm,
 )
 from kimai_mcp.tools.entity_manager import CustomerEntityHandler, entity_tool
 from kimai_mcp.tools.errors import ToolError
@@ -102,17 +103,55 @@ def test_python_field_name_works_too(form_cls):
 
 # --- strings keep Kimai's duration format ----------------------------------
 
-@pytest.mark.parametrize("value", ["2h", "2:00", "2:00:00", "1.5", "1,5", "2", "90m", "1h30m"])
+@pytest.mark.parametrize("value", ["2h", "2:00", "2:00:00", "1.5", "1,5", "90m", "1h30m"])
 def test_duration_strings_are_passed_through_verbatim(value):
     """Kimai owns the duration grammar; we must not reinterpret it."""
     assert _payload(ActivityEditForm, timeBudget=value)["timeBudget"] == value
 
 
-@pytest.mark.parametrize("value", ["2 hours", "two", "", "1:2:3:4", "-2h", "1.5.5"])
+@pytest.mark.parametrize("value", ["2", "7200", "-90", "007"])
+def test_bare_digit_strings_are_rejected_as_ambiguous(value):
+    """Kimai would read "7200" as 7200 hours, but it is exactly what a caller
+    produces by copying the seconds from a get and sending them as a string."""
+    with pytest.raises(ValidationError, match="ambiguous"):
+        ActivityEditForm(name="X", timeBudget=value)
+
+
+@pytest.mark.parametrize("value", ["2 hours", "two", "1:2:3:4", "-2h", "1.5.5"])
 def test_malformed_duration_strings_are_rejected_locally(value):
     """Kimai answers 400 for these; failing here says why."""
     with pytest.raises(ValidationError, match="duration"):
         ActivityEditForm(name="X", timeBudget=value)
+
+
+def test_empty_string_clears_the_budget_like_kimai_does():
+    """DurationStringToSecondsTransformer maps '' to 0 before the regex runs."""
+    assert _payload(ActivityEditForm, timeBudget="")["timeBudget"] == ""
+
+
+@pytest.mark.parametrize("value", [" 2h", "2h ", "	2:00 "])
+def test_surrounding_whitespace_is_stripped(value):
+    """Symfony's TrimListener would strip it anyway; do not reject it locally."""
+    assert _payload(ActivityEditForm, timeBudget=value)["timeBudget"] == value.strip()
+
+
+# --- `break` on timesheets is bound to the same DurationType ----------------
+
+def test_timesheet_break_int_is_seconds_and_goes_out_as_colon_duration():
+    """TimesheetEditForm.php binds `break` to DurationType too, so 900 used to
+    become 900 hours on the wire."""
+    form = TimesheetEditForm(project=1, activity=2, **{"break": 900})
+    assert form.model_dump(exclude_none=True, by_alias=True)["break"] == "0:15:00"
+
+
+def test_timesheet_break_duration_string_passes_through():
+    form = TimesheetEditForm(project=1, activity=2, break_duration="15m")
+    assert form.model_dump(exclude_none=True, by_alias=True)["break"] == "15m"
+
+
+def test_timesheet_break_bare_digit_string_is_rejected():
+    with pytest.raises(ValidationError, match="break"):
+        TimesheetEditForm(project=1, activity=2, break_duration="900")
 
 
 def test_bool_is_not_silently_treated_as_a_number():

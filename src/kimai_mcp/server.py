@@ -52,10 +52,13 @@ def format_api_error(e: KimaiAPIError) -> str:
         # be valid on one instance and rejected on the next. The message names
         # no field, which makes a bare 400 hard to act on.
         text += (
-            "\nThe instance rejected a field that this tool sent, because the corresponding "
-            "feature is switched off in its settings. The usual cause is 'break' on a "
+            "\nThe instance rejected a field that this tool sent, because the form Kimai "
+            "built for this token does not contain it. Two usual causes: 'break' on a "
             "timesheet, which only exists when 'Break time' is enabled under "
-            "Settings > Timesheet; retry without that field."
+            "Settings > Timesheet; and 'budget' / 'timeBudget' / 'budgetType' on a "
+            "customer, project or activity, which Kimai only adds when the token holds "
+            "the 'budget' resp. 'time' permission for that entity (budget_project, "
+            "time_project, ...). Retry without that field, or grant the permission."
         )
     if details:
         text += f"\nDetails: {details}"

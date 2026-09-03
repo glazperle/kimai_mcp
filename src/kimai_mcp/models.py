@@ -38,42 +38,62 @@ _DURATION_ALTERNATIVES = (
     r"[0-9]{1,}[hH]{1}[0-9]{1,}[mM]{1}[0-9]{1,}[sS]{1}",     # "1h30m15s"
 )
 _DURATION_PATTERN = re.compile("|".join(_DURATION_ALTERNATIVES))
+_BARE_NUMBER = re.compile(r"-?[0-9]+")
 
 
-def _normalize_time_budget(value: Any) -> Any:
-    """Turn a ``timeBudget`` input into a duration string Kimai reads as meant.
+def _normalize_duration(value: Any, field: str = "duration") -> Any:
+    """Turn a duration input into a string Kimai reads as meant.
 
-    Kimai is asymmetric about this field and the asymmetry costs a factor of
-    3600. A *response* carries ``timeBudget`` as an integer number of
-    **seconds**. A *request* binds it to ``DurationType``
-    (``src/Form/EntityFormTrait.php``), whose transformer hands the value to
-    ``Duration::parseDurationString()`` (``src/Utils/Duration.php``, read at
-    2.65.0); there any bare number takes the ``is_numeric()`` branch into
-    ``parseDecimalFormat()``, which multiplies by 3600. On the way in, a bare
-    number is therefore **decimal hours**. Sending JSON ``7200`` instead of
-    ``"7200"`` changes nothing: Symfony's ``Form::submit()`` casts every scalar
-    to a string before any transformer sees it.
+    Kimai is asymmetric about every ``DurationType`` field (``timeBudget`` on
+    customers, projects and activities, ``break`` on timesheets) and the
+    asymmetry costs a factor of 3600. A *response* carries the field as an
+    integer number of **seconds**. A *request* binds it to ``DurationType``,
+    whose transformer hands the value to ``Duration::parseDurationString()``
+    (``src/Utils/Duration.php``, read at 2.65.0); there any bare number takes
+    the ``is_numeric()`` branch into ``parseDecimalFormat()``, which multiplies
+    by 3600. On the way in, a bare number is therefore **decimal hours**.
+    Sending JSON ``7200`` instead of ``"7200"`` changes nothing: Symfony's
+    ``Form::submit()`` casts every scalar to a string before any transformer
+    sees it.
 
     So writing back what a ``get`` returned used to overshoot by 3600x: a
     two-hour budget reads as ``7200`` and would have been submitted as 7200
-    *hours*. To keep a read/write round-trip honest:
+    *hours*; a 15-minute break sent as ``900`` became 900 hours. To keep a
+    read/write round-trip honest:
 
     * an ``int`` is **seconds**, matching the read models, and is rendered as
       an unambiguous ``H:MM:SS`` colon duration before it goes on the wire;
     * a ``str`` keeps Kimai's documented duration format unchanged, where a
-      bare number *is* hours - ``"2"``, ``"2.0"``, ``"2h"`` and ``"2:00"`` all
-      mean two hours. See
-      https://www.kimai.org/documentation/duration-format.html
+      bare number *is* hours: ``"2.0"``, ``"2h"`` and ``"2:00"`` all mean two
+      hours. See https://www.kimai.org/documentation/duration-format.html
+    * a bare-digit string such as ``"7200"`` is rejected. Kimai would read it
+      as hours, but it is exactly what a caller produces by copying the
+      seconds from a ``get`` and transporting them as a string, so it is the
+      one spelling whose meaning cannot be trusted. Use the int, or add a
+      unit.
+    * ``""`` is passed through: Kimai's transformer maps it to 0 before the
+      grammar check, so it clears the value. Surrounding whitespace is
+      stripped, as Symfony's ``TrimListener`` would do anyway.
     """
     if value is None:
         return None
 
     if isinstance(value, str):
-        # A well-formed duration is Kimai's to interpret, not ours.
+        value = value.strip()
+        if value == "":
+            return value
+        if _BARE_NUMBER.fullmatch(value):
+            raise ValueError(
+                f"{value!r} is ambiguous for {field}: Kimai would read it as "
+                f"{value} HOURS, but a bare number is usually the seconds a "
+                "read returned. Pass an int for seconds, or a duration with "
+                'a unit: "2h", "2:00", "90m", "2:30:00".'
+            )
+        # Any other well-formed duration is Kimai's to interpret, not ours.
         if not _DURATION_PATTERN.fullmatch(value):
             raise ValueError(
                 f"{value!r} is not a Kimai duration. Pass an int for seconds "
-                '(7200), or a duration string: "2" / "2.0" / "2h" / "2:00" '
+                '(7200), or a duration string: "2.0" / "2h" / "2:00" '
                 '(all two hours), "90m", "2:30:00".'
             )
         return value
@@ -84,14 +104,14 @@ def _normalize_time_budget(value: Any) -> Any:
     #
     # bool is an int subclass; True would silently become one second.
     if isinstance(value, bool):
-        raise ValueError("timeBudget must be a number of seconds, not a bool")  # noqa: TRY004
+        raise ValueError(f"{field} must be a number of seconds, not a bool")  # noqa: TRY004
 
     if isinstance(value, float) and value.is_integer():
         value = int(value)
 
     if not isinstance(value, int):
         raise ValueError(  # noqa: TRY004
-            "timeBudget must be a whole number of seconds or a duration "
+            f"{field} must be a whole number of seconds or a duration "
             f"string, got {type(value).__name__} {value!r}"
         )
 
@@ -101,9 +121,19 @@ def _normalize_time_budget(value: Any) -> Any:
     return f"{sign}{hours}:{minutes:02d}:{seconds:02d}"
 
 
-# What the *EditForm classes accept for `timeBudget`. Always a duration string
-# once validated, so `model_dump()` puts the wire format on the request.
+def _normalize_time_budget(value: Any) -> Any:
+    return _normalize_duration(value, "timeBudget")
+
+
+def _normalize_break(value: Any) -> Any:
+    return _normalize_duration(value, "break")
+
+
+# What the *EditForm classes accept for `timeBudget` and `break`. Always a
+# duration string once validated, so `model_dump()` puts the wire format on
+# the request.
 TimeBudget = Annotated[str | None, BeforeValidator(_normalize_time_budget)]
+BreakDuration = Annotated[str | None, BeforeValidator(_normalize_break)]
 
 
 class AccessTokenInfo(KimaiModel):
@@ -347,7 +377,9 @@ class TimesheetEditForm(KimaiModel):
     tags: str | None = None
     exported: bool | None = None
     billable: bool | None = None
-    break_duration: int | None = Field(None, alias="break")
+    # int = seconds (what the read models report), str = Kimai duration format
+    # where a bare number is hours. See _normalize_duration.
+    break_duration: BreakDuration = Field(None, alias="break")
 
 
 class TimesheetFilter(KimaiModel):

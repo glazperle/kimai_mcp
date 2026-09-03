@@ -114,12 +114,15 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                         "fixedRate": {"type": "number"},
                         "hourlyRate": {"type": "number"},
                         "break": {
-                            "type": "integer",
+                            "type": ["integer", "string"],
                             "description": (
-                                "Break duration in seconds. Only send this when the Kimai "
-                                "instance has 'Break time' enabled (Settings > Timesheet); "
-                                "otherwise the API rejects the whole request with "
-                                "'This form should not contain extra fields.'"
+                                "Break duration. An integer is SECONDS, the same unit a "
+                                "read returns (900 = 15 minutes). A string is a Kimai "
+                                'duration with a unit ("15m", "0:15"); a bare number in a '
+                                "string would be read as HOURS and is rejected. Only send "
+                                "this when the Kimai instance has 'Break time' enabled "
+                                "(Settings > Timesheet); otherwise the API rejects the whole "
+                                "request with 'This form should not contain extra fields.'"
                             )
                         }
                     }

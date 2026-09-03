@@ -308,19 +308,19 @@ See `examples/usage_examples.md` for more detailed examples.
 
 #### `timeBudget`: seconds on the way out, a duration string on the way in
 
-`budget` / `timeBudget` / `budgetType` exist on customers, projects and activities, and `timeBudget` means two different things depending on direction — getting it wrong is a factor of **3600**:
+`budget` / `timeBudget` / `budgetType` exist on customers, projects and activities. Kimai only puts them on the API form when the token holds the `budget` resp. `time` permission for that entity (`budget_project`, `time_project`, ...); without it the request fails with `This form should not contain extra fields.`, which `format_api_error()` explains. `timeBudget` means two different things depending on direction; getting it wrong is a factor of **3600**:
 
 | Direction | Type | Unit |
 |---|---|---|
 | Response (`Customer_Entity` / `Project_Entity` / `Activity_Entity`) | integer | **seconds** |
 | Request (`DurationType` in `src/Form/EntityFormTrait.php`) | duration string | a bare number is **decimal hours** |
 
-The write path is `DurationType` → `DurationStringToSecondsTransformer` → `Duration::parseDurationString()` (`src/Utils/Duration.php`, read at 2.65.0). Any bare number takes the `is_numeric()` branch into `parseDecimalFormat()`, which multiplies by 3600. So `"2"`, `"2.0"`, `"2h"` and `"2:00"` all mean **two hours**, while `"7200"` means **7200 hours**, not the two hours a `get` reported as `7200`. Sending JSON `7200` instead of `"7200"` changes nothing — Symfony's `Form::submit()` casts every scalar to a string before any transformer runs — which is why only an explicit duration form (`H:MM:SS`) is unambiguous.
+The write path is `DurationType` → `DurationStringToSecondsTransformer` → `Duration::parseDurationString()` (`src/Utils/Duration.php`, read at 2.65.0). Any bare number takes the `is_numeric()` branch into `parseDecimalFormat()`, which multiplies by 3600. So `"2"`, `"2.0"`, `"2h"` and `"2:00"` all mean **two hours**, while `"7200"` means **7200 hours**, not the two hours a `get` reported as `7200`. Sending JSON `7200` instead of `"7200"` changes nothing (Symfony's `Form::submit()` casts every scalar to a string before any transformer runs), which is why only an explicit duration form (`H:MM:SS`) is unambiguous.
 
-`models._normalize_time_budget` (a `BeforeValidator` on the three `*EditForm.time_budget` fields) resolves this:
+`models._normalize_duration` (a `BeforeValidator` on the three `*EditForm.time_budget` fields and on `TimesheetEditForm.break_duration`, which Kimai binds to the same `DurationType`) resolves this:
 
-- an **int is seconds**, matching the read models, and is rendered as an unambiguous `H:MM:SS` colon duration before it goes on the wire — so a value from `action=get` can be written straight back;
-- a **str keeps Kimai's duration format** unchanged, validated locally against the alternatives in `src/Validator/Constraints/Duration.php` so a malformed value says what is wrong instead of drawing a bare 400.
+- an **int is seconds**, matching the read models, and is rendered as an unambiguous `H:MM:SS` colon duration before it goes on the wire, so a value from `action=get` can be written straight back;
+- a **str keeps Kimai's duration format** unchanged, validated locally against the alternatives in `src/Validator/Constraints/Duration.php` so a malformed value says what is wrong instead of drawing a bare 400. A bare-digit string (`"7200"`) is rejected as ambiguous: Kimai would read it as hours, but it is what a caller produces by copying the seconds from a `get`. `""` passes through and clears the value, as it does in Kimai.
 
 `_serialize_budget` prints both units (`Time Budget: 2.00 hours (7200 seconds)`) for the same reason.
 
@@ -333,6 +333,7 @@ The write path is `DurationType` → `DurationStringToSecondsTransformer` → `D
 - `filters.full` for customer listings needs the `details_customer` permission; without it Kimai returns the short form silently rather than an error
 - A project's `start` / `end` / `orderDate` take **a different format per action**: `YYYY-MM-DD` on create, but the full `YYYY-MM-DDTHH:MM:SS` on update, which answers `"Please enter a valid date."` to a date-only value. `ProjectController` binds the same form with `DATE_ONLY_FORMAT` on POST and the HTML5 `DATE_FORMAT` on PATCH; projects are the only entity where the two differ. Stated in the `entity` project schema
 - `entity type=activity` has no typed `data` schema, so the activity budget fields are accepted but undocumented for the caller; the generic `data` description carries the `timeBudget` unit note instead
+- `budgetType` cannot be reverted from `month` to a lifetime budget through the tool: Kimai's PATCH keeps missing fields (`clearMissing=false`), and the client drops `None` values, so `null` never reaches the form. Use the Kimai UI
 - Some advanced API parameters not yet implemented (see individual tool schemas)
 
 ### API Compliance Guidelines
@@ -343,7 +344,7 @@ When modifying tools:
 3. **Method Names**: Ensure client method names match actual API endpoints
 4. **Data Models**: Verify Pydantic models match API schemas with proper aliases
 5. **Parameter Validation**: Check API documentation for supported parameters
-6. **Write schemas are closed**: the customer and project `data` sub-schemas are `additionalProperties: false` and `tools/registry.py::validate_arguments` enforces them, so a field missing from the schema is not merely undocumented — it cannot be sent at all. Adding a field to an `*EditForm` without adding it to the schema leaves it unreachable (this is how `budget`/`timeBudget`/`budgetType` were unwritable before #27)
+6. **Write schemas are closed**: the customer and project `data` sub-schemas are `additionalProperties: false` and `tools/registry.py::validate_arguments` enforces them, so a field missing from the schema is not merely undocumented: it cannot be sent at all. Adding a field to an `*EditForm` without adding it to the schema leaves it unreachable (this is how `budget`/`timeBudget`/`budgetType` were unwritable before #27)
 
 ### Common API Patterns
 - **Filtering**: Most list endpoints support begin/end date filters in ISO format

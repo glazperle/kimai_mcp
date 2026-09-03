@@ -38,7 +38,7 @@ from kimai_mcp.user_config import UserConfig, UsersConfig
         (AbsenceForm, {"comment": "c", "date": "2026-09-01", "half_day": True}, "halfDay", True),
         (RateForm, {"rate": 50.0, "is_fixed": True}, "isFixed", True),
         (RateForm, {"rate": 50.0, "internal_rate": 20.0}, "internalRate", 20.0),
-        (TimesheetEditForm, {"project": 1, "break_duration": 1800}, "break", 1800),
+        (TimesheetEditForm, {"project": 1, "break_duration": 1800}, "break", "0:30:00"),
         (CustomerFilter, {"order_by": "name"}, "orderBy", "name"),
         (ProjectFilter, {"order_by": "name"}, "orderBy", "name"),
         (ActivityFilter, {"order_by": "name"}, "orderBy", "name"),
