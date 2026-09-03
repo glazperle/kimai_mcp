@@ -1,9 +1,10 @@
 """Data models for Kimai API entities."""
 
+import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 
 class KimaiModel(BaseModel):
@@ -19,6 +20,90 @@ class KimaiModel(BaseModel):
     """
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+# Kimai's duration grammar, transcribed from the alternatives in
+# `src/Validator/Constraints/Duration.php` (read at 2.65.0). The API form runs
+# this constraint after the data transformer, so anything it rejects comes back
+# as a 400 with no useful body - checking it here says what is actually wrong.
+_DURATION_ALTERNATIVES = (
+    r"-?[0-9]{1,}",                                          # decimal hours: "2", "90"
+    r"-?[0-9]{1,}[,.]{1}[0-9]{1,}",                          # "1.5", "1,5"
+    r"-?[0-9]{1,}:[0-9]{1,}:[0-9]{1,}",                      # "2:30:00"
+    r"-?[0-9]{1,}:[0-9]{1,}",                                # "2:30"
+    r"[0-9]{1,}[hHmMsS]{1}",                                 # "2h", "90m"
+    r"[0-9]{1,}[hH]{1}[0-9]{1,}[mM]{1}",                     # "1h30m"
+    r"[0-9]{1,}[hHmM]{1}[0-9]{1,}[sS]{1}",                   # "1h30s"
+    r"[0-9]{1,}[mM]{1}[0-9]{1,}[sS]{1}",                     # "30m15s"
+    r"[0-9]{1,}[hH]{1}[0-9]{1,}[mM]{1}[0-9]{1,}[sS]{1}",     # "1h30m15s"
+)
+_DURATION_PATTERN = re.compile("|".join(_DURATION_ALTERNATIVES))
+
+
+def _normalize_time_budget(value: Any) -> Any:
+    """Turn a ``timeBudget`` input into a duration string Kimai reads as meant.
+
+    Kimai is asymmetric about this field and the asymmetry costs a factor of
+    3600. A *response* carries ``timeBudget`` as an integer number of
+    **seconds**. A *request* binds it to ``DurationType``
+    (``src/Form/EntityFormTrait.php``), whose transformer hands the value to
+    ``Duration::parseDurationString()`` (``src/Utils/Duration.php``, read at
+    2.65.0); there any bare number takes the ``is_numeric()`` branch into
+    ``parseDecimalFormat()``, which multiplies by 3600. On the way in, a bare
+    number is therefore **decimal hours**. Sending JSON ``7200`` instead of
+    ``"7200"`` changes nothing: Symfony's ``Form::submit()`` casts every scalar
+    to a string before any transformer sees it.
+
+    So writing back what a ``get`` returned used to overshoot by 3600x: a
+    two-hour budget reads as ``7200`` and would have been submitted as 7200
+    *hours*. To keep a read/write round-trip honest:
+
+    * an ``int`` is **seconds**, matching the read models, and is rendered as
+      an unambiguous ``H:MM:SS`` colon duration before it goes on the wire;
+    * a ``str`` keeps Kimai's documented duration format unchanged, where a
+      bare number *is* hours - ``"2"``, ``"2.0"``, ``"2h"`` and ``"2:00"`` all
+      mean two hours. See
+      https://www.kimai.org/documentation/duration-format.html
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        # A well-formed duration is Kimai's to interpret, not ours.
+        if not _DURATION_PATTERN.fullmatch(value):
+            raise ValueError(
+                f"{value!r} is not a Kimai duration. Pass an int for seconds "
+                '(7200), or a duration string: "2" / "2.0" / "2h" / "2:00" '
+                '(all two hours), "90m", "2:30:00".'
+            )
+        return value
+
+    # The two raises below stay ValueError rather than the TypeError ruff's
+    # TRY004 asks for: pydantic turns a ValueError from a validator into the
+    # ValidationError the tool layer reports, while a TypeError escapes it.
+    #
+    # bool is an int subclass; True would silently become one second.
+    if isinstance(value, bool):
+        raise ValueError("timeBudget must be a number of seconds, not a bool")  # noqa: TRY004
+
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+
+    if not isinstance(value, int):
+        raise ValueError(  # noqa: TRY004
+            "timeBudget must be a whole number of seconds or a duration "
+            f"string, got {type(value).__name__} {value!r}"
+        )
+
+    sign = "-" if value < 0 else ""
+    hours, rest = divmod(abs(value), 3600)
+    minutes, seconds = divmod(rest, 60)
+    return f"{sign}{hours}:{minutes:02d}:{seconds:02d}"
+
+
+# What the *EditForm classes accept for `timeBudget`. Always a duration string
+# once validated, so `model_dump()` puts the wire format on the request.
+TimeBudget = Annotated[str | None, BeforeValidator(_normalize_time_budget)]
 
 
 class AccessTokenInfo(KimaiModel):
@@ -685,7 +770,9 @@ class CustomerEditForm(KimaiModel):
     visible: bool | None = None
     billable: bool | None = None
     budget: float | None = None
-    time_budget: str | None = Field(None, alias="timeBudget")  # Duration format
+    # int = seconds (what the read models report), str = Kimai duration format
+    # where a bare number is hours. See _normalize_time_budget.
+    time_budget: TimeBudget = Field(None, alias="timeBudget")
     budget_type: Literal["month"] | None = Field(None, alias="budgetType")
     color: str | None = None
     phone: str | None = None
@@ -721,7 +808,9 @@ class ProjectEditForm(KimaiModel):
     visible: bool | None = None
     billable: bool | None = None
     budget: float | None = None
-    time_budget: str | None = Field(None, alias="timeBudget")  # Duration format
+    # int = seconds (what the read models report), str = Kimai duration format
+    # where a bare number is hours. See _normalize_time_budget.
+    time_budget: TimeBudget = Field(None, alias="timeBudget")
     budget_type: Literal["month"] | None = Field(None, alias="budgetType")
     color: str | None = None
     global_activities: bool | None = Field(None, alias="globalActivities")
@@ -747,7 +836,9 @@ class ActivityEditForm(KimaiModel):
     visible: bool | None = None
     billable: bool | None = None
     budget: float | None = None
-    time_budget: str | None = Field(None, alias="timeBudget")  # Duration format
+    # int = seconds (what the read models report), str = Kimai duration format
+    # where a bare number is hours. See _normalize_time_budget.
+    time_budget: TimeBudget = Field(None, alias="timeBudget")
     budget_type: Literal["month"] | None = Field(None, alias="budgetType")
     color: str | None = None
     number: str | None = None
