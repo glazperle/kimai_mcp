@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.0] - 2026-09-05
+
+Tracks **Kimai 2.66.0** (released 2026-09-05). Nothing in 2.17.x crashes against 2.66, but a
+plain-user token now gets timesheets without rate fields, listings carry the budget, projects have
+a lock date, and two new endpoint groups exist.
+
+### Added
+
+- **Project `lockedUntil`** (Kimai 2.66+, kimai/kimai#6103). Timesheets beginning on or before this
+  calendar day cannot be created, edited, stopped, restarted, duplicated or deleted in that project,
+  admins included. Read model, edit form, `entity` project `data` schema (the schema is
+  `additionalProperties: false`, so without the entry the field could not be sent) and
+  `serialize_project` (`Locked Until:` line). Bound by Kimai with the same `date_format` option as
+  `start`/`end`, so the same per-action split applies: `YYYY-MM-DD` on create,
+  `YYYY-MM-DDTHH:MM:SS` on update, `""` clears. New orderBy `project_locked_until` documented.
+- **Error hints for the lock date.** A 400 containing `The project is locked until ...` and a 403 on
+  a timesheet write now explain the lock and how to move the begin or set `lockedUntil` earlier.
+  `KimaiAPIError` carries `method` and `endpoint` of the failed request so hints can be scoped to
+  the endpoint family instead of decorating every 403.
+- **Hint for routes the instance does not have.** Symfony's `No route found` 404/405 now says the
+  endpoint needs a newer Kimai (invoice delete and favorites: 2.66+; comments 2.57+; invoice meta 2.56+).
+- **`timer` actions `favorites`, `favorite`, `unfavorite`** (Kimai 2.66+, kimai/kimai#6143):
+  `GET/POST/DELETE /api/favorites/timesheets[/{id}]`. Favorites are the user's own records used as
+  templates for `restart`; need `start_own_timesheet`. Client methods `get_favorite_timesheets`,
+  `add_favorite_timesheet`, `remove_favorite_timesheet`.
+- **`entity type=invoice action=delete`** (Kimai 2.66+, kimai/kimai#6141): `DELETE /api/invoices/{id}`
+  with the `delete_invoice` permission, also in `batch_delete`. Was a hard "not supported" error.
+  Invoice create/update remain unavailable through the API.
+- **`scripts/verify_against_kimai.py`** probes `/timesheets` (rate-field presence, parsed as `None`
+  when stripped), `/projects` (`lockedUntil` on every row), and `/favorites/timesheets` (read-only)
+  on 2.66+, and version-gates the "budget stays out of listings" assertion that 2.66 invalidated.
+  `scripts/audit_api_models.py` defaults to `2.66.0`.
+
+### Changed
+
+- **Timesheet rate fields are optional per record** (Kimai 2.66+, kimai/kimai#6139,
+  `RateExclusionStrategy`): `rate` and `internalRate` (and on entity responses `fixedRate`,
+  `hourlyRate`) are omitted for records the token may not see the rates of
+  (`view_rate_own_timesheet` / `view_rate_other_timesheet`; the default `ROLE_USER` has neither).
+  `TimesheetEntity.rate` now defaults to `None` instead of `0.0`, so a stripped rate is no longer
+  reported as a zero rate; `timesheet action=get` prints
+  `Rates: not visible to this token (...)` when all four are absent.
+- **Budget fields appear in listings** (Kimai 2.66+, kimai/kimai#6140, `BudgetExclusionStrategy`):
+  `budget`/`timeBudget`/`budgetType` moved to the groups `Budget_Money`/`Budget_Time` and are now
+  part of `GET /api/customers|projects|activities` for records the token holds the `budget` resp.
+  `time` permission for. The models already accepted them; listings rendered by `entity ... list`
+  therefore now include the budget lines. Stale "entity only" comments and schema texts corrected.
+
+### Not implemented (Kimai marks them `x-internal`)
+
+`POST /api/projects/{id}/duplicate`, `POST/DELETE /api/dashboard/widgets[/{widget}]`,
+`DELETE /api/users/roles/{id}`, `DELETE /api/invoices/documents/{id}`,
+`DELETE /api/invoices/templates/{id}`. Kimai may change internal routes without notice.
+
 ## [2.17.2] - 2026-09-03
 
 ### Added

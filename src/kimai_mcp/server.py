@@ -44,9 +44,34 @@ logger = logging.getLogger(__name__)
 def format_api_error(e: KimaiAPIError) -> str:
     """Format a KimaiAPIError for the MCP client, including validation details."""
     text = f"Kimai API Error: {e.message} (Status: {e.status_code})"
+    endpoint = e.endpoint or ""
+    method = (e.method or "").upper()
+    timesheet_write = endpoint.startswith("/timesheets") and method in ("POST", "PATCH", "DELETE")
     if e.status_code == 403:
         text += "\nThe API token lacks permission for this operation (Kimai enforces team/user permissions strictly)."
+        if timesheet_write:
+            text += (
+                " On Kimai 2.66+ a 403 on a timesheet write (create/edit/stop/restart/duplicate/delete) can also "
+                "mean the record begins on or before the project's lock date ('lockedUntil', see entity "
+                "type=project action=get), which not even admins can override. Move the begin past the lock date, "
+                "or set the project's lockedUntil to an earlier day (an empty string clears it)."
+            )
     details = json.dumps(e.details, ensure_ascii=False, default=str) if e.details else ""
+    if "project is locked until" in details:
+        text += (
+            "\nThe project has a lock date (project field 'lockedUntil', Kimai 2.66+): timesheets beginning on or "
+            "before that day cannot be created or moved there, admins included. Choose a later begin, or move the "
+            "lock to an earlier day with entity type=project action=update id=<project> data={lockedUntil: ...} "
+            "(needs edit permission on the project; an empty string clears it). Setting a later date locks more."
+        )
+    if e.status_code in (404, 405) and "No route found" in (e.message or ""):
+        # Symfony's router answers this when the route does not exist at all,
+        # which for this client means the Kimai version is too old for it.
+        text += (
+            "\nThis endpoint does not exist on this Kimai version. Routes added recently: DELETE /api/invoices/{id} "
+            "and the /api/favorites/timesheets endpoints need Kimai 2.66+, comments need 2.57+, invoice meta fields "
+            "2.56+. Check 'config' for the version and upgrade Kimai, or use the Kimai UI."
+        )
     if "should not contain extra fields" in details:
         # Kimai builds its API forms from the enabled features, so a field can
         # be valid on one instance and rejected on the next. The message names

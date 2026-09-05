@@ -1,7 +1,7 @@
 """Data models for Kimai API entities."""
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
@@ -248,6 +248,9 @@ class Customer(KimaiModel):
     email: str | None = None
     invoice_email: str | None = Field(None, alias="invoiceEmail")  # Kimai 2.63+ (#5855)
     buyer_reference: str | None = Field(None, alias="buyerReference")
+    # Budget_Money / Budget_Time: entity responses, and since Kimai 2.66 also
+    # listings. Serialized per record only when the token holds the ``budget``
+    # resp. ``time`` permission for it, so absence is a permission signal.
     budget: float | None = None
     time_budget: int | None = Field(None, alias="timeBudget")
     budget_type: str | None = Field(None, alias="budgetType")
@@ -257,9 +260,11 @@ class Customer(KimaiModel):
 class Project(KimaiModel):
     """Project model.
 
-    ``start``/``end``, the order fields and the budget are part of what Kimai
-    sends for a project; a listing carries everything except the budget, which
-    is ``Project_Entity`` only.
+    ``start``/``end``, ``lockedUntil``, the order fields and the budget are part
+    of what Kimai sends for a project. Since Kimai 2.66 a listing carries the
+    budget too; before, it was ``Project_Entity`` only. The budget fields are
+    serialized per record only when the token holds the ``budget`` resp.
+    ``time`` permission for that project (``BudgetExclusionStrategy``, 2.66).
     """
 
     id: int
@@ -277,10 +282,14 @@ class Project(KimaiModel):
     start: datetime | None = None
     end: datetime | None = None
     order_date: datetime | None = Field(None, alias="orderDate")
+    # Kimai 2.66+: timesheets up to and including this calendar day are locked
+    # (create/edit/stop/delete refused, admins included). Serialized as Y-m-d
+    # without a timezone; group Default, so listings carry it too.
+    locked_until: date | None = Field(None, alias="lockedUntil")
     order_number: str | None = Field(None, alias="orderNumber")
     parent_title: str | None = Field(None, alias="parentTitle")  # customer name
     teams: list[TeamRef] | None = None
-    # Project_Entity only
+    # Budget_Money / Budget_Time: entity and (since 2.66) listing, per record
     budget: float | None = None
     time_budget: int | None = Field(None, alias="timeBudget")
     budget_type: str | None = Field(None, alias="budgetType")
@@ -300,7 +309,7 @@ class Activity(KimaiModel):
     meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
     parent_title: str | None = Field(None, alias="parentTitle")  # project name
     teams: list[TeamRef] | None = None
-    # Activity_Entity only
+    # Budget_Money / Budget_Time: entity and (since 2.66) listing, per record
     budget: float | None = None
     time_budget: int | None = Field(None, alias="timeBudget")
     budget_type: str | None = Field(None, alias="budgetType")
@@ -313,6 +322,13 @@ class TimesheetEntity(KimaiModel):
     (``GET /timesheets/{id}``, create, update), where ``activity``, ``project``
     and ``user`` are ids. The two ``Expanded`` endpoints send objects instead --
     see :class:`TimesheetExpanded`.
+
+    Since Kimai 2.66 the four rate fields are optional **per record**: Kimai's
+    ``RateExclusionStrategy`` drops ``rate``/``internalRate`` (and on entity
+    responses ``fixedRate``/``hourlyRate``) unless the token holds
+    ``view_rate_own_timesheet`` resp. ``view_rate_other_timesheet``, which the
+    default ``ROLE_USER`` does not. All four default to ``None`` so "not
+    visible" stays distinguishable from a genuine zero rate.
     """
 
     id: int | None = None
@@ -324,7 +340,7 @@ class TimesheetEntity(KimaiModel):
     end: datetime | None = None
     duration: int | None = 0
     description: str | None = None
-    rate: float | None = 0.0
+    rate: float | None = None
     internal_rate: float | None = Field(None, alias="internalRate")
     fixed_rate: float | None = Field(None, alias="fixedRate")
     hourly_rate: float | None = Field(None, alias="hourlyRate")
@@ -415,7 +431,7 @@ class ProjectFilter(KimaiModel):
     ignore_dates: str | None = Field(None, alias="ignoreDates")
     global_activities: str | None = Field(None, alias="globalActivities")  # 0|1
     order: str | None = None  # ASC, DESC
-    order_by: str | None = Field(None, alias="orderBy")  # id, name, customer
+    order_by: str | None = Field(None, alias="orderBy")  # id, name, customer, orderNumber, orderDate, project_start, project_end, project_locked_until (2.66+), budget, timeBudget, visible
     term: str | None = None
 
 
@@ -849,6 +865,9 @@ class ProjectEditForm(KimaiModel):
     # .isoformat() on these, they are strings.
     start: str | None = None
     end: str | None = None
+    # Kimai 2.66+. Bound with the same ``date_format`` option as start/end, so
+    # the same per-action asymmetry applies. "" clears the lock.
+    locked_until: str | None = Field(None, alias="lockedUntil")
     invoice_text: str | None = Field(None, alias="invoiceText")
     teams: list[int] | None = None  # Team IDs; Kimai binds this on create only
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")

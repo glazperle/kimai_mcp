@@ -190,7 +190,7 @@ Each consolidated tool follows this structure:
 - **Schema sources** (what the audit script below reads): `config/packages/nelmio_api_doc.yaml` and `src/Entity/*.php` in [kimai/kimai](https://github.com/kimai/kimai) at the matching tag.
 - A locally exported `api_documentation.json` may exist outside the repository; treat any such export as a snapshot of the version it was taken from, not as current truth. `api_documentation.json` is gitignored.
 
-Tracked against **Kimai 2.65.0** (2026-08-11). The server keeps working against older instances; features that need a specific version are marked as such in the tool schemas.
+Tracked against **Kimai 2.66.0** (2026-09-05). The server keeps working against older instances; features that need a specific version are marked as such in the tool schemas.
 
 ### Checking API compliance
 
@@ -237,6 +237,22 @@ The `entity` tool now supports both `lock_month` and `unlock_month` actions for 
 - **`meta` tool supports `invoice`** (requires **Kimai 2.56+**). Special case: invoice meta fields are sent in a SINGLE request containing all fields (`update_invoice_meta`); all other entity types still use one request per field.
 - **OAuth 2.1** for the streamable HTTP server (see `oauth.py` and the server section above).
 
+### Kimai 2.66 (implemented in v2.18.0)
+
+Source: `gh api repos/kimai/kimai/compare/2.65.0...2.66.0`, UPGRADING.md and PRs #6103, #6131, #6139, #6140, #6141, #6143. Nothing in 2.17.x crashed against 2.66; the changes are about what a response *omits* and about new routes.
+
+| Kimai | Change | Implementation |
+|-------|--------|----------------|
+| 2.66 | Timesheet `rate`, `internalRate` (group `Timesheet_Rate`) and, on entity responses, `fixedRate`, `hourlyRate` (`Timesheet_Entity_Rate`) are **omitted per record** unless the token holds `view_rate_own_timesheet` resp. `view_rate_other_timesheet` (`src/API/Serializer/RateExclusionStrategy.php`). The default `ROLE_USER` has neither. Applies to every timesheet endpoint incl. `/active`, `/recent`, stop/restart/duplicate and the new favorites | `TimesheetEntity.rate` defaults to `None` (was `0.0`) so "stripped" and "zero" stay distinguishable; `_handle_timesheet_get` prints `Rates: not visible to this token (...)` when all four are absent. The `Rate` model of the `/rates` endpoints is a different class and untouched |
+| 2.66 | `budget`, `timeBudget`, `budgetType` moved from `*_Entity` to `Budget_Money` / `Budget_Time` (`src/Entity/BudgetTrait.php`) and are now in the **collection** responses of customers, projects and activities too, per record, only where the token holds the `budget` resp. `time` permission (`BudgetExclusionStrategy.php`) | No parse change (all three were Optional). `entity ... list` output now includes the budget lines. Stale "entity only" comments in `models.py`, the `filters.full` schema text and `test_customer_fields.py` corrected. **Absence is a permission signal, not a bug**, and the offline audit cannot see it: the fields come from a PHP trait, which `audit_api_models.py` does not parse |
+| 2.66 | Project `lockedUntil` (`DateTimeImmutable<'Y-m-d'>`, group `Default`, so in listings too). Timesheets whose `begin` is on or before that calendar day are refused: `TimesheetVoter` (create/start/stop/duplicate/edit/delete -> **403**, admins included; a *running* record stays editable so its begin can be moved) and `TimesheetProjectLockedValidator` (**400** `The project is locked until %date%, please choose a later date.`, code `kimai-timesheet-project-locked-01`, path `begin_date`). Compared by `Ymd` integer, timezone-independent. `ProjectQuery` gained orderBy `project_locked_until` | `Project.locked_until` (`date`), `ProjectEditForm.locked_until` (`str`, verbatim), `lockedUntil` in the project `data` schema, `Locked Until:` line in `serialize_project`. `format_api_error()` hints on the 400 text and on every 403. **Same per-action date format as `start`/`end`**: `ProjectEditForm.php` copies the controller's `date_format` option into the `lockedUntil` field, and `ProjectController` passes `DATE_ONLY_FORMAT` on POST but `DATE_FORMAT` on PATCH |
+| 2.66 | `DELETE /api/invoices/{id}` (`delete_invoice`, 204) ([#6141](https://github.com/kimai/kimai/pull/6141)) | `client.delete_invoice()`, `InvoiceEntityHandler.delete()` (was a hard error), `invoice` removed from `non_deletable` and added to the `batch_delete` map |
+| 2.66 | `GET /api/favorites/timesheets` (`TimesheetCollectionExpanded`), `POST` / `DELETE /api/favorites/timesheets/{id}` (204; idempotent). Need `start_own_timesheet` and ownership ([#6143](https://github.com/kimai/kimai/pull/6143)) | `timer` actions `favorites`, `favorite`, `unfavorite`; client `get_favorite_timesheets()`, `add_favorite_timesheet()`, `remove_favorite_timesheet()`. Rows are Expanded like `/timesheets/active` (issue #24 pattern) |
+| 2.66 | Invalid forms on customer/project/activity POST/PATCH and on rate POST answer **400** instead of 200-with-form | No change; `KimaiAPIError` already carried the details either way |
+| 2.66 | Routes flagged `x: internal`: `POST /api/projects/{id}/duplicate`, `POST/DELETE /api/dashboard/widgets[/{widget}]`, `DELETE /api/users/roles/{id}`, `DELETE /api/invoices/documents/{id}`, `DELETE /api/invoices/templates/{id}` | **Deliberately not implemented.** Internal routes back the Kimai UI and may change without notice |
+
+`scripts/verify_against_kimai.py` gained read-only probes for `/timesheets` (rate presence, `None` when stripped), `/projects` (`lockedUntil` on every row) and `/favorites/timesheets`, and version-gates the "budget stays out of listings" assertion that 2.66 made false.
+
 ### Kimai 2.62 - 2.65 (implemented in v2.16.0)
 
 | Kimai | Change | Implementation |
@@ -250,7 +266,8 @@ The `entity` tool now supports both `lock_month` and `unlock_month` actions for 
 |---|---|---|
 | `Default` | every response, plain listing included | id, name, number, comment, visible, billable, company, country, currency, timezone, phone, fax, mobile, homepage, **language**, **metaFields** |
 | `Customer_Details` | listing **with `full=1`** | `vatId`, `addressLine1`-`3`, `postCode`, `city` |
-| `Customer_Entity` | `get` / `create` / `update` only | the details above plus `contact`, `address`, `email`, **`invoiceEmail`**, `buyerReference`, `budget`, `timeBudget`, `budgetType` |
+| `Customer_Entity` | `get` / `create` / `update` only | the details above plus `contact`, `address`, `email`, **`invoiceEmail`**, `buyerReference` (and up to 2.65: `budget`, `timeBudget`, `budgetType`) |
+| `Budget_Money` / `Budget_Time` (2.66+) | every response incl. listings, **per record** | `budget`, `timeBudget`, `budgetType`, only where the token holds the `budget` resp. `time` permission for that customer; missing means "not permitted", not "not set" |
 
 So `full=1` is **not** what surfaces `language` (that is `Default`) and **cannot** surface `invoiceEmail` (that is entity-only). `invoiceTemplate` and `invoiceText` are writable but never serialized back.
 | 2.65 | Removing a team's customer/project/activity access additionally requires `IsGranted('permissions', ...)` on that entity | No code change; `team_access action=revoke` (handler `_handle_revoke_access`) can now return 403 where 2.64 succeeded. The permission hint in `format_api_error()` covers it |
@@ -331,8 +348,11 @@ The write path is `DurationType` → `DurationStringToSecondsTransformer` → `D
 - `team_access` revoke actions need the `permissions` permission on the customer/project/activity since **Kimai 2.65**, on top of `edit` on the team; a token that could revoke on 2.64 may get a 403 now
 - `entity type=user action=set_preferences` can fail with 403 (not only 404) since **Kimai 2.63** tightened the work-contract guard
 - `filters.full` for customer listings needs the `details_customer` permission; without it Kimai returns the short form silently rather than an error
-- A project's `start` / `end` / `orderDate` take **a different format per action**: `YYYY-MM-DD` on create, but the full `YYYY-MM-DDTHH:MM:SS` on update, which answers `"Please enter a valid date."` to a date-only value. `ProjectController` binds the same form with `DATE_ONLY_FORMAT` on POST and the HTML5 `DATE_FORMAT` on PATCH; projects are the only entity where the two differ. Stated in the `entity` project schema
+- A project's `start` / `end` / `orderDate` / `lockedUntil` (2.66+) take **a different format per action**: `YYYY-MM-DD` on create, but the full `YYYY-MM-DDTHH:MM:SS` on update, which answers `"Please enter a valid date."` to a date-only value. `ProjectController` binds the same form with `DATE_ONLY_FORMAT` on POST and the HTML5 `DATE_FORMAT` on PATCH; projects are the only entity where the two differ. Stated in the `entity` project schema
 - `budgetType` cannot be reverted from `month` to a lifetime budget through the tool: Kimai's PATCH keeps missing fields (`clearMissing=false`), and the client drops `None` values, so `null` never reaches the form. Use the Kimai UI
+- Since **Kimai 2.66** timesheet rate fields and the customer/project/activity budget fields are **optional per record** (permission-gated serializer groups). A tool output without them is expected for a plain-user token; do not "fix" the models by defaulting them to zero
+- Timesheets in a project's locked period (`lockedUntil`, 2.66+) cannot be changed by anyone, the API included. The tool surfaces the 403/400 with a hint; the only way past it is to move the begin or change the project's lock date
+- `timer` favorites need `start_own_timesheet` and work on the user's own records only; Kimai returns 403 otherwise
 - Some advanced API parameters not yet implemented (see individual tool schemas)
 
 ### API Compliance Guidelines

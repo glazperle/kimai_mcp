@@ -7,7 +7,7 @@
 
 A comprehensive Model Context Protocol (MCP) server for integrating with the Kimai time-tracking API. This server allows AI assistants like Claude to efficiently interact with Kimai instances to manage time tracking, projects, activities, customers, users, teams, absences, and more.
 
-Speaks MCP protocol revision **2026-07-28** and every earlier revision (MCP Python SDK 2.x), tracked against **Kimai 2.65**. Older Kimai instances keep working; features that need a specific Kimai version are marked below.
+Speaks MCP protocol revision **2026-07-28** and every earlier revision (MCP Python SDK 2.x), tracked against **Kimai 2.66**. Older Kimai instances keep working; features that need a specific Kimai version are marked below.
 
 ## 🚀 Quick Start
 
@@ -211,7 +211,7 @@ Options for the Streamable HTTP server (`kimai-mcp-streamable`):
 ### Core Management Tools
 1. **Entity Tool** (`entity`) - Universal CRUD operations for projects, activities, customers, users, teams, tags, invoices, holidays
 2. **Timesheet Tool** (`timesheet`) - Complete timesheet management (list, create, update, delete, export, batch operations)
-3. **Timer Tool** (`timer`) - Active timer operations (start, stop, restart, view active/recent)
+3. **Timer Tool** (`timer`) - Active timer operations (start, stop, restart, view active/recent, favorites list/add/remove with Kimai 2.66+)
 4. **Rate Tool** (`rate`) - Rate management across all entity types
 5. **Team Access Tool** (`team_access`) - Team member and permission management
 6. **Absence Tool** (`absence`) - Complete absence workflow (create, approve, reject, list, attendance, batch operations, auto-split)
@@ -223,14 +223,15 @@ Options for the Streamable HTTP server (`kimai-mcp-streamable`):
 12. **Comment Tool** (`comment`) - Comments on projects and customers: list, create, delete, pin (requires Kimai 2.57+)
 
 ### Complete Kimai Integration
-- **Timesheet Management** - Create, update, delete, start/stop timers, view active timers
+- **Timesheet Management** - Create, update, delete, start/stop timers, view active timers, favorite timesheets as restart templates (Kimai 2.66+). Rate fields are shown only when the token may see them: since Kimai 2.66 `rate`/`internalRate`/`fixedRate`/`hourlyRate` are omitted per record without `view_rate_own_timesheet` / `view_rate_other_timesheet`, and the tool says so instead of printing a zero
+- **Project lock date** - `lockedUntil` on projects (Kimai 2.66+): timesheets up to and including that day are read-only for everyone, admins included. Readable in every project listing, writable via `entity type=project action=update`; the error hints explain the resulting 403/400
 - **Project & Activity Management** - Browse and view projects and activities
-- **Customer Management** - Browse and view customer information including the full detail set (VAT ID, structured address, contact, budget, meta fields, plus `language` and `invoiceEmail` from Kimai 2.63+). Listings can request `filters.full` for the address and VAT ID (Kimai 2.62+, needs the `details_customer` permission); contact, email and budget are only returned for a single customer via `action=get`
+- **Customer Management** - Browse and view customer information including the full detail set (VAT ID, structured address, contact, budget, meta fields, plus `language` and `invoiceEmail` from Kimai 2.63+). Listings can request `filters.full` for the address and VAT ID (Kimai 2.62+, needs the `details_customer` permission); contact and email are only returned for a single customer via `action=get`; the budget fields appear in listings too since Kimai 2.66, but only for records the token holds the `budget` resp. `time` permission for
 - **User Management** - List, view, create, update user accounts, and configure work contracts (preferences)
 - **Team Management** - Create teams, manage members, control access permissions
 - **Absence Management** - Create, approve, reject, and track absences
 - **Tag Management** - Create and manage tags for better organization
-- **Invoice Queries** - View invoice information and status
+- **Invoice Queries** - View invoice information and status; delete invoices (Kimai 2.66+, permission `delete_invoice`)
 - **Comments** - Manage pinned and regular comments on projects and customers (Kimai 2.57+)
 
 ### Advanced Features

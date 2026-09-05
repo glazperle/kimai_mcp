@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 REPO = "kimai/kimai"
-DEFAULT_REF = "2.65.0"
+DEFAULT_REF = "2.66.0"
 CACHE = Path(__file__).parent / ".kimai-api-cache"
 
 # Serialized by Kimai, deliberately not modelled:

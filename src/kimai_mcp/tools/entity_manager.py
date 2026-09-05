@@ -112,6 +112,8 @@ COMMON TASKS:
 - Change vacation days: action=set_preferences, type=user, id=USER_ID, preferences=[{name:"holidays", value:"25"}]
 - Lock timesheet month: action=lock_month, type=user, id=USER_ID, month="2024-12-01"
 - Create project: action=create, type=project, data={name:"...", customer:ID}
+- Lock a project's past: action=update, type=project, id=ID, data={lockedUntil:"2026-08-31T00:00:00"} (Kimai 2.66+)
+- Invoices: list/get/delete (delete needs Kimai 2.66+ and delete_invoice); create/update are not available via the API
 
 USER PREFERENCES (action=set_preferences, type=user only):
   holidays (vacation days), hours_per_week, work_contract_type, work_monday..work_sunday""",
@@ -155,7 +157,7 @@ USER PREFERENCES (action=set_preferences, type=user only):
                         "globals": {"type": "string", "enum": ["0", "1"], "description": "Global activities filter"},
                         "page": {"type": "integer", "description": "Page number"},
                         "size": {"type": "integer", "description": "Page size"},
-                        "order_by": {"type": "string", "description": "Sort field"},
+                        "order_by": {"type": "string", "description": "Sort field. Projects: id, name, customer, orderNumber, orderDate, project_start, project_end, project_locked_until (Kimai 2.66+), budget, timeBudget, visible."},
                         "order": {"type": "string", "enum": ["ASC", "DESC"], "description": "Sort order"},
                         "begin": {
                             "type": "string",
@@ -173,7 +175,7 @@ USER PREFERENCES (action=set_preferences, type=user only):
                                    "description": "Status filter (for invoices)"},
                         "full": {
                             "type": "boolean",
-                            "description": "For type=customer: return the detailed customer records, which adds vatId and the structured address (addressLine1-3, postCode, city). Requires Kimai 2.62+ and the 'details_customer' permission; without the permission Kimai silently returns the short form instead of failing. Fields like email, contact, invoiceEmail, buyerReference and the budget are never part of a listing, use action=get for those."
+                            "description": "For type=customer: return the detailed customer records, which adds vatId and the structured address (addressLine1-3, postCode, city). Requires Kimai 2.62+ and the 'details_customer' permission; without the permission Kimai silently returns the short form instead of failing. Fields like email, contact, invoiceEmail and buyerReference are never part of a listing, use action=get for those. Since Kimai 2.66 budget/timeBudget/budgetType ARE part of listings, but only for records the token holds the 'budget' resp. 'time' permission for; before 2.66 they were get-only."
                         }
                     }
                 },
@@ -412,6 +414,10 @@ OTHER:
                                         "type": "string",
                                         "description": "The projected or actual end date of the project. Timesheets cannot be recorded after this date. Same per-action format split as 'start': YYYY-MM-DD to create, YYYY-MM-DDTHH:MM:SS to update."
                                     },
+                                    "lockedUntil": {
+                                        "type": "string",
+                                        "description": "Lock date (Kimai 2.66+). Timesheets beginning on or before this calendar day cannot be created, edited, stopped, restarted, duplicated or deleted in this project - admins included; Kimai answers 403 or 'The project is locked until ...'. Compared by day, independent of timezones. Same per-action format split as 'start': YYYY-MM-DD to create, YYYY-MM-DDTHH:MM:SS to update. Send an empty string to clear the lock. Rejected by Kimai < 2.66 ('This form should not contain extra fields.')."
+                                    },
                                     "customer": {
                                         "description": "The unique ID of the customer to whom this project belongs, required for create action.",
                                         "type": "integer"
@@ -648,14 +654,8 @@ async def handle_entity(client: KimaiClient, **params) -> list[TextContent]:
 
 async def _handle_batch_delete(handler: 'BaseEntityHandler', entity_type: str, ids: list[int]) -> list[TextContent]:
     """Batch delete multiple entities."""
-    # Check if entity type supports deletion
-    non_deletable = ["user", "invoice"]
-    if entity_type in non_deletable:
-        raise ToolError(
-            f"Error: batch_delete is not supported for {entity_type} entities"
-        )
-
-    # Map entity types to client delete methods
+    # Map entity types to client delete methods; anything else (user, unknown
+    # types) is rejected below.
     delete_methods = {
         "project": handler.client.delete_project,
         "activity": handler.client.delete_activity,
@@ -663,6 +663,7 @@ async def _handle_batch_delete(handler: 'BaseEntityHandler', entity_type: str, i
         "team": handler.client.delete_team,
         "tag": handler.client.delete_tag,
         "holiday": handler.client.delete_public_holiday,
+        "invoice": handler.client.delete_invoice,  # Kimai 2.66+
     }
 
     delete_method = delete_methods.get(entity_type)
@@ -766,6 +767,8 @@ class ProjectEntityHandler(BaseEntityHandler):
             result += f"Order Number: {project.order_number}\n"
         if getattr(project, 'order_date', None):
             result += f"Order Date: {project.order_date.date()}\n"
+        if getattr(project, 'locked_until', None):
+            result += f"Locked Until: {project.locked_until} (timesheets up to this day are read-only)\n"
         result += self._serialize_budget(project)
         result += self._serialize_teams(project)
 
@@ -1409,9 +1412,13 @@ class InvoiceEntityHandler(BaseEntityHandler):
         )
 
     async def delete(self, id: int) -> builtins.list[TextContent]:
-        raise ToolError(
-            "Error: Invoice deletion is not supported through this API."
-        )
+        # DELETE /api/invoices/{id} exists since Kimai 2.66 (#6141) and needs
+        # the delete_invoice permission; older instances answer 404/405.
+        await self.client.delete_invoice(id)
+        return [TextContent(
+            type="text",
+            text=f"Deleted invoice ID {id} including its generated document (Kimai 2.66+, permission delete_invoice)",
+        )]
 
 
 class HolidayEntityHandler(BaseEntityHandler):

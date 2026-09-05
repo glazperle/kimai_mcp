@@ -13,8 +13,13 @@ Which fields a response actually contains follows the serializer groups in
 * ``Customer_Details`` is what ``full=1`` (Kimai 2.62+) adds: ``vatId`` plus
   the structured address (``addressLine1``-``3``, ``postCode``, ``city``).
 * ``Customer_Entity`` is get/create/update only: ``email``, ``contact``,
-  ``address``, ``invoiceEmail``, ``buyerReference`` and the budget fields never
-  appear in a listing at all, no matter what ``full`` says.
+  ``address``, ``invoiceEmail`` and ``buyerReference`` never appear in a
+  listing at all, no matter what ``full`` says.
+* The budget fields moved to their own groups ``Budget_Money`` / ``Budget_Time``
+  in Kimai 2.66 and are since then part of listings too, but only for records
+  the token holds the ``budget`` resp. ``time`` permission for (per record, via
+  ``BudgetExclusionStrategy``). Before 2.66 they were ``Customer_Entity``.
+  See ``test_kimai_266.py``.
 """
 
 from unittest.mock import AsyncMock
@@ -198,7 +203,8 @@ def test_embedded_teams_parse_as_stubs():
 
 
 def test_project_carries_timeframe_order_and_budget():
-    """A listing sends start/end/order*, the entity adds the budget."""
+    """A listing sends start/end/order*; the budget is entity-only before 2.66
+    and per-record optional everywhere since (see test_kimai_266.py)."""
     project = ProjectModel(
         id=1, name="P", customer=2, parentTitle="Acme",
         start="2026-01-01T00:00:00+0100", end="2026-12-31T00:00:00+0100",

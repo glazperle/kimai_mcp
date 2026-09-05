@@ -233,6 +233,12 @@ def make_mock_client() -> AsyncMock:
     client.get_invoices.return_value = [invoice]
     client.get_invoice.return_value = invoice
     client.update_invoice_meta.return_value = invoice
+    client.delete_invoice.return_value = None  # Kimai 2.66+
+
+    # Favorites (Kimai 2.66+): TimesheetCollectionExpanded like /timesheets/active
+    client.get_favorite_timesheets.return_value = [completed_expanded_ts]
+    client.add_favorite_timesheet.return_value = None
+    client.remove_favorite_timesheet.return_value = None
 
     # Holidays
     client.get_public_holidays.return_value = [holiday]
@@ -299,7 +305,6 @@ ENTITY_ERROR_CASES = {
     ("tag", "update"),
     ("invoice", "create"),
     ("invoice", "update"),
-    ("invoice", "delete"),
     ("holiday", "get"),
     ("holiday", "create"),
     ("holiday", "update"),
@@ -488,6 +493,12 @@ _case("timer", timesheet_consolidated.handle_timer,
       {"action": "active"}, "timer-active")
 _case("timer", timesheet_consolidated.handle_timer,
       {"action": "recent"}, "timer-recent")
+_case("timer", timesheet_consolidated.handle_timer,
+      {"action": "favorites"}, "timer-favorites")
+_case("timer", timesheet_consolidated.handle_timer,
+      {"action": "favorite", "id": 10}, "timer-favorite")
+_case("timer", timesheet_consolidated.handle_timer,
+      {"action": "unfavorite", "id": 10}, "timer-unfavorite")
 
 # --- rate tool -------------------------------------------------------------
 

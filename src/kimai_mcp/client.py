@@ -59,10 +59,22 @@ logger = logging.getLogger(__name__)
 class KimaiAPIError(Exception):
     """Kimai API error."""
 
-    def __init__(self, message: str, status_code: int | None = None, details: Any | None = None):
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        details: Any | None = None,
+        method: str | None = None,
+        endpoint: str | None = None,
+    ):
         self.message = message
         self.status_code = status_code
         self.details = details
+        # Which request failed, so format_api_error() can give hints that only
+        # make sense for one endpoint family (e.g. the project lock date on
+        # timesheet writes) without attaching them to every 403.
+        self.method = method
+        self.endpoint = endpoint
         super().__init__(self.message)
 
 
@@ -170,7 +182,9 @@ class KimaiClient:
                 + (f" | details: {error_details}" if error_details else "")
             )
 
-            raise KimaiAPIError(message, e.response.status_code, details=error_details)
+            raise KimaiAPIError(
+                message, e.response.status_code, details=error_details, method=method, endpoint=endpoint
+            )
         except httpx.RequestError as e:
             logger.error(
                 f"API error: {e!s} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
@@ -389,6 +403,24 @@ class KimaiClient:
         data = await self._request("GET", "/timesheets/recent", params=params)
         return [TimesheetExpanded(**item) for item in data]
     
+    # Favorites (Kimai 2.66+, #6143). All three need start_own_timesheet and
+    # work on the current user's own records only.
+    async def get_favorite_timesheets(self) -> list[TimesheetExpanded]:
+        """Timesheets the current user marked as favorites (templates for ``restart``).
+
+        Declared as ``TimesheetCollectionExpanded``, so relations are objects.
+        """
+        data = await self._request("GET", "/favorites/timesheets")
+        return [TimesheetExpanded(**item) for item in data]
+
+    async def add_favorite_timesheet(self, timesheet_id: int) -> None:
+        """Mark one of the user's own timesheets as favorite. Idempotent on Kimai's side (204)."""
+        await self._request("POST", f"/favorites/timesheets/{timesheet_id}")
+
+    async def remove_favorite_timesheet(self, timesheet_id: int) -> None:
+        """Remove a timesheet from the favorites. Not an error if it was none (204)."""
+        await self._request("DELETE", f"/favorites/timesheets/{timesheet_id}")
+
     async def get_timesheet(self, timesheet_id: int) -> TimesheetEntity:
         """Get a single timesheet by ID."""
         data = await self._request("GET", f"/timesheets/{timesheet_id}")
@@ -1016,6 +1048,10 @@ class KimaiClient:
         """Get a specific invoice by ID."""
         data = await self._request("GET", f"/invoices/{invoice_id}")
         return Invoice(**data)
+
+    async def delete_invoice(self, invoice_id: int) -> None:
+        """Delete an invoice and its generated document (Kimai 2.66+, permission delete_invoice)."""
+        await self._request("DELETE", f"/invoices/{invoice_id}")
 
     async def update_invoice_meta(self, invoice_id: int, meta_fields: list[MetaFieldForm]) -> Invoice:
         """Update meta fields of an invoice (requires Kimai 2.56+).

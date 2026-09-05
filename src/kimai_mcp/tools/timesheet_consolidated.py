@@ -157,6 +157,8 @@ def timer_tool() -> Tool:
 - Start timer: action=start, data={project:ID, activity:ID}
 - Stop timer: action=stop, id=TIMESHEET_ID
 - Show active: action=active
+- Favorites (Kimai 2.66+): action=favorites lists the user's favorite timesheets (templates to restart);
+  action=favorite / action=unfavorite, id=TIMESHEET_ID toggles one. Needs start_own_timesheet; own records only.
 
 NOTE: Creates timesheet entries without end time. Use 'timesheet' tool for completed entries.""",
         input_schema={
@@ -165,12 +167,12 @@ NOTE: Creates timesheet entries without end time. Use 'timesheet' tool for compl
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["start", "stop", "restart", "active", "recent"],
+                    "enum": ["start", "stop", "restart", "active", "recent", "favorites", "favorite", "unfavorite"],
                     "description": "The timer action to perform"
                 },
                 "id": {
                     "type": "integer",
-                    "description": "Timesheet ID (required for stop and restart actions)"
+                    "description": "Timesheet ID (required for stop, restart, favorite and unfavorite actions)"
                 },
                 "data": {
                     "type": "object",
@@ -243,9 +245,15 @@ async def handle_timer(client: KimaiClient, **params) -> list[TextContent]:
         return await _handle_timer_active(client)
     elif action == "recent":
         return await _handle_timer_recent(client, params.get("size", 10), params.get("begin"))
+    elif action == "favorites":
+        return await _handle_timer_favorites(client)
+    elif action == "favorite":
+        return await _handle_timer_favorite(client, params.get("id"), add=True)
+    elif action == "unfavorite":
+        return await _handle_timer_favorite(client, params.get("id"), add=False)
     else:
         raise ToolError(
-            f"Error: Unknown action '{action}'. Valid actions: start, stop, restart, active, recent"
+            f"Error: Unknown action '{action}'. Valid actions: start, stop, restart, active, recent, favorites, favorite, unfavorite"
         )
 
 
@@ -453,11 +461,19 @@ async def _handle_timesheet_get(client: KimaiClient, id: int | None) -> list[Tex
         result += f"Description: {ts.description}\n"
     if ts.tags:
         result += f"Tags: {', '.join(ts.tags)}\n"
-    if ts.rate:
+    if ts.rate is None and ts.internal_rate is None and ts.fixed_rate is None and ts.hourly_rate is None:
+        # Kimai 2.66+ strips all four rate fields per record when the token
+        # lacks view_rate_own_timesheet / view_rate_other_timesheet.
+        result += "Rates: not visible to this token (needs view_rate_own_timesheet resp. view_rate_other_timesheet; Kimai 2.66+ omits them per record)\n"
+    # `is not None`, not truthiness: a visible 0.0 is a real value and must
+    # stay distinguishable from a stripped field.
+    if ts.rate is not None:
         result += f"Rate: {ts.rate}\n"
-    if ts.fixed_rate:
+    if ts.internal_rate is not None:
+        result += f"Internal Rate: {ts.internal_rate}\n"
+    if ts.fixed_rate is not None:
         result += f"Fixed Rate: {ts.fixed_rate}\n"
-    if ts.hourly_rate:
+    if ts.hourly_rate is not None:
         result += f"Hourly Rate: {ts.hourly_rate}\n"
     if ts.break_duration:
         result += f"Break: {ts.break_duration // 60} minutes\n"
@@ -724,6 +740,25 @@ async def _handle_timer_restart(client: KimaiClient, id: int | None) -> list[Tex
     )]
 
 
+def _describe_expanded_row(ts) -> str:
+    """Head line plus description/tags for a ``TimesheetExpanded`` row.
+
+    ``/timesheets/active``, ``/timesheets/recent`` and ``/favorites/timesheets``
+    are Expanded schemas, so the relations are objects and can be named instead
+    of printing bare ids (issue #24).
+    """
+    project = ts.project.name
+    if ts.project.customer:
+        project = f"{ts.project.customer.name} / {project}"
+
+    text = f"ID: {ts.id} - Project: {project} / Activity: {ts.activity.name}\n"
+    if ts.description:
+        text += f"  Description: {ts.description}\n"
+    if ts.tags:
+        text += f"  Tags: {', '.join(ts.tags)}\n"
+    return text
+
+
 async def _handle_timer_active(client: KimaiClient) -> list[TextContent]:
     """Handle timer active action."""
     timesheets = await client.get_active_timesheets()
@@ -737,24 +772,47 @@ async def _handle_timer_active(client: KimaiClient) -> list[TextContent]:
         # tzinfo=None mirrors ts.begin being naive, so both sides stay comparable.
         now = datetime.now(ts.begin.tzinfo)
         elapsed = (now - ts.begin).total_seconds() / 3600
-        
-        # /timesheets/active is an Expanded schema, so name the relations
-        # instead of printing bare ids (issue #24).
-        project = ts.project.name
-        if ts.project.customer:
-            project = f"{ts.project.customer.name} / {project}"
 
-        result += f"ID: {ts.id} - Project: {project} / Activity: {ts.activity.name}\n"
+        result += _describe_expanded_row(ts)
         result += f"  Started: {ts.begin.strftime('%Y-%m-%d %H:%M')}\n"
         result += f"  Elapsed: {elapsed:.2f} hours\n"
-        
-        if ts.description:
-            result += f"  Description: {ts.description}\n"
-        if ts.tags:
-            result += f"  Tags: {', '.join(ts.tags)}\n"
         result += "\n"
     
     return [TextContent(type="text", text=result)]
+
+
+async def _handle_timer_favorites(client: KimaiClient) -> list[TextContent]:
+    """Handle timer favorites action (Kimai 2.66+)."""
+    timesheets = await client.get_favorite_timesheets()
+
+    if not timesheets:
+        return [TextContent(
+            type="text",
+            text="No favorite timesheets. Mark one of your own records with timer action=favorite id=<timesheet id> (Kimai 2.66+).",
+        )]
+
+    result = f"Found {len(timesheets)} favorite timesheet(s). Start one with timer action=restart id=<ID>.\n\n"
+
+    for ts in timesheets:
+        result += _describe_expanded_row(ts) + "\n"
+
+    return [TextContent(type="text", text=result)]
+
+
+async def _handle_timer_favorite(client: KimaiClient, id: int | None, add: bool) -> list[TextContent]:
+    """Handle timer favorite / unfavorite actions (Kimai 2.66+)."""
+    action = "favorite" if add else "unfavorite"
+    if not id:
+        raise ToolError(f"Error: 'id' parameter is required for {action} action")
+
+    if add:
+        await client.add_favorite_timesheet(id)
+        text = f"Timesheet ID {id} added to favorites"
+    else:
+        await client.remove_favorite_timesheet(id)
+        text = f"Timesheet ID {id} removed from favorites"
+
+    return [TextContent(type="text", text=text)]
 
 
 async def _handle_timer_recent(client: KimaiClient, size: int, begin: str | None) -> list[TextContent]:
