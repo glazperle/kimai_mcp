@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.1] - 2026-09-09
+
 ### Fixed
 
 - **Omitted timesheet options are no longer manufactured on create.** The handler used to send
@@ -20,7 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `datetime.now()` when the caller omitted `begin`. In punch-in/out tracking mode Kimai has no
   `begin` / `end` field on the API form unless the token holds `view_other_timesheet`, so every
   create and every timer start by a plain user failed with the same extra-fields 400 as above.
-  Kimai uses the current timestamp itself when `begin` is absent. An explicit `begin` is still sent.
+  Kimai uses the current timestamp itself when `begin` is absent. A `begin` passed explicitly to
+  `timesheet action=create` is still sent (the `timer` tool never accepted one). Such a token still
+  cannot post a *completed* entry, because that needs `end`, which the same flag gates; it can only
+  start a timer and stop it later.
 - **`rate action=add` requires `rate`.** A missing value used to be sent as `0`, silently booking a
   zero rate; it is now a tool error. `isFixed` and the absence `halfDay` are only sent when given.
 - **Guard against the whole bug class.** `tests/test_write_payloads.py` drives every write action
@@ -28,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks that no request model carries a non-`None` default (`AbsenceForm.type` lost its `"other"`
   default; the tool always required it). Documented as guideline 7 in `CLAUDE.md`, with the list
   of fields Kimai 2.66 gates per permission or setting.
+- **An invalid update is no longer reported as a pydantic crash.** Kimai answers an invalid PATCH on
+  a timesheet, user or team with **HTTP 200** carrying the form-error envelope instead of a 4xx
+  (customers and activities were moved to 400 in 2.66). The client parsed that envelope as the
+  entity and surfaced `3 validation errors for TimesheetEntity`, so the API message and every hint
+  in `format_api_error()` were lost on exactly the path that needs them. Such a body is now turned
+  back into a `KimaiAPIError` with its real status code and details.
+- **Customer writes match Kimai's form again.** The closed customer schema exposed `address`, which
+  Kimai only offers when that customer already has a legacy address (never on create), and hid
+  `addressLine1`-`3`, `postCode`, `city` and `buyerReference`, which are unconditional and were
+  therefore unsendable. All five are now writable and `address` documents its own trap.
+- The extra-fields hint additionally names `avatar` (needs `theme.avatar_url`, off by default) and
+  the customer `address` case; the conditional-field table in `CLAUDE.md` corrects `budgetType`,
+  which Kimai adds for the `budget_*` **or** the `time_*` permission, not only the former.
 
 ## [2.18.0] - 2026-09-05
 

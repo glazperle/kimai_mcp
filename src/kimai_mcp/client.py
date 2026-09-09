@@ -78,6 +78,40 @@ class KimaiAPIError(Exception):
         super().__init__(self.message)
 
 
+def _prune_empty_dicts(obj: Any) -> Any:
+    """Drop keys whose value is an empty dict, recursively.
+
+    Kimai's form-error envelope nests one entry per form field, most of them
+    empty; without this the useful message drowns in braces.
+    """
+    if isinstance(obj, dict):
+        pruned = {k: _prune_empty_dicts(v) for k, v in obj.items()}
+        return {k: v for k, v in pruned.items() if not (isinstance(v, dict) and len(v) == 0)}
+    if isinstance(obj, list):
+        return [_prune_empty_dicts(v) for v in obj]
+    return obj
+
+
+def _as_validation_envelope(data: Any) -> tuple[str, int, Any] | None:
+    """Return (message, code, details) if ``data`` is an error envelope.
+
+    Kimai returns ``{"code": 400, "message": "Validation Failed", "errors":
+    {...}}``. On some endpoints it does so with an HTTP status that says
+    success, so the body is the only signal. No entity response carries a
+    top-level integer ``code`` >= 400 next to a string ``message``.
+    """
+    if not isinstance(data, dict):
+        return None
+    code = data.get("code")
+    message = data.get("message")
+    if not isinstance(code, int) or isinstance(code, bool) or code < 400:
+        return None
+    if not isinstance(message, str):
+        return None
+    details = _prune_empty_dicts(data.get("errors", data))
+    return message, code, details
+
+
 class KimaiClient:
     """Kimai API client."""
 
@@ -142,7 +176,29 @@ class KimaiClient:
             if response.status_code == 204:
                 return {}
 
-            return response.json()
+            data = response.json()
+
+            # An invalid PATCH does not necessarily arrive as a 4xx: Kimai
+            # answers with the serialized form and HTTP 200 for timesheets,
+            # users and teams (TimesheetController::patchAction and friends do
+            # `new View($form, Response::HTTP_OK)`; customers and activities
+            # were changed to 400 in 2.66). Without this check the envelope is
+            # fed to the response model and surfaces as a raw pydantic error
+            # instead of the API message, so none of the hints in
+            # format_api_error() ever reach the user on an update.
+            envelope = _as_validation_envelope(data)
+            if envelope is not None:
+                message, code, error_details = envelope
+                logger.error(
+                    f"API error: {message} for request {method} {endpoint} "
+                    f"(HTTP {response.status_code} with an error envelope)"
+                    + (f" | details: {error_details}" if error_details else "")
+                )
+                raise KimaiAPIError(
+                    message, code, details=error_details, method=method, endpoint=endpoint
+                )
+
+            return data
             
         except httpx.HTTPStatusError as e:
             # Try to parse error response
@@ -150,18 +206,6 @@ class KimaiClient:
             try:
                 error_data = e.response.json()
                 message = error_data.get('message', str(e))
-
-                # Helper to prune empty dicts recursively
-                def _prune_empty_dicts(obj: Any) -> Any:
-                    if isinstance(obj, dict):
-                        # First prune children
-                        pruned = {k: _prune_empty_dicts(v) for k, v in obj.items()}
-                        # Then drop keys where value is an empty dict
-                        return {k: v for k, v in pruned.items() if not (isinstance(v, dict) and len(v) == 0)}
-                    elif isinstance(obj, list):
-                        return [_prune_empty_dicts(v) for v in obj]
-                    else:
-                        return obj
 
                 # Extract errors if present and prune empty dicts
                 if isinstance(error_data, dict):

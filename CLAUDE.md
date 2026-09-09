@@ -353,7 +353,8 @@ The write path is `DurationType` → `DurationStringToSecondsTransformer` → `D
 - Since **Kimai 2.66** timesheet rate fields and the customer/project/activity budget fields are **optional per record** (permission-gated serializer groups). A tool output without them is expected for a plain-user token; do not "fix" the models by defaulting them to zero
 - Timesheets in a project's locked period (`lockedUntil`, 2.66+) cannot be changed by anyone, the API included. The tool surfaces the 403/400 with a hint; the only way past it is to move the begin or change the project's lock date
 - `timer` favorites need `start_own_timesheet` and work on the user's own records only; Kimai returns 403 otherwise
-- In **punch-in/out tracking mode** the timesheet API form has no `begin` / `end` field unless the token holds `view_other_timesheet` (`PunchInOutMode::canUpdateTimesWithAPI`). The tool therefore never sends a client-side `begin`; omitted means "now" on the server. A caller who passes `begin` explicitly on such an instance gets the extra-fields 400 with a hint
+- An invalid **PATCH** on a timesheet, user or team is answered by Kimai with **HTTP 200** carrying the form-error envelope, not a 4xx (`new View($form, Response::HTTP_OK)`; customers and activities were moved to 400 in 2.66). `client._as_validation_envelope` turns such a body back into a `KimaiAPIError` so the error hints work on updates; do not "simplify" that check away
+- In **punch-in/out tracking mode** the timesheet API form has no `begin` **and no `end`** field unless the token holds `view_other_timesheet` (`allow_begin_datetime` and `allow_end_datetime` both come from `PunchInOutMode::canUpdateTimesWithAPI`), and `allow_duration` is off on the API form. The tool therefore never sends a client-side `begin`; omitted means "now" on the server, which makes `timer action=start` work. Such a token still **cannot post a completed entry at all**, because that needs `end`: it can only start a timer and stop it later. An explicit `begin` or `end` is passed through and draws the extra-fields 400 with a hint
 - Some advanced API parameters not yet implemented (see individual tool schemas)
 
 ### API Compliance Guidelines
@@ -365,7 +366,7 @@ When modifying tools:
 4. **Data Models**: Verify Pydantic models match API schemas with proper aliases
 5. **Parameter Validation**: Check API documentation for supported parameters
 6. **Write schemas are closed**: the customer, project and activity `data` sub-schemas are `additionalProperties: false` and `tools/registry.py::validate_arguments` enforces them, so a field missing from the schema is not merely undocumented: it cannot be sent at all. Adding a field to an `*EditForm` without adding it to the schema leaves it unreachable (this is how `budget`/`timeBudget`/`budgetType` were unwritable before #27)
-7. **Never manufacture a write field.** Kimai builds every API form per token and per instance setting; a field on the wire that is not on the form fails the whole request with `This form should not contain extra fields.` The client drops only `None` (`model_dump(exclude_none=True)`), so a handler default such as `data.get("billable", True)` or a model default such as `= False` is sent on every request. Omitted means "Kimai default", nothing else. `tests/test_write_payloads.py` pins this from both ends: every write action driven with its minimal input must produce a payload whose keys are a subset of the caller's keys, and no `*Form` model may have a non-`None` default. PR #29 (`billable=True`) and the punch-mode `begin` were the two instances that motivated it
+7. **Never manufacture a write field.** Kimai builds every API form per token and per instance setting; a field on the wire that is not on the form fails the whole request with `This form should not contain extra fields.` The client drops only `None` (`model_dump(exclude_none=True)`), so a handler default such as `data.get("billable", True)` or a model default such as `= False` is sent on every request. Omitted means "Kimai default", nothing else. `tests/test_write_payloads.py` pins this from both ends: each write action it covers, driven with its minimal input, must produce a payload whose keys are a subset of the caller's keys, and no `*Form` model may have a non-`None` default. Add a case there when you add a write action. PR #29 (`billable=True`) and the punch-mode `begin` were the two instances that motivated it
 
    Fields Kimai 2.66 only puts on the API form conditionally (from `src/API/*Controller.php`, `src/Form/**`):
 
@@ -377,12 +378,15 @@ When modifying tools:
    | | `exported` | `edit_export_own/other_timesheet` |
    | | `user` | `create_other_timesheet` (create) / `edit` (update) |
    | | `break` | Settings > Timesheet > Break time |
-   | Customer / Project / Activity | `budget`, `budgetType` | `budget_*` permission on that entity |
+   | Customer / Project / Activity | `budget` | `budget_*` permission on that entity |
    | | `timeBudget` | `time_*` permission |
+   | | `budgetType` | `budget_*` **or** `time_*` (`$showBudget = $showMoney \|\| $showTime`) |
    | | `teams` | create only |
    | Activity | `project` | create, or the activity is not global |
+   | Customer | `address` (legacy single line) | that customer already has a non-empty address, so never on create; use `addressLine1`-`3`, `postCode`, `city` |
    | User create | `roles` | `roles` permission |
    | User update | `roles`; `enabled` (not on self); `language`, `locale`, `timezone` (`preferences`); `supervisor`; `systemAccount`, `requiresPasswordReset` (`password`) | respective permission |
+   | User create/update | `avatar` | the instance sets `theme.avatar_url` (**off by default**) |
    | Rates, Teams, Tags, Comments | none | always the full form |
 
 ### Common API Patterns

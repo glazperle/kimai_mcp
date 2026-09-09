@@ -285,7 +285,37 @@ OTHER:
                                     },
                                     "address": {
                                         "type": "string",
-                                        "description": "Customer's physical address"
+                                        "description": (
+                                            "Deprecated single-line address. Kimai only puts this field on "
+                                            "the form when the customer ALREADY has a non-empty legacy "
+                                            "address, which is never the case on create, so sending it "
+                                            "usually fails the whole request with 'This form should not "
+                                            "contain extra fields.' Use addressLine1-3 / postCode / city."
+                                        )
+                                    },
+                                    "addressLine1": {
+                                        "type": "string",
+                                        "description": "Street and number"
+                                    },
+                                    "addressLine2": {
+                                        "type": "string",
+                                        "description": "Additional address line"
+                                    },
+                                    "addressLine3": {
+                                        "type": "string",
+                                        "description": "Additional address line"
+                                    },
+                                    "postCode": {
+                                        "type": "string",
+                                        "description": "Postal code"
+                                    },
+                                    "city": {
+                                        "type": "string",
+                                        "description": "City"
+                                    },
+                                    "buyerReference": {
+                                        "type": "string",
+                                        "description": "Buyer reference (Leitweg-ID), used on e-invoices"
                                     },
                                     "country": {
                                         "type": "string",

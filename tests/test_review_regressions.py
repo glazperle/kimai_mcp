@@ -284,3 +284,63 @@ async def test_timesheet_create_does_not_invent_billable_or_tags():
     assert "billable" not in payload
     assert "tags" not in payload
     assert "break" not in payload
+# ---------------------------------------------------------------------------
+# A 2xx that carries a form-error envelope is still a failure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_http_200_carrying_a_validation_envelope_raises(httpx_mock):
+    """Kimai answers an INVALID timesheet, user or team PATCH with HTTP 200 and
+    the serialized form (``new View($form, Response::HTTP_OK)``), not a 4xx.
+    That body used to be fed to the response model, so the user saw a raw
+    pydantic error ("3 validation errors for TimesheetEntity") and none of the
+    hints in format_api_error() ever ran on an update.
+    """
+    httpx_mock.add_response(
+        url="https://kimai.example.com/api/timesheets/1",
+        method="PATCH",
+        status_code=200,
+        json={
+            "code": 400,
+            "message": "Validation Failed",
+            "errors": {
+                "children": {"project": {}, "activity": {}},
+                "errors": ["This form should not contain extra fields."],
+            },
+        },
+    )
+
+    async with KimaiClient("https://kimai.example.com", "t") as client:
+        with pytest.raises(KimaiAPIError) as excinfo:
+            await client.update_timesheet(1, TimesheetEditForm(description="x"))
+
+    from kimai_mcp.server import format_api_error
+
+    assert excinfo.value.status_code == 400
+    assert "extra fields" in str(excinfo.value.details)
+    # and the hint the envelope was hiding is reachable again
+    assert "billable" in format_api_error(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_entity_response_is_not_mistaken_for_an_error(httpx_mock):
+    """The envelope check keys on an integer ``code`` >= 400 next to a string
+    ``message``; a normal entity body must pass through untouched."""
+    httpx_mock.add_response(
+        url="https://kimai.example.com/api/timesheets/1",
+        method="PATCH",
+        status_code=200,
+        json={
+            "id": 1,
+            "project": 2,
+            "activity": 3,
+            "begin": "2026-09-08T09:00:00+00:00",
+            "description": "x",
+        },
+    )
+
+    async with KimaiClient("https://kimai.example.com", "t") as client:
+        ts = await client.update_timesheet(1, TimesheetEditForm(description="x"))
+
+    assert ts.id == 1
