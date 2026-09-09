@@ -1,3 +1,3 @@
 """Kimai MCP Server - Model Context Protocol server for Kimai time-tracking API integration."""
 
-__version__ = "2.18.0"
+__version__ = "2.18.1"
