@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `billable=true` and an empty `tags` value even when the caller omitted both. Kimai removes the
   `billable` form field when the token lacks `edit_billable_own_timesheet` (or its other-user
   equivalent), so an ordinary create could fail with `This form should not contain extra fields.`
-  Explicit values remain supported.
+  Explicit values remain supported. Note for privileged tokens: an omitted `billable` used to be
+  forced to `true`; it now follows Kimai's automatic default (the billable flag of the activity,
+  project or customer), the same as a record created in the UI.
 
 ## [2.18.0] - 2026-09-05
 
