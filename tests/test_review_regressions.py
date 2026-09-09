@@ -36,7 +36,7 @@ from kimai_mcp.user_config import UserConfig, UsersConfig
 @pytest.mark.parametrize(
     ("model", "kwargs", "expected_key", "expected_value"),
     [
-        (AbsenceForm, {"comment": "c", "date": "2026-09-01", "half_day": True}, "halfDay", True),
+        (AbsenceForm, {"comment": "c", "date": "2026-09-01", "type": "other", "half_day": True}, "halfDay", True),
         (RateForm, {"rate": 50.0, "is_fixed": True}, "isFixed", True),
         (RateForm, {"rate": 50.0, "internal_rate": 20.0}, "internalRate", 20.0),
         (TimesheetEditForm, {"project": 1, "break_duration": 1800}, "break", "0:30:00"),
@@ -59,7 +59,7 @@ def test_field_name_reaches_the_wire(model, kwargs, expected_key, expected_value
 
 def test_alias_spelling_still_accepted():
     """API responses use the aliases; both spellings have to keep working."""
-    form = AbsenceForm(comment="c", date="2026-09-01", halfDay=True)
+    form = AbsenceForm(comment="c", date="2026-09-01", type="other", halfDay=True)
     assert form.half_day is True
 
 

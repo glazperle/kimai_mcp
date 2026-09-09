@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Explicit values remain supported. Note for privileged tokens: an omitted `billable` used to be
   forced to `true`; it now follows Kimai's automatic default (the billable flag of the activity,
   project or customer), the same as a record created in the UI.
+- **No more client-side `begin` on timesheet create and timer start.** Both used to send
+  `datetime.now()` when the caller omitted `begin`. In punch-in/out tracking mode Kimai has no
+  `begin` / `end` field on the API form unless the token holds `view_other_timesheet`, so every
+  create and every timer start by a plain user failed with the same extra-fields 400 as above.
+  Kimai uses the current timestamp itself when `begin` is absent. An explicit `begin` is still sent.
+- **`rate action=add` requires `rate`.** A missing value used to be sent as `0`, silently booking a
+  zero rate; it is now a tool error. `isFixed` and the absence `halfDay` are only sent when given.
+- **Guard against the whole bug class.** `tests/test_write_payloads.py` drives every write action
+  with its minimal input and fails if the payload contains a key the caller did not supply, and
+  checks that no request model carries a non-`None` default (`AbsenceForm.type` lost its `"other"`
+  default; the tool always required it). Documented as guideline 7 in `CLAUDE.md`, with the list
+  of fields Kimai 2.66 gates per permission or setting.
 
 ## [2.18.0] - 2026-09-05
 

@@ -481,7 +481,7 @@ class AbsenceForm(KimaiModel):
     date: str  # Date format YYYY-MM-DD
     end: str | None = None  # End date for multi-day absences
     type: Literal[
-        "holiday", "time_off", "sickness", "sickness_child", "other", "parental", "unpaid_vacation"] = "other"
+        "holiday", "time_off", "sickness", "sickness_child", "other", "parental", "unpaid_vacation"]
 
 
 class Absence(KimaiModel):

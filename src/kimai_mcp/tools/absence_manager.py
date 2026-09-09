@@ -509,7 +509,7 @@ async def _handle_absence_create(client: KimaiClient, data: dict) -> list[TextCo
                 end=chunk_end.strftime("%Y-%m-%d") if chunk_start != chunk_end else None,
                 type=data["type"],
                 user=data.get("user"),
-                half_day=data.get("halfDay", False),
+                half_day=data.get("halfDay"),
                 duration=data.get("duration")
             )
 
@@ -548,7 +548,7 @@ async def _handle_absence_create(client: KimaiClient, data: dict) -> list[TextCo
         type=data["type"],
         user=data.get("user"),
         end=data.get("end"),
-        half_day=data.get("halfDay", False),
+        half_day=data.get("halfDay"),
         duration=data.get("duration")
     )
 

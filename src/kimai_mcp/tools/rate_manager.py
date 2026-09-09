@@ -155,11 +155,13 @@ class CustomerRateHandler(BaseRateHandler):
         return [TextContent(type="text", text=result)]
     
     async def add(self, entity_id: int, data: dict) -> builtins.list[TextContent]:
+        if data.get("rate") is None:
+            raise ToolError("Error: 'rate' is required in data for add action")
         rate_form = RateForm(
             user=data.get("user"),
-            rate=data.get("rate", 0),
+            rate=data["rate"],
             internal_rate=data.get("internal_rate"),
-            is_fixed=data.get("is_fixed", False)
+            is_fixed=data.get("is_fixed")
         )
         
         rate = await self.client.add_customer_rate(entity_id, rate_form)
@@ -191,11 +193,13 @@ class ProjectRateHandler(BaseRateHandler):
         return [TextContent(type="text", text=result)]
     
     async def add(self, entity_id: int, data: dict) -> builtins.list[TextContent]:
+        if data.get("rate") is None:
+            raise ToolError("Error: 'rate' is required in data for add action")
         rate_form = RateForm(
             user=data.get("user"),
-            rate=data.get("rate", 0),
+            rate=data["rate"],
             internal_rate=data.get("internal_rate"),
-            is_fixed=data.get("is_fixed", False)
+            is_fixed=data.get("is_fixed")
         )
         
         rate = await self.client.add_project_rate(entity_id, rate_form)
@@ -227,11 +231,13 @@ class ActivityRateHandler(BaseRateHandler):
         return [TextContent(type="text", text=result)]
     
     async def add(self, entity_id: int, data: dict) -> builtins.list[TextContent]:
+        if data.get("rate") is None:
+            raise ToolError("Error: 'rate' is required in data for add action")
         rate_form = RateForm(
             user=data.get("user"),
-            rate=data.get("rate", 0),
+            rate=data["rate"],
             internal_rate=data.get("internal_rate"),
-            is_fixed=data.get("is_fixed", False)
+            is_fixed=data.get("is_fixed")
         )
         
         rate = await self.client.add_activity_rate(entity_id, rate_form)

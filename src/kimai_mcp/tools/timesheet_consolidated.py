@@ -2,7 +2,7 @@
 
 import contextlib
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 # Bounds the extra fetching for statistics so a huge date range cannot pull an
 # unbounded number of pages into a single response.
@@ -105,7 +105,11 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                     "properties": {
                         "project": {"type": "integer"},
                         "activity": {"type": "integer"},
-                        "begin": {"type": "string", "format": "date-time"},
+                        "begin": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Omit to start at the current server time."
+                        },
                         "end": {"type": "string", "format": "date-time"},
                         "description": {"type": "string"},
                         "tags": {"type": "string"},
@@ -508,7 +512,11 @@ async def _handle_timesheet_create(client: KimaiClient, data: dict) -> list[Text
             raise ToolError(
                 f"Error: Invalid date format for field begin '{data['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
     else:
-        begin_datetime = datetime.now(timezone.utc).replace(microsecond=0)
+        # Leave begin to Kimai ("the users current timestamp will be used").
+        # In punch-in/out tracking mode the API form has no begin/end field
+        # unless the token holds view_other_timesheet, so a manufactured
+        # value fails the whole request as an extra field.
+        begin_datetime = None
 
     end_datetime = None
     if "end" in data:
@@ -714,7 +722,8 @@ async def _handle_timer_start(client: KimaiClient, data: dict) -> list[TextConte
     form = TimesheetEditForm(
         project=data["project"],
         activity=data["activity"],
-        begin=datetime.now(timezone.utc).isoformat(),
+        # No begin: Kimai starts the record at the current timestamp itself,
+        # and punch-in/out mode has no begin field for plain users.
         description=data.get("description"),
         tags=tags_str
     )
