@@ -20,6 +20,7 @@ from kimai_mcp.models import (
     ProjectFilter,
     RateForm,
     TimesheetEditForm,
+    TimesheetEntity,
 )
 from kimai_mcp.oauth import KimaiOAuthProvider
 from kimai_mcp.server import KimaiMCPServer
@@ -229,6 +230,7 @@ def test_extra_field_rejection_explains_itself():
     ))
     assert "Break time" in text
     assert "Settings > Timesheet" in text
+    assert "edit_billable_own_timesheet" in text
     assert "should not contain extra fields" in text  # raw details still shown
 
 
@@ -240,3 +242,45 @@ def test_ordinary_validation_error_gets_no_break_hint():
         details={"errors": {"begin": ["This value is not valid."]}},
     ))
     assert "Break time" not in text
+
+
+# ---------------------------------------------------------------------------
+# Omitted optional timesheet fields must stay omitted on the wire
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_timesheet_create_does_not_invent_billable_or_tags():
+    """A plain create must work for a token that cannot edit billable state.
+
+    Kimai removes the ``billable`` field from the API form unless the token has
+    ``edit_billable_own_timesheet``. The old handler defaulted it to True and
+    also always added an empty ``tags`` field, so omitting both fields still
+    submitted them. The resulting request was rejected as extra fields.
+    """
+    from kimai_mcp.tools.timesheet_consolidated import _handle_timesheet_create
+
+    client = AsyncMock(spec=KimaiClient)
+    client.create_timesheet.return_value = TimesheetEntity(
+        id=1,
+        project=1,
+        activity=1,
+        begin="2026-09-08T09:00:00+00:00",
+        end="2026-09-08T10:00:00+00:00",
+    )
+
+    await _handle_timesheet_create(
+        client,
+        {
+            "project": 1,
+            "activity": 1,
+            "begin": "2026-09-08T09:00:00+00:00",
+            "end": "2026-09-08T10:00:00+00:00",
+        },
+    )
+
+    form = client.create_timesheet.await_args.args[0]
+    payload = form.model_dump(exclude_none=True, by_alias=True)
+    assert "billable" not in payload
+    assert "tags" not in payload
+    assert "break" not in payload

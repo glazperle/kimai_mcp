@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Omitted timesheet options are no longer manufactured on create.** The handler used to send
+  `billable=true` and an empty `tags` value even when the caller omitted both. Kimai removes the
+  `billable` form field when the token lacks `edit_billable_own_timesheet` (or its other-user
+  equivalent), so an ordinary create could fail with `This form should not contain extra fields.`
+  Explicit values remain supported.
+
 ## [2.18.0] - 2026-09-05
 
 Tracks **Kimai 2.66.0** (released 2026-09-05). Nothing in 2.17.x crashes against 2.66, but a

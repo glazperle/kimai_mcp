@@ -110,7 +110,14 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                         "description": {"type": "string"},
                         "tags": {"type": "string"},
                         "user": {"type": "integer"},
-                        "billable": {"type": "boolean"},
+                        "billable": {
+                            "type": "boolean",
+                            "description": (
+                                "Whether the entry is billable. Only send this when the token has "
+                                "edit_billable_own_timesheet (or edit_billable_other_timesheet for another "
+                                "user); otherwise leave it omitted so Kimai applies its automatic default."
+                            )
+                        },
                         "fixedRate": {"type": "number"},
                         "hourlyRate": {"type": "number"},
                         "break": {
@@ -488,8 +495,11 @@ async def _handle_timesheet_create(client: KimaiClient, data: dict) -> list[Text
     if not data.get("project") or not data.get("activity"):
         raise ToolError("Error: 'project' and 'activity' are required for create action")
 
-    # Keep tags as string - model expects comma-separated string
-    tags_str = data.get("tags", "")
+    # Keep tags as string - model expects comma-separated string. Leave it
+    # absent when the caller did not provide it: Kimai builds the API form from
+    # the user's permissions and settings, so optional fields must not be
+    # manufactured here.
+    tags_str = data.get("tags")
 
     if "begin" in data:
         try:
@@ -516,7 +526,10 @@ async def _handle_timesheet_create(client: KimaiClient, data: dict) -> list[Text
         description=data.get("description"),
         tags=tags_str,
         user=data.get("user"),
-        billable=data.get("billable", True),
+        # ``billable`` is only present in Kimai's form when the token has the
+        # corresponding edit permission. Sending a default True made an
+        # otherwise ordinary create fail with "extra fields" for ROLE_USER.
+        billable=data.get("billable"),
         fixedRate=data.get("fixedRate"),
         hourlyRate=data.get("hourlyRate"),
         break_duration=data.get("break")
@@ -694,8 +707,9 @@ async def _handle_timer_start(client: KimaiClient, data: dict) -> list[TextConte
     if not data.get("project") or not data.get("activity"):
         raise ToolError("Error: 'project' and 'activity' are required in data for start action")
     
-    # Keep tags as string - model expects comma-separated string
-    tags_str = data.get("tags", "")
+    # Keep tags as string - model expects comma-separated string. Do not add an
+    # empty tags field when the caller omitted it.
+    tags_str = data.get("tags")
     
     form = TimesheetEditForm(
         project=data["project"],
