@@ -157,29 +157,26 @@ def _server_with_stub_client():
 
 
 @pytest.mark.asyncio
-async def test_mixed_offset_date_filters_do_not_fail_the_listing():
-    """One bound with an offset and one without raises TypeError, not ValueError.
+async def test_offset_date_filters_are_rejected_with_a_clear_error():
+    r"""Kimai's listing only takes local ``Y-m-d\TH:i:s`` and answers an offset
+    with a bare 400, so the tool rejects it up front and says what to send.
 
-    The year-breakdown heuristic is best-effort; suppressing only ValueError
-    turned a legal filter combination into a failed timesheet listing.
+    This replaces a test that pinned "an offset on one bound does not fail the
+    listing": it only passed because the client was a mock.
     """
     from kimai_mcp.tools import timesheet_consolidated as ts
 
     client = AsyncMock(spec=KimaiClient)
     client.get_timesheets.return_value = ([], True, 1)
     client.get_projects.return_value = []
-    result = await ts.handle_timesheet(
-        client,
-        action="list",
-        filters={
-            "user_scope": "self",
-            "begin": "2025-01-01",
-            "end": "2026-06-01T00:00:00+00:00",
-            "calculate_stats": True,
-        },
-    )
-    assert result
-    assert result[0].text
+    for end in ("2026-06-01T00:00:00+00:00", "2026-06-01T00:00:00Z"):
+        with pytest.raises(ToolError, match="without an offset"):
+            await ts.handle_timesheet(
+                client,
+                action="list",
+                filters={"user_scope": "self", "begin": "2025-01-01", "end": end, "calculate_stats": True},
+            )
+    client.get_timesheets.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

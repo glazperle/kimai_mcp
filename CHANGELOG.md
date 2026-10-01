@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Employment contract > Working times), the only place Kimai currently exposes the real balance.
 - An omitted `stats_format` now really defaults to `summary`, as the schema states. It used to append
   the full timesheet listing after the report.
+- **Listings no longer fail when the result count is an exact multiple of the page size.** Kimai
+  answers the page after a full last page with 404; that is now treated as the end of the data.
+- **`size` above 500 is no longer reported as complete.** Kimai caps the page at 500, and a capped
+  page used to count as the last one, so statistics silently covered only 500 records.
+- **Statistics with an explicit `page` cover the whole filter** instead of starting at that page.
+- **Hours use Kimai's `duration`** (end - begin - break, after rounding) in the statistics and in the
+  `Duration` lines of listings, `get`, `timer stop` and `timer recent`, matching Kimai's own totals.
+- **Several users at once are counted in person-days**, so "Average Hours/Day" no longer divides
+  everyone's hours by the number of calendar days.
+- **Year-over-year comparison skips years the range only partly covers** (marked `partial`), instead
+  of reporting e.g. "+50%" for an unchanged workload.
+- **Absence statistics** count a half day as 0.5 instead of 1 and no longer convert durations with a
+  fixed 8-hour day; an explicit duration is reported in hours.
+- **`begin` / `end` with an offset or `Z` on `timesheet action=list`** are rejected with a clear
+  message. Kimai only accepts local time there and used to answer with a bare 400.
 
 ## [2.18.1] - 2026-09-09
 

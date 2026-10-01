@@ -1,6 +1,5 @@
 """Consolidated Timesheet tools for all timesheet operations."""
 
-import contextlib
 import json
 from datetime import datetime, timedelta
 
@@ -10,11 +9,11 @@ MAX_STATS_RESULTS = 10000
 
 from mcp.types import TextContent, Tool
 
-from ..client import KimaiAPIError, KimaiClient
+from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
 from ..models import MetaFieldForm, TimesheetEditForm, TimesheetFilter
 from .batch_utils import execute_batch, format_batch_result
 from .errors import ToolError
-from .timesheet_analytics import TimesheetAnalytics
+from .timesheet_analytics import TimesheetAnalytics, worked_hours
 from .user_discovery import resolve_accessible_users
 
 
@@ -79,13 +78,11 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                         "customer": {"type": "integer"},
                         "begin": {
                             "type": "string",
-                            "format": "date-time",
-                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00)."
+                            "description": "Start date and time filter in the user's local time, no offset or 'Z' (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00)."
                         },
                         "end": {
                             "type": "string",
-                            "format": "date-time",
-                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00)."
+                            "description": "End date and time filter in the user's local time, no offset or 'Z' (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00)."
                         },
                         "exported": {"type": "integer", "enum": [0, 1]},
                         "active": {"type": "integer", "enum": [0, 1]},
@@ -268,6 +265,29 @@ async def handle_timer(client: KimaiClient, **params) -> list[TextContent]:
         )
 
 
+def _parse_list_bound(filters: dict, field: str) -> datetime | None:
+    r"""Parse a list ``begin``/``end`` filter as Kimai's local ``Y-m-d\TH:i:s``.
+
+    Kimai's listing only accepts that strict format (``TimesheetController``,
+    ``Constraints\DateTime(format: 'Y-m-d\TH:i:s')``) and interprets it in the
+    user's timezone, so an offset or ``Z`` would be sent along and answered
+    with a bare 400. Reject it here with a message that says what to send.
+    """
+    value = filters.get(field)
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        parsed = None
+    if parsed is None or parsed.tzinfo is not None or str(value).endswith(("Z", "z")):
+        raise ToolError(
+            f"Error: Invalid date time for field {field} '{value}'. Use local time without "
+            "an offset or 'Z' (YYYY-MM-DDTHH:MM:SS); Kimai interprets it in the user's timezone."
+        )
+    return parsed
+
+
 # Timesheet action handlers
 async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[TextContent]:
     """Handle timesheet list action."""
@@ -287,21 +307,8 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     elif user_scope == "all":
         user_filter = "all"  # API requires explicit "all" to return all users' timesheets
 
-    begin_datetime = None
-    if "begin" in filters:
-        try:
-            begin_datetime = datetime.fromisoformat(filters["begin"])
-        except ValueError:
-            raise ToolError(
-                f"Error: Invalid date time format for field begin '{filters['begin']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
-
-    end_datetime = None
-    if "end" in filters:
-        try:
-            end_datetime = datetime.fromisoformat(filters["end"])
-        except ValueError:
-            raise ToolError(
-                f"Error: Invalid date time format for field end '{filters['end']}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
+    begin_datetime = _parse_list_bound(filters, "begin")
+    end_datetime = _parse_list_bound(filters, "end")
 
 
     if (
@@ -334,11 +341,15 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
 
     # Auto-fetch remaining pages if calculate_stats is enabled and the client
-    # did not already fetch everything (e.g. manual pagination was used)
-    if filters.get("calculate_stats") and not fetched_all:
-        all_timesheets = list(timesheets)
-        page = (last_page or 1) + 1
-        page_size = timesheet_filter.size or 50
+    # did not already fetch everything (e.g. manual pagination was used).
+    # Statistics cover the whole filter, so an explicit page > 1 restarts at
+    # page 1 instead of silently dropping the pages before it.
+    explicit_page = (filters.get("page") or 1) > 1
+    if filters.get("calculate_stats") and (not fetched_all or explicit_page):
+        all_timesheets = [] if explicit_page else list(timesheets)
+        page = 1 if explicit_page else (last_page or 1) + 1
+        page_size = min(timesheet_filter.size or 50, MAX_PAGE_SIZE)
+        fetched_all = False  # until the loop sees the last page
         while len(all_timesheets) < MAX_STATS_RESULTS:
             timesheet_filter.page = page
             batch, _fetched, last_page = await client.get_timesheets(timesheet_filter)
@@ -387,19 +398,18 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     if filters.get("calculate_stats"):
         # Auto-enable year breakdown if time span > 1 year
         breakdown_by_year = filters.get("breakdown_by_year", False)
-        if not breakdown_by_year and filters.get("begin") and filters.get("end"):
-            # Unparsable filter dates just leave the breakdown off. TypeError is
-            # included because one bound may carry an offset and the other may
-            # not, and subtracting naive from aware raises TypeError, not ValueError.
-            with contextlib.suppress(ValueError, TypeError):
-                begin_date = datetime.fromisoformat(filters["begin"].replace('Z', '+00:00'))
-                end_date = datetime.fromisoformat(filters["end"].replace('Z', '+00:00'))
-                if (end_date - begin_date).days > 365:  # More than 1 year
-                    breakdown_by_year = True
-        
+        if (
+            not breakdown_by_year
+            and begin_datetime is not None
+            and end_datetime is not None
+            and (end_datetime - begin_datetime).days > 365
+        ):
+            breakdown_by_year = True
+
         stats = TimesheetAnalytics.calculate_statistics(
-            timesheets, 
-            breakdown_by_year=breakdown_by_year
+            timesheets,
+            breakdown_by_year=breakdown_by_year,
+            period=(begin_datetime, end_datetime),
         )
         
         # Load project names for better display
@@ -427,7 +437,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     
     # List timesheets
     for ts in timesheets:
-        duration = (ts.end - ts.begin).total_seconds() / 3600 if ts.end else "Running"
+        duration = worked_hours(ts) if ts.end else "Running"
         status = "Running" if not ts.end else "Stopped"
         
         result += f"ID: {ts.id} - Project ID: {ts.project} / Activity ID: {ts.activity}\n"
@@ -453,7 +463,7 @@ async def _handle_timesheet_get(client: KimaiClient, id: int | None) -> list[Tex
     
     ts = await client.get_timesheet(id)
     
-    duration = (ts.end - ts.begin).total_seconds() / 3600 if ts.end else "Running"
+    duration = worked_hours(ts) if ts.end else "Running"
     status = "Running" if not ts.end else "Stopped"
     
     result = f"Timesheet ID: {ts.id}\n"
@@ -745,7 +755,7 @@ async def _handle_timer_stop(client: KimaiClient, id: int | None) -> list[TextCo
     
     ts = await client.stop_timesheet(id)
     
-    duration = (ts.end - ts.begin).total_seconds() / 3600
+    duration = worked_hours(ts)
     return [TextContent(
         type="text",
         text=f"Stopped timer ID {ts.id}. Duration: {duration:.2f} hours"
@@ -862,7 +872,7 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: str | None
     result = f"Recent {len(timesheets)} timesheet(s):\n\n"
     
     for ts in timesheets:
-        duration = (ts.end - ts.begin).total_seconds() / 3600 if ts.end else "Running"
+        duration = worked_hours(ts) if ts.end else "Running"
         
         result += f"ID: {ts.id} - Project: {ts.project} / Activity: {ts.activity}\n"
         result += f"  Date: {ts.begin.strftime('%Y-%m-%d')}\n"

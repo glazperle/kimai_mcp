@@ -55,6 +55,9 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+# Largest page Kimai serves (BaseApiController::MAX_PAGE_SIZE); larger sizes are capped.
+MAX_PAGE_SIZE = 500
+
 
 class KimaiAPIError(Exception):
     """Kimai API error."""
@@ -292,6 +295,22 @@ class KimaiClient:
     
     # Timesheet endpoints
     
+    async def _get_timesheet_page(self, params: dict, page: int) -> list:
+        """Fetch one page of ``/timesheets``; a page past the end is empty.
+
+        Kimai answers an out-of-range page with 404 on the API (it only clamps
+        the page for UI queries, ``src/Utils/Pagination.php``). Paging past a
+        last page that happened to be full is how the loops find the end, so
+        without this a result count that is an exact multiple of the page size
+        failed the whole listing.
+        """
+        try:
+            return await self._request("GET", "/timesheets", params=params)
+        except KimaiAPIError as e:
+            if e.status_code == 404 and page > 1:
+                return []
+            raise
+
     async def get_timesheets(
         self,
         filters: TimesheetFilter | None = None,
@@ -375,18 +394,22 @@ class KimaiClient:
                 del params['tags']
         
         # If not auto-paginating, just return single page
+        # Kimai silently caps the page size (BaseApiController::MAX_PAGE_SIZE);
+        # comparing against the requested size would mistake a capped page for
+        # the last one.
+        page_size = min(filters.size if filters and filters.size else 50, MAX_PAGE_SIZE)
+        if "size" in params:
+            params["size"] = page_size
+
         if not should_paginate_all:
-            data = await self._request("GET", "/timesheets", params=params)
-            # Use the actual page size (API default is 50) to decide whether
-            # this single page already contained all matching records.
-            page_size = filters.size if filters and filters.size else 50
+            page = filters.page if filters and filters.page else 1
+            data = await self._get_timesheet_page(params, page)
             fetched_all = len(data) < page_size
-            return [TimesheetEntity(**item) for item in data], fetched_all, filters.page if filters and filters.page else 1
-        
+            return [TimesheetEntity(**item) for item in data], fetched_all, page
+
         # Auto-pagination logic
         all_timesheets = []
         page = 1
-        page_size = filters.size if filters and filters.size else 50
         fetched_all = True
         
         while True:
@@ -395,8 +418,7 @@ class KimaiClient:
             paginated_params['page'] = page
             paginated_params['size'] = page_size
             
-            # Fetch page
-            data = await self._request("GET", "/timesheets", params=paginated_params)
+            data = await self._get_timesheet_page(paginated_params, page)
 
             if not data:
                 break

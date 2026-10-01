@@ -45,18 +45,21 @@ class AbsenceAnalytics:
         stats = {
             "total_entries": len(absences),
             "total_days": 0,
+            "total_hours": 0,
             "unique_users": set(),
-            "by_type": defaultdict(lambda: {"count": 0, "days": 0, "users": set()}),
+            "by_type": defaultdict(lambda: {"count": 0, "days": 0, "hours": 0, "users": set()}),
             "by_user": defaultdict(lambda: {"count": 0, "days": 0, "types": defaultdict(int), "username": ""}),
             "by_month": defaultdict(lambda: {"count": 0, "days": 0, "types": defaultdict(int)}),
             "by_status": defaultdict(int),
         }
 
         for absence in absences:
-            # Calculate days (duration is in seconds, 1 day = 28800 seconds for 8h workday)
-            duration_seconds = getattr(absence, 'duration', 0) or 0
-            # Assume 8 hours = 1 day, so 28800 seconds = 1 day
-            days = duration_seconds / 28800 if duration_seconds > 0 else 1
+            # Kimai returns one row per absence day. A fixed hours-per-day
+            # factor would ignore the work contract, so a row counts as one day
+            # (half a day with halfDay) and an explicit duration is reported
+            # separately as hours.
+            days = 0.5 if getattr(absence, 'half_day', False) else 1
+            hours = (getattr(absence, 'duration', None) or 0) / 3600
 
             # Get absence info
             absence_type = getattr(absence, 'type', 'other') or 'other'
@@ -68,11 +71,13 @@ class AbsenceAnalytics:
 
             # Update totals
             stats["total_days"] += days
+            stats["total_hours"] += hours
             stats["unique_users"].add(user_id)
 
             # By type
             stats["by_type"][absence_type]["count"] += 1
             stats["by_type"][absence_type]["days"] += days
+            stats["by_type"][absence_type]["hours"] += hours
             stats["by_type"][absence_type]["users"].add(user_id)
 
             # By user
@@ -110,6 +115,7 @@ class AbsenceAnalytics:
             by_type_processed[type_key] = {
                 "count": type_data["count"],
                 "days": round(type_data["days"], 2),
+                "hours": round(type_data["hours"], 2),
                 "unique_users": len(type_data["users"]),
                 "label": AbsenceAnalytics.TYPE_LABELS.get(type_key, type_key)
             }
@@ -144,6 +150,7 @@ class AbsenceAnalytics:
 
         # Round totals
         stats["total_days"] = round(stats["total_days"], 2)
+        stats["total_hours"] = round(stats["total_hours"], 2)
 
         # Calculate averages
         if stats["unique_users_count"] > 0:
@@ -181,11 +188,14 @@ class AbsenceAnalytics:
         if stats.get("total_entries", 0) == 0:
             return stats.get("message", "No data available for analysis")
 
+        hours_note = (
+            f" (entries with a duration: {stats['total_hours']} hours)" if stats.get('total_hours') else ""
+        )
         report = f"""# {title}
 
 ## Overview
 - **Total Absences**: {stats['total_entries']} entries
-- **Total Days**: {stats['total_days']} days
+- **Total Days**: {stats['total_days']} days{hours_note}
 - **Unique Users**: {stats['unique_users_count']}
 - **Average per User**: {stats.get('avg_days_per_user', 0)} days
 
@@ -201,7 +211,8 @@ class AbsenceAnalytics:
         total_days = stats['total_days'] or 1
         for type_key, type_data in sorted_types:
             percentage = (type_data['days'] / total_days) * 100
-            report += f"- **{type_data['label']}**: {type_data['days']} days ({percentage:.1f}%) - {type_data['count']} entries, {type_data['unique_users']} users\n"
+            hours = f", {type_data['hours']} hours" if type_data.get('hours') else ""
+            report += f"- **{type_data['label']}**: {type_data['days']} days{hours} ({percentage:.1f}%) - {type_data['count']} entries, {type_data['unique_users']} users\n"
 
         # By Status
         if stats.get('by_status'):
