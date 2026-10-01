@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`calculate_stats` no longer reports a made-up overtime figure** ([#30](https://github.com/glazperle/kimai_mcp/issues/30)).
+  `expected_hours` was `days with entries x 8h` and `overtime_hours` was clamped at zero, ignoring the
+  work contract, public holidays, absences, carryovers, manual bookings and negative balances. Both keys
+  are removed from `stats_format=json` and the report lines are gone; every format now carries
+  `working_time_balance: null` and a `working_time_note` pointing to Kimai's Working times page
+  (Employment contract > Working times), the only place Kimai currently exposes the real balance.
+- An omitted `stats_format` now really defaults to `summary`, as the schema states. It used to append
+  the full timesheet listing after the report.
+
 ## [2.18.1] - 2026-09-09
 
 ### Fixed

@@ -3,6 +3,15 @@
 from collections import defaultdict
 from typing import Any
 
+# Issue #30: the balance depends on the work contract and is UI-only in Kimai
+# (see CLAUDE.md), so the stats carry this note instead of a local estimate.
+WORKING_TIME_NOTE = (
+    "Overtime and the working-time balance are not computed here: they depend on the "
+    "Kimai work contract (target hours, public holidays, absences, carryovers, manual "
+    "bookings). See Kimai under Employment contract > Working times "
+    "(<kimai-url>/<locale>/contract, e.g. /en/contract)."
+)
+
 
 class TimesheetAnalytics:
     """Performs calculations on timesheet data."""
@@ -115,9 +124,8 @@ class TimesheetAnalytics:
             if working_days_count > 0 else 0
         )
 
-        expected_hours = working_days_count * 8
-        stats["overtime_hours"] = max(0, stats["total_hours"] - expected_hours)
-        stats["expected_hours"] = expected_hours
+        stats["working_time_balance"] = None
+        stats["working_time_note"] = WORKING_TIME_NOTE
 
         stats["projects"] = dict(stats["projects"])
         stats["activities"] = dict(stats["activities"])
@@ -181,7 +189,6 @@ class TimesheetAnalytics:
         stats["billable_hours"] = round(stats["billable_hours"], 2)
         stats["non_billable_hours"] = round(stats["non_billable_hours"], 2)
         stats["avg_hours_per_day"] = round(stats["avg_hours_per_day"], 2)
-        stats["overtime_hours"] = round(stats["overtime_hours"], 2)
         
         return stats
 
@@ -202,8 +209,8 @@ class TimesheetAnalytics:
 ## Time Distribution
 - **Billable Hours**: {stats['billable_hours']} ({stats.get('billable_percentage', 0)}%)
 - **Non-Billable Hours**: {stats['non_billable_hours']} hours
-- **Expected Hours** (8h/day): {stats['expected_hours']} hours
-- **Overtime**: {stats['overtime_hours']} hours
+
+{stats.get('working_time_note', WORKING_TIME_NOTE)}
 
 ## Top Projects
 """

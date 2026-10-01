@@ -411,7 +411,9 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         except Exception:  # noqa: BLE001
             project_map = {}
         
-        if filters.get("stats_format") == "json":
+        # The schema default is not applied server-side, so default here.
+        stats_format = filters.get("stats_format", "summary")
+        if stats_format == "json":
             result += "\n## Statistics (JSON):\n"
             result += json.dumps(stats, indent=2)
             result += "\n\n"
@@ -420,7 +422,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             result += "\n\n"
         
         # If only stats requested, return early
-        if filters.get("stats_format") == "summary":
+        if stats_format == "summary":
             return [TextContent(type="text", text=result)]
     
     # List timesheets
