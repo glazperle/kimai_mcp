@@ -12,6 +12,7 @@ from mcp.types import TextContent, Tool
 from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
 from ..models import MetaFieldForm, TimesheetEditForm, TimesheetFilter
 from .batch_utils import execute_batch, format_batch_result
+from .dates import parse_local_datetime
 from .errors import ToolError
 from .timesheet_analytics import TimesheetAnalytics, worked_hours
 from .user_discovery import resolve_accessible_users
@@ -199,8 +200,7 @@ NOTE: Creates timesheet entries without end time. Use 'timesheet' tool for compl
                 },
                 "begin": {
                     "type": "string",
-                    "format": "date-time",
-                    "description": "Only entries after this date (for recent action)"
+                    "description": "Only entries after this local date/time, no offset or 'Z' (YYYY-MM-DDTHH:MM:SS, for recent action)"
                 }
             }
         }
@@ -265,29 +265,6 @@ async def handle_timer(client: KimaiClient, **params) -> list[TextContent]:
         )
 
 
-def _parse_list_bound(filters: dict, field: str) -> datetime | None:
-    r"""Parse a list ``begin``/``end`` filter as Kimai's local ``Y-m-d\TH:i:s``.
-
-    Kimai's listing only accepts that strict format (``TimesheetController``,
-    ``Constraints\DateTime(format: 'Y-m-d\TH:i:s')``) and interprets it in the
-    user's timezone, so an offset or ``Z`` would be sent along and answered
-    with a bare 400. Reject it here with a message that says what to send.
-    """
-    value = filters.get(field)
-    if value is None:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        parsed = None
-    if parsed is None or parsed.tzinfo is not None or str(value).endswith(("Z", "z")):
-        raise ToolError(
-            f"Error: Invalid date time for field {field} '{value}'. Use local time without "
-            "an offset or 'Z' (YYYY-MM-DDTHH:MM:SS); Kimai interprets it in the user's timezone."
-        )
-    return parsed
-
-
 # Timesheet action handlers
 async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[TextContent]:
     """Handle timesheet list action."""
@@ -307,8 +284,8 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     elif user_scope == "all":
         user_filter = "all"  # API requires explicit "all" to return all users' timesheets
 
-    begin_datetime = _parse_list_bound(filters, "begin")
-    end_datetime = _parse_list_bound(filters, "end")
+    begin_datetime = parse_local_datetime(filters["begin"], "begin") if filters.get("begin") else None
+    end_datetime = parse_local_datetime(filters["end"], "end") if filters.get("end") else None
 
 
     if (
@@ -337,22 +314,32 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         term=filters.get("term")
     )
 
-    # Fetch timesheets - with pagination if needed
-    timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
+    requested_page = filters.get("page") or 1
+    page_size = min(timesheet_filter.size or 50, MAX_PAGE_SIZE)
+    stats_input = None
+
+    if filters.get("calculate_stats") and requested_page > 1:
+        # Statistics cover the whole filter: start at page 1 rather than
+        # fetching the requested page first and throwing it away.
+        timesheet_filter.page = 1
+        timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
+    else:
+        timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
 
     # Auto-fetch remaining pages if calculate_stats is enabled and the client
     # did not already fetch everything (e.g. manual pagination was used).
-    # Statistics cover the whole filter, so an explicit page > 1 restarts at
-    # page 1 instead of silently dropping the pages before it.
-    explicit_page = (filters.get("page") or 1) > 1
-    if filters.get("calculate_stats") and (not fetched_all or explicit_page):
-        all_timesheets = [] if explicit_page else list(timesheets)
-        page = 1 if explicit_page else (last_page or 1) + 1
-        page_size = min(timesheet_filter.size or 50, MAX_PAGE_SIZE)
-        fetched_all = False  # until the loop sees the last page
+    if filters.get("calculate_stats") and not fetched_all:
+        all_timesheets = list(timesheets)
+        page = (last_page or 1) + 1
         while len(all_timesheets) < MAX_STATS_RESULTS:
             timesheet_filter.page = page
-            batch, _fetched, last_page = await client.get_timesheets(timesheet_filter)
+            try:
+                batch, _fetched, last_page = await client.get_timesheets(timesheet_filter)
+            except KimaiAPIError as e:
+                # Kimai answers the page after a full last page with 404.
+                if e.status_code != 404:
+                    raise
+                batch = []
             if not batch:
                 fetched_all = True
                 break
@@ -362,14 +349,22 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
                 break
             page += 1
         timesheets = all_timesheets
+
+    if filters.get("calculate_stats"):
+        stats_input = timesheets
+        if requested_page > 1:
+            # The listing after the report still shows only the requested page.
+            start = (requested_page - 1) * page_size
+            timesheets = timesheets[start:start + page_size]
     
     # Build response
+    found = len(stats_input) if stats_input is not None else len(timesheets)
     if user_scope == "all":
-        result = f"Found {len(timesheets)} timesheets for all users\n\n"
+        result = f"Found {found} timesheets for all users\n\n"
     elif user_scope == "specific":
-        result = f"Found {len(timesheets)} timesheets for user {user_filter}\n\n"
+        result = f"Found {found} timesheets for user {user_filter}\n\n"
     else:
-        result = f"Found {len(timesheets)} timesheets for current user\n\n"
+        result = f"Found {found} timesheets for current user\n\n"
 
     if not fetched_all:
         result += f"Not all records were returned; fetched records up to page {last_page}\n\n"
@@ -407,7 +402,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             breakdown_by_year = True
 
         stats = TimesheetAnalytics.calculate_statistics(
-            timesheets,
+            stats_input,
             breakdown_by_year=breakdown_by_year,
             period=(begin_datetime, end_datetime),
         )
@@ -852,14 +847,8 @@ async def _handle_timer_favorite(client: KimaiClient, id: int | None, add: bool)
 
 async def _handle_timer_recent(client: KimaiClient, size: int, begin: str | None) -> list[TextContent]:
     """Handle timer recent action."""
-    from datetime import datetime
     
-    begin_datetime = None
-    if begin:
-        try:
-            begin_datetime = datetime.fromisoformat(begin)
-        except ValueError:
-            raise ToolError(f"Error: Invalid date format '{begin}'. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
+    begin_datetime = parse_local_datetime(begin, "begin") if begin else None
     
     # Use regular timesheet list with recent parameters
     filter_params = TimesheetFilter(

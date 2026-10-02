@@ -22,20 +22,29 @@ def worked_hours(ts: Any) -> float:
     only the fallback for a record that carries no duration.
     """
     duration = getattr(ts, "duration", None)
-    if duration is not None:
+    # TimesheetEntity.duration defaults to 0, so "absent" is only visible in
+    # the set of fields that were actually parsed.
+    fields_set = getattr(ts, "model_fields_set", None)
+    if duration is not None and (fields_set is None or "duration" in fields_set):
         return duration / 3600
     span = (ts.end - ts.begin).total_seconds() - (getattr(ts, "break_duration", None) or 0)
     return max(span, 0) / 3600
 
 
-def _partial_years(years: set[int], period: tuple[datetime | None, datetime | None] | None) -> dict[int, str]:
+def _partial_years(
+    years: set[int],
+    period: tuple[datetime | None, datetime | None] | None,
+    tz: Any = None,
+) -> dict[int, str]:
     """Years only partly inside the filter range, mapped to the covered span.
 
     A missing ``begin`` leaves the first year alone (the data simply starts
     there); a missing ``end`` means "until now", so the current year is partial.
+    ``tz`` is the records' timezone (the Kimai user's), because the bounds are
+    in that local time too.
     """
     begin, end = period or (None, None)
-    current_year = datetime.now(timezone.utc).year
+    current_year = datetime.now(tz or timezone.utc).year
     partial = {}
     for year in years:
         starts_late = (
@@ -44,8 +53,9 @@ def _partial_years(years: set[int], period: tuple[datetime | None, datetime | No
             and (begin.month, begin.day, begin.hour, begin.minute, begin.second) != (1, 1, 0, 0, 0)
         )
         if end is not None:
-            # An end at midnight of Jan 1 is an exclusive bound of the year before.
-            ends_early = end.year == year and (end.month, end.day) < (12, 31)
+            # Kimai's end bound is inclusive: the year is complete only up to
+            # 23:59 on Dec 31 (an end at midnight of Jan 1 belongs to the next year).
+            ends_early = end.year == year and (end.month, end.day, end.hour, end.minute) < (12, 31, 23, 59)
         else:
             ends_early = year == current_year
         if starts_late or ends_early:
@@ -60,7 +70,7 @@ def _partial_years(years: set[int], period: tuple[datetime | None, datetime | No
 
 class TimesheetAnalytics:
     """Performs calculations on timesheet data."""
-    
+
     @staticmethod
     def calculate_statistics(
         timesheets: list[Any],
@@ -100,7 +110,7 @@ class TimesheetAnalytics:
             "tags": defaultdict(int),
             "breakdown_by_year": breakdown_by_year
         }
-        
+
         # If breakdown by year is requested, track per-year stats
         if breakdown_by_year:
             stats["years"] = defaultdict(lambda: {
@@ -117,7 +127,7 @@ class TimesheetAnalytics:
             if not ts.end:
                 stats["running_timers"] += 1
                 continue
-                
+
             stats["completed_entries"] += 1
 
             duration_hours = worked_hours(ts)
@@ -152,22 +162,22 @@ class TimesheetAnalytics:
 
             year_key = ts.begin.year
             stats["yearly_hours"][year_key] += duration_hours
-            
+
             # Per-year breakdown if requested
             if breakdown_by_year:
                 year_stats = stats["years"][year_key]
                 year_stats["entries"] += 1
                 year_stats["total_hours"] += duration_hours
                 year_stats["working_days"].add(person_day)
-                
+
                 if ts.billable:
                     year_stats["billable_hours"] += duration_hours
                 else:
                     year_stats["non_billable_hours"] += duration_hours
-                
+
                 if ts.project:
                     year_stats["projects"][ts.project] += duration_hours
-                
+
                 year_month_key = ts.begin.strftime("%m")
                 year_stats["monthly_hours"][year_month_key] += duration_hours
 
@@ -177,12 +187,20 @@ class TimesheetAnalytics:
                 for tag in ts.tags:
                     stats["tags"][tag] += 1
 
-        working_days_count = len(stats["working_days"])
+        # working_days_count / avg_hours_per_day keep their meaning (calendar
+        # days with work); person_days_* count each user's days separately,
+        # which is what a per-day average means once several users are mixed.
+        person_days = stats["working_days"]
+        working_days_count = len({day for _user, day in person_days})
         stats["working_days_count"] = working_days_count
+        stats["person_days_count"] = len(person_days)
         stats["user_count"] = len(stats.pop("users"))
         stats["avg_hours_per_day"] = (
-            stats["total_hours"] / working_days_count 
+            stats["total_hours"] / working_days_count
             if working_days_count > 0 else 0
+        )
+        stats["avg_hours_per_person_day"] = (
+            stats["total_hours"] / len(person_days) if person_days else 0
         )
 
         stats["working_time_balance"] = None
@@ -196,7 +214,7 @@ class TimesheetAnalytics:
         stats["yearly_hours"] = dict(stats["yearly_hours"])
         stats["hourly_distribution"] = dict(stats["hourly_distribution"])
         stats["tags"] = dict(stats["tags"])
-        
+
         # Process per-year stats if breakdown was requested
         if breakdown_by_year and stats["years"]:
             processed_years = {}
@@ -206,26 +224,28 @@ class TimesheetAnalytics:
                     "total_hours": round(year_data["total_hours"], 2),
                     "billable_hours": round(year_data["billable_hours"], 2),
                     "non_billable_hours": round(year_data["non_billable_hours"], 2),
-                    "working_days_count": len(year_data["working_days"]),
-                    "avg_hours_per_day": round(
-                        year_data["total_hours"] / len(year_data["working_days"]) 
+                    "working_days_count": len({day for _user, day in year_data["working_days"]}),
+                    "person_days_count": len(year_data["working_days"]),
+                    "avg_hours_per_person_day": round(
+                        year_data["total_hours"] / len(year_data["working_days"])
                         if year_data["working_days"] else 0, 2
                     ),
                     "projects": dict(year_data["projects"]),
                     "monthly_hours": dict(year_data["monthly_hours"])
                 }
-            for year, span in _partial_years({int(y) for y in processed_years}, period).items():
+            tz = next((ts.begin.tzinfo for ts in timesheets if ts.begin.tzinfo), None)
+            for year, span in _partial_years({int(y) for y in processed_years}, period, tz).items():
                 processed_years[str(year)]["partial"] = span
             stats["years"] = processed_years
 
         del stats["working_days"]
-        
+
         # Add summary percentages
         if stats["total_hours"] > 0:
             stats["billable_percentage"] = round(
                 (stats["billable_hours"] / stats["total_hours"]) * 100, 1
             )
-            
+
             # Top projects by percentage
             stats["top_projects"] = [
                 {
@@ -234,12 +254,12 @@ class TimesheetAnalytics:
                     "percentage": round((hours / stats["total_hours"]) * 100, 1)
                 }
                 for proj_id, hours in sorted(
-                    stats["projects"].items(), 
-                    key=lambda x: x[1], 
+                    stats["projects"].items(),
+                    key=lambda x: x[1],
                     reverse=True
                 )[:5]
             ]
-        
+
         # Find peak productivity hours
         if stats["hourly_distribution"]:
             peak_hour = max(stats["hourly_distribution"].items(), key=lambda x: x[1])
@@ -252,7 +272,8 @@ class TimesheetAnalytics:
         stats["billable_hours"] = round(stats["billable_hours"], 2)
         stats["non_billable_hours"] = round(stats["non_billable_hours"], 2)
         stats["avg_hours_per_day"] = round(stats["avg_hours_per_day"], 2)
-        
+        stats["avg_hours_per_person_day"] = round(stats["avg_hours_per_person_day"], 2)
+
         return stats
 
     @staticmethod
@@ -260,17 +281,18 @@ class TimesheetAnalytics:
         """Format statistics into a readable report."""
         if stats.get("total_entries", 0) == 0:
             return stats.get("message", "No data available for analysis")
-        
+
         multi_user = stats.get("user_count", 1) > 1
         days_label = "Person-Days (days worked, per user)" if multi_user else "Working Days"
         day_unit = "Person-Day" if multi_user else "Day"
+        days_key = "person_days_count" if multi_user else "working_days_count"
         report = f"""# Timesheet Analytics Report
 
 ## Overview
 - **Total Entries**: {stats['total_entries']} ({stats['completed_entries']} completed, {stats['running_timers']} running)
 - **Total Hours**: {stats['total_hours']} hours
-- **{days_label}**: {stats['working_days_count']} days
-- **Average Hours/{day_unit}**: {stats['avg_hours_per_day']} hours
+- **{days_label}**: {stats[days_key]} days
+- **Average Hours/{day_unit}**: {stats.get('avg_hours_per_person_day', stats['avg_hours_per_day'])} hours
 
 ## Time Distribution
 - **Billable Hours**: {stats['billable_hours']} ({stats.get('billable_percentage', 0)}%)
@@ -286,24 +308,24 @@ class TimesheetAnalytics:
                 report += f"- {project_name}: {proj['hours']}h ({proj['percentage']}%)\n"
             else:
                 report += f"- Project {proj['project_id']}: {proj['hours']}h ({proj['percentage']}%)\n"
-        
+
         if stats.get('peak_hour'):
             report += "\n## Peak Productivity\n"
             report += f"- Most entries start at: {stats['peak_hour']['hour']}:00 ({stats['peak_hour']['entries']} entries)\n"
-        
+
         # Add yearly breakdown if available
         if stats.get('breakdown_by_year') and stats.get('years'):
             report += "\n## Yearly Breakdown\n"
-            
+
             years_sorted = sorted(stats['years'].items())
             for year, year_data in years_sorted:
                 partial = f" (partial: {year_data['partial']})" if year_data.get('partial') else ""
                 report += f"\n### Year {year}{partial}\n"
                 report += f"- **Hours**: {year_data['total_hours']}h ({year_data['entries']} entries)\n"
-                report += f"- **{days_label}**: {year_data['working_days_count']} days\n"
-                report += f"- **Average/{day_unit}**: {year_data['avg_hours_per_day']}h\n"
+                report += f"- **{days_label}**: {year_data[days_key]} days\n"
+                report += f"- **Average/{day_unit}**: {year_data['avg_hours_per_person_day']}h\n"
                 report += f"- **Billable**: {year_data['billable_hours']}h\n"
-                
+
                 # Top projects for this year
                 if year_data['projects']:
                     top_project = max(year_data['projects'].items(), key=lambda x: x[1])
@@ -312,7 +334,7 @@ class TimesheetAnalytics:
                     else:
                         project_name = f"Project {top_project[0]}"
                     report += f"- **Main Project**: {project_name} ({round(top_project[1], 2)}h)\n"
-            
+
             # Year comparison if multiple years
             if len(years_sorted) > 1:
                 report += "\n### Year-over-Year Comparison\n"
@@ -324,21 +346,21 @@ class TimesheetAnalytics:
                     if prev_data.get('partial') or curr_data.get('partial'):
                         report += f"- **{prev_year} → {curr_year}**: not compared, the range covers only part of a year\n"
                         continue
-                    
+
                     hours_change = curr_data['total_hours'] - prev_data['total_hours']
                     hours_pct = (hours_change / prev_data['total_hours'] * 100) if prev_data['total_hours'] > 0 else 0
-                    
+
                     days_change = curr_data['working_days_count'] - prev_data['working_days_count']
-                    
+
                     report += f"- **{prev_year} → {curr_year}**: "
                     report += f"{hours_change:+.0f}h ({hours_pct:+.1f}%), "
                     report += f"{days_change:+d} working days\n"
-        
+
         # Add weekly summary if available and no yearly breakdown
         elif stats.get('weekly_hours'):
             report += "\n## Recent Weekly Hours\n"
             recent_weeks = sorted(stats['weekly_hours'].items())[-4:]
             for week, hours in recent_weeks:
                 report += f"- {week}: {round(hours, 2)} hours\n"
-        
+
         return report

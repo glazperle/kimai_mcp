@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.2] - 2026-10-02
+
 ### Fixed
 
 - **`calculate_stats` no longer reports a made-up overtime figure** ([#30](https://github.com/glazperle/kimai_mcp/issues/30)).
@@ -21,17 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers the page after a full last page with 404; that is now treated as the end of the data.
 - **`size` above 500 is no longer reported as complete.** Kimai caps the page at 500, and a capped
   page used to count as the last one, so statistics silently covered only 500 records.
-- **Statistics with an explicit `page` cover the whole filter** instead of starting at that page.
+- **Statistics with an explicit `page` cover the whole filter** instead of starting at that page;
+  the listing after the report still shows only the requested page.
 - **Hours use Kimai's `duration`** (end - begin - break, after rounding) in the statistics and in the
   `Duration` lines of listings, `get`, `timer stop` and `timer recent`, matching Kimai's own totals.
 - **Several users at once are counted in person-days**, so "Average Hours/Day" no longer divides
-  everyone's hours by the number of calendar days.
+  everyone's hours by the number of calendar days. In `stats_format=json` the existing
+  `working_days_count` / `avg_hours_per_day` keep their meaning (calendar days); the new
+  `person_days_count`, `avg_hours_per_person_day` and `user_count` carry the per-person figures.
 - **Year-over-year comparison skips years the range only partly covers** (marked `partial`), instead
   of reporting e.g. "+50%" for an unchanged workload.
 - **Absence statistics** count a half day as 0.5 instead of 1 and no longer convert durations with a
-  fixed 8-hour day; an explicit duration is reported in hours.
-- **`begin` / `end` with an offset or `Z` on `timesheet action=list`** are rejected with a clear
-  message. Kimai only accepts local time there and used to answer with a bare 400.
+  fixed 8-hour day. An entry with an explicit duration is counted in hours only (new `total_hours`
+  and per-type `hours`), not additionally as a day.
+- **`begin` / `end` with an offset or `Z`** on `timesheet action=list`, `timer action=recent` and
+  `analyze_project_team` are rejected with a clear message. Kimai only accepts local time on
+  `/timesheets` and used to answer with a bare 400.
 
 ## [2.18.1] - 2026-09-09
 

@@ -8,6 +8,8 @@ parsing keeps the strict ``YYYY-MM-DD`` contract (and the single
 
 from datetime import date, datetime, timezone
 
+from .errors import ToolError
+
 DATE_FORMAT = "%Y-%m-%d"
 
 
@@ -32,6 +34,31 @@ def day_end(value: str | date) -> str:
 
 def _as_date(value: str | date) -> date:
     return value if isinstance(value, date) else parse_iso_date(value)
+
+
+def parse_local_datetime(value: str, field: str) -> datetime:
+    r"""Parse a ``/timesheets`` ``begin``/``end`` bound as Kimai's local time.
+
+    Kimai's listing only accepts ``Y-m-d\TH:i:s`` (``TimesheetController``,
+    ``Constraints\DateTime(format: 'Y-m-d\TH:i:s')``) and interprets it in the
+    user's timezone, so an offset or ``Z`` would be sent along and answered
+    with a bare 400. A date alone means midnight. Every tool that reads
+    ``/timesheets`` parses its bounds here.
+
+    Raises:
+        ToolError: for anything else, saying what to send.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        parsed = None
+    if parsed is None or parsed.tzinfo is not None or str(value).endswith(("Z", "z")):
+        raise ToolError(
+            f"Error: Invalid date time for field {field} '{value}'. Use local time without "
+            "an offset or 'Z' (YYYY-MM-DDTHH:MM:SS or YYYY-MM-DD); Kimai interprets it in "
+            "the user's timezone."
+        )
+    return parsed
 
 
 def today() -> date:

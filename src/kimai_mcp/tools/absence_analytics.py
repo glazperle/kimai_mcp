@@ -55,11 +55,14 @@ class AbsenceAnalytics:
 
         for absence in absences:
             # Kimai returns one row per absence day. A fixed hours-per-day
-            # factor would ignore the work contract, so a row counts as one day
-            # (half a day with halfDay) and an explicit duration is reported
-            # separately as hours.
-            days = 0.5 if getattr(absence, 'half_day', False) else 1
+            # factor would ignore the work contract, so a row with an explicit
+            # duration counts in hours only, every other row as one day (half a
+            # day with halfDay). No row is counted in both.
             hours = (getattr(absence, 'duration', None) or 0) / 3600
+            if hours:
+                days = 0
+            else:
+                days = 0.5 if getattr(absence, 'half_day', False) else 1
 
             # Get absence info
             absence_type = getattr(absence, 'type', 'other') or 'other'
@@ -189,7 +192,7 @@ class AbsenceAnalytics:
             return stats.get("message", "No data available for analysis")
 
         hours_note = (
-            f" (entries with a duration: {stats['total_hours']} hours)" if stats.get('total_hours') else ""
+            f" plus {stats['total_hours']} hours (entries with a duration)" if stats.get('total_hours') else ""
         )
         report = f"""# {title}
 

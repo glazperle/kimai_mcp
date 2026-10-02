@@ -295,22 +295,6 @@ class KimaiClient:
     
     # Timesheet endpoints
     
-    async def _get_timesheet_page(self, params: dict, page: int) -> list:
-        """Fetch one page of ``/timesheets``; a page past the end is empty.
-
-        Kimai answers an out-of-range page with 404 on the API (it only clamps
-        the page for UI queries, ``src/Utils/Pagination.php``). Paging past a
-        last page that happened to be full is how the loops find the end, so
-        without this a result count that is an exact multiple of the page size
-        failed the whole listing.
-        """
-        try:
-            return await self._request("GET", "/timesheets", params=params)
-        except KimaiAPIError as e:
-            if e.status_code == 404 and page > 1:
-                return []
-            raise
-
     async def get_timesheets(
         self,
         filters: TimesheetFilter | None = None,
@@ -403,7 +387,7 @@ class KimaiClient:
 
         if not should_paginate_all:
             page = filters.page if filters and filters.page else 1
-            data = await self._get_timesheet_page(params, page)
+            data = await self._request("GET", "/timesheets", params=params)
             fetched_all = len(data) < page_size
             return [TimesheetEntity(**item) for item in data], fetched_all, page
 
@@ -418,7 +402,16 @@ class KimaiClient:
             paginated_params['page'] = page
             paginated_params['size'] = page_size
             
-            data = await self._get_timesheet_page(paginated_params, page)
+            try:
+                data = await self._request("GET", "/timesheets", params=paginated_params)
+            except KimaiAPIError as e:
+                # Kimai answers an out-of-range page with 404 on the API (it
+                # only clamps the page for UI queries, src/Utils/Pagination.php).
+                # Paging past a full last page is how this loop finds the end,
+                # so only that 404 is swallowed; an explicit page still raises.
+                if e.status_code != 404 or page == 1:
+                    raise
+                data = []
 
             if not data:
                 break

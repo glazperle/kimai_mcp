@@ -126,7 +126,7 @@ async def test_client_construction_failure_is_an_is_error_result():
     ("arguments", "expected"),
     [
         ({"project_name": "X", "end": "2026-01-01T00:00:00"}, "begin"),
-        ({"project_name": "X", "begin": "01/2026", "end": "2026-01-01T00:00:00"}, "Invalid date format"),
+        ({"project_name": "X", "begin": "01/2026", "end": "2026-01-01T00:00:00"}, "Invalid date time"),
     ],
     ids=["missing_begin", "malformed_begin"],
 )

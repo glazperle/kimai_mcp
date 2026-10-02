@@ -2,13 +2,13 @@
 
 import asyncio
 from collections import defaultdict
-from datetime import datetime
 from typing import Any
 
 from mcp.types import TextContent, Tool
 
 from ..client import KimaiAPIError, KimaiClient
 from ..models import ProjectFilter, TimesheetFilter
+from .dates import parse_local_datetime
 from .errors import ToolError
 
 # Safety limit: stop fetching timesheets once this many entries were collected
@@ -25,8 +25,8 @@ def analyze_project_team_tool() -> Tool:
             "required": ["project_name", "begin", "end"],
             "properties": {
                 "project_name": {"type": "string", "description": "Project name (will be matched automatically)"},
-                "begin": {"type": "string", "format": "date-time", "description": "Start date (ISO format, e.g., '2025-01-01')"},
-                "end": {"type": "string", "format": "date-time", "description": "End date (ISO format, e.g., '2025-06-30')"},
+                "begin": {"type": "string", "description": "Start date in local time, no offset or 'Z' (e.g., '2025-01-01' or '2025-01-01T08:00:00')"},
+                "end": {"type": "string", "description": "End date in local time, no offset or 'Z' (e.g., '2025-06-30' or '2025-06-30T23:59:59')"},
                 "user_scope": {
                     "type": "string", 
                     "enum": ["self", "all", "specific", "team"],
@@ -47,14 +47,8 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
         raise ToolError(f"Error: Missing required fields: {', '.join(missing)}")
 
     project_name = arguments['project_name']
-    try:
-        begin = datetime.fromisoformat(arguments['begin'])
-        end = datetime.fromisoformat(arguments['end'])
-    except ValueError as e:
-        raise ToolError(
-            f"Error: Invalid date format for 'begin'/'end'. Use ISO format "
-            f"(YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS) ({e})"
-        )
+    begin = parse_local_datetime(arguments['begin'], "begin")
+    end = parse_local_datetime(arguments['end'], "end")
     include_details = arguments.get('include_details', True)
 
     try:
