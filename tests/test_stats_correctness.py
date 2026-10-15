@@ -5,7 +5,6 @@ used to report, mostly silently.
 """
 
 # Filter bounds are naive on purpose: Kimai interprets them in the user's local time.
-# ruff: noqa: DTZ001
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
