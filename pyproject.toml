@@ -49,7 +49,7 @@ dev = [
     # Pinned to one minor: ruff 0.16.0 grew the default rule set from 59 to 413
     # rules, which turned CI red on every PR. Keeping the range narrow means a
     # future default change arrives as a Dependabot PR instead of a broken build.
-    "ruff>=0.16,<0.17",
+    "ruff>=0.17,<0.18",
     "build>=1.0.0",
 ]
 

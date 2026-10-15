@@ -19,7 +19,7 @@ def parse_iso_date(value: str) -> date:
     Raises:
         ValueError: if the value is not exactly a ``YYYY-MM-DD`` date.
     """
-    return datetime.strptime(value, DATE_FORMAT).date()  # noqa: DTZ007
+    return datetime.strptime(value, DATE_FORMAT).date()
 
 
 def day_start(value: str | date) -> str:
