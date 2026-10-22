@@ -22,9 +22,11 @@ def analyze_project_team_tool() -> Tool:
         description="Comprehensive analysis of all team members working on a project. Automatically finds project by name, fetches ALL timesheets from ALL users, and provides detailed statistics.",
         input_schema={
             "type": "object",
-            "required": ["project_name", "begin", "end"],
+            "required": ["begin", "end"],
+            "anyOf": [{"required": ["project_name"]}, {"required": ["project_id"]}],
             "properties": {
-                "project_name": {"type": "string", "description": "Project name (will be matched automatically)"},
+                "project_name": {"type": "string", "description": "Project name (an exact name wins over partial matches)"},
+                "project_id": {"type": "integer", "description": "Project ID, instead of project_name when names are ambiguous"},
                 "begin": {"type": "string", "description": "Start date in local time, no offset or 'Z' (e.g., '2025-01-01' or '2025-01-01T08:00:00')"},
                 "end": {"type": "string", "description": "End date in local time, no offset or 'Z' (e.g., '2025-06-30' or '2025-06-30T23:59:59')"},
                 "user_scope": {
@@ -40,44 +42,57 @@ def analyze_project_team_tool() -> Tool:
     )
 
 
-# Kimai's project listing defaults to visible projects running today.
-ANY_PROJECT = {"visible": 3, "ignore_dates": "1"}
+async def _find_project(client: KimaiClient, name: str):
+    """The one project a name means: an exact name wins over partial matches,
+    and among several with that name a visible one wins.
+
+    Finished and hidden projects are searched too (the analysed period can be
+    any), which is why the preferences are needed: a running 'Support' must
+    still be found next to a finished 'Support 2023'.
+    """
+    projects = await client.get_projects(ProjectFilter.everything(term=name))
+    wanted = name.casefold()
+    matching = [p for p in projects if wanted in p.name.casefold()]
+    if not matching:
+        # Load all projects only to present available options
+        all_projects = await client.get_projects(ProjectFilter.everything())
+        raise ToolError(
+            f"❌ No project found matching '{name}'. Available projects:\n" +
+            "\n".join([f"• {p.name}" for p in all_projects[:10]])
+        )
+
+    candidates = [p for p in matching if p.name.casefold() == wanted] or matching
+    if len(candidates) > 1:
+        candidates = [p for p in candidates if p.visible] or candidates
+    if len(candidates) > 1:
+        project_list = "\n".join([f"• {p.name} (ID: {p.id})" for p in candidates])
+        raise ToolError(
+            f"⚠️ Multiple projects found matching '{name}':\n{project_list}\n\n"
+            "Pass project_id, or a more specific name."
+        )
+    return candidates[0]
 
 
 async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle comprehensive project team analysis."""
-    missing = [f for f in ("project_name", "begin", "end") if not arguments.get(f)]
+    missing = [f for f in ("begin", "end") if not arguments.get(f)]
+    if not arguments.get("project_name") and not arguments.get("project_id"):
+        missing.insert(0, "project_name or project_id")
     if missing:
         raise ToolError(f"Error: Missing required fields: {', '.join(missing)}")
 
-    project_name = arguments['project_name']
+    project_name = arguments.get('project_name') or ""
     begin = parse_local_datetime(arguments['begin'], "begin")
     end = parse_local_datetime(arguments['end'], "end")
     include_details = arguments.get('include_details', True)
 
     try:
-        # 1. Find project by name (server-side term search instead of loading all projects).
-        # Kimai lists only visible projects running today by default; the
-        # analysed period can be any, so finished and hidden projects count too.
-        projects = await client.get_projects(ProjectFilter(term=project_name, **ANY_PROJECT))
-        matching_projects = [p for p in projects if project_name.lower() in p.name.lower()]
+        # 1. Find the project (server-side term search, any visibility and period)
+        if arguments.get('project_id'):
+            project = await client.get_project(arguments['project_id'])
+        else:
+            project = await _find_project(client, project_name)
 
-        if not matching_projects:
-            # Load all projects only to present available options
-            all_projects = await client.get_projects(ProjectFilter(**ANY_PROJECT))
-            raise ToolError(
-                f"❌ No project found matching '{project_name}'. Available projects:\n" +
-                "\n".join([f"• {p.name}" for p in all_projects[:10]])
-            )
-
-        if len(matching_projects) > 1:
-            project_list = "\n".join([f"• {p.name} (ID: {p.id})" for p in matching_projects])
-            raise ToolError(
-                f"⚠️ Multiple projects found matching '{project_name}':\n{project_list}\n\nPlease be more specific."
-            )
-        
-        project = matching_projects[0]
-        
         # 2. Handle user scope selection
         user_scope = arguments.get('user_scope', 'all')
         user_filter = 'all'  # Default to all users
@@ -122,17 +137,33 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             users=team_user_ids if user_scope == 'team' else None,
         )
         
+        async def fetch_timesheets():
+            try:
+                return await client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS)
+            except KimaiAPIError as e:
+                # users[] runs access_user for every member, which is a 403 for
+                # a disabled member unless the token sees everyone. Fetch all
+                # and keep the team's records below, as before users[].
+                if user_scope != 'team' or e.status_code != 403:
+                    raise
+                everyone = filters.model_copy(update={"user": "all", "users": None})
+                return await client.get_timesheets(everyone, max_results=MAX_ANALYSIS_RESULTS)
+
         try:
             # 4. Fetch data in parallel for better performance.
             # The fetch is capped at MAX_ANALYSIS_RESULTS so huge datasets
             # don't get downloaded completely before the safety check.
             timesheets, users, activities = await asyncio.gather(
-                client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS),
+                fetch_timesheets(),
                 # Names for every record, also of disabled users and hidden activities.
                 client.get_users(visible=3, full=False),
                 client.get_activities(ActivityFilter(visible=3))
             )
-            timesheets, _fetched_all, _last_page = timesheets
+            timesheets, fetched_all, _last_page = timesheets
+            if user_scope == 'team':
+                # Also when Kimai ignored users[] (no view_other_timesheet) and
+                # returned the caller's own records instead.
+                timesheets = [ts for ts in timesheets if ts.user in team_user_ids]
         except KimaiAPIError as e:
             if e.status_code in (401, 403):
                 raise ToolError(
@@ -154,10 +185,11 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                 text=f"📋 No timesheets found for project '{project.name}' in the specified period."
             )]
 
-        # Safety check: fetch was aborted because the dataset exceeds the limit
-        if len(timesheets) >= MAX_ANALYSIS_RESULTS:
+        # Safety check: the fetch stopped before the end (max_results, or the
+        # client's page cap, which comes first: 100 pages of 50).
+        if not fetched_all:
             raise ToolError(
-                f"⚠️ Dataset too large: more than {MAX_ANALYSIS_RESULTS} entries found for project '{project.name}' (fetch stopped at {len(timesheets)}).\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
+                f"⚠️ Dataset too large: more than {len(timesheets)} entries found for project '{project.name}' (fetch stopped there).\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
             )
         
         # Create lookup dictionaries

@@ -547,8 +547,9 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         # Load project names for better display
         try:
             # All projects: by default Kimai lists only visible ones running today.
-            projects = await client.get_projects(ProjectFilter(visible=3, ignore_dates="1"))
-            project_map = {p.id: p.name for p in projects}
+            projects = await client.get_projects(ProjectFilter.everything())
+            # Only the projects in this report, not every project of the instance.
+            project_map = {p.id: p.name for p in projects if p.id in stats["projects"]}
             stats["project_names"] = project_map
         # Project names are cosmetic; without them the report shows IDs.
         except Exception:  # noqa: BLE001

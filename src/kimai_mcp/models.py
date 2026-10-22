@@ -448,6 +448,15 @@ class ProjectFilter(KimaiModel):
     order_by: ProjectOrderBy | None = Field(None, alias="orderBy")
     term: str | None = None
 
+    @classmethod
+    def everything(cls, **kwargs: Any) -> "ProjectFilter":
+        """Visible and hidden projects of any period.
+
+        Kimai's listing returns only visible projects running *today* unless
+        told otherwise, which a lookup by name or ID must not inherit.
+        """
+        return cls(visible=3, ignore_dates="1", **kwargs)
+
 
 class ActivityFilter(KimaiModel):
     """Filters for activity queries."""
