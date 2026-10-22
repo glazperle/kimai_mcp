@@ -140,26 +140,16 @@ def _data_branch(entity: str, actions: list[str], data: dict) -> dict:
     }
 
 
-_USER_NOTES = {
-    "language": "Needs the 'preferences' permission for the user on update.",
-    "locale": "Needs the 'preferences' permission for the user on update.",
-    "timezone": "e.g. Europe/Berlin. Needs the 'preferences' permission for the user on update.",
-    "supervisor": "User ID of the supervisor; needs the 'supervisor' permission.",
-    "roles": "e.g. ROLE_USER, ROLE_TEAMLEAD, ROLE_ADMIN, ROLE_SUPER_ADMIN; needs the 'roles' permission.",
-    "enabled": "Not settable on your own account.",
-    "systemAccount": "Needs the 'roles' permission (Kimai 2.68+; 'password' before).",
-    "requiresPasswordReset": "Needs the 'roles' permission (Kimai 2.68+; 'password' before).",
-    "avatar": "URL; only accepted when the instance enables avatars (theme.avatar_url).",
-    "plainPassword": "Initial password.",
-}
-
-
 def _user_branches() -> list[dict]:
+    # One line instead of a note per field: every word here is sent with each request.
+    gated = (
+        "Fields to change; Kimai keeps the rest. Permission-gated: language, locale, timezone "
+        "(preferences); supervisor; roles, systemAccount, requiresPasswordReset (roles; 2.68+); "
+        "enabled (not on yourself); avatar (only if the instance enables avatars)."
+    )
     return [
-        _data_branch("user", ["create"], _form_data_schema(
-            UserCreateForm, "Fields of a new user.", _USER_NOTES, required=True)),
-        _data_branch("user", ["update"], _form_data_schema(
-            UserEditForm, "Fields to change; Kimai keeps everything not sent.", _USER_NOTES)),
+        _data_branch("user", ["create"], _form_data_schema(UserCreateForm, "Fields of a new user.", required=True)),
+        _data_branch("user", ["update"], _form_data_schema(UserEditForm, gated)),
     ]
 
 
@@ -171,20 +161,15 @@ def _team_tag_invoice_branches() -> list[dict]:
             "properties": {"user": {"type": "integer"}, "teamlead": {"type": "boolean"}},
             "required": ["user"],
         },
-        "description": (
-            "Team members as {user: ID, teamlead: bool}; required to create a team. On update it "
-            "replaces the whole member list, use team_access add_member/remove_member to change one."
-        ),
+        "description": "Replaces the member list; to change one member use team_access.",
     }
     return [
         _data_branch("team", ["create", "update"], _form_data_schema(
-            TeamEditForm, "Team fields; name and members are needed to create one.",
-            override={"members": members})),
+            TeamEditForm, "Create needs name and members.", override={"members": members})),
         _data_branch("tag", ["create"], _form_data_schema(TagEditForm, "Tag fields.")),
         _data_branch("invoice", ["update"], _form_data_schema(
-            InvoiceEditForm,
-            "Invoice fields to change (Kimai 2.68+, permission edit_invoice). Meta fields: use the meta tool.",
-            {"paymentDate": "Date of the payment, YYYY-MM-DD.", "comment": "Invoice description."})),
+            InvoiceEditForm, "Kimai 2.68+, permission edit_invoice. Meta fields: meta tool.",
+            {"paymentDate": "YYYY-MM-DD"})),
     ]
 
 
@@ -280,11 +265,7 @@ USER PREFERENCES (action=set_preferences, type=user only):
                                               "description": "type=project: only projects that do (1) or do not (0) allow global activities"},
                         "ignore_dates": {
                             "type": "boolean",
-                            "description": (
-                                "type=project: list projects regardless of their start/end dates. Without it, "
-                                "and without begin/end, Kimai lists only projects running today, so finished "
-                                "and not yet started projects are missing."
-                            )
+                            "description": "type=project: include finished and future projects (Kimai's default: running today only)."
                         },
                         "name": {"type": "string", "description": "type=tag: tag name filter (term works too)"},
                         "group": {"type": "integer", "description": "type=holiday: public holiday group ID"},
