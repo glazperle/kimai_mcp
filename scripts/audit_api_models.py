@@ -36,7 +36,8 @@ something the Kimai sources can answer; ``tests/test_read_coverage.py`` and
     python scripts/audit_api_models.py 2.70.2     # after a Kimai release
     python scripts/audit_api_models.py 2.70.2 --source ../kimai   # local checkout
 
-Exit code is 1 on any gap. Deliberate exceptions live in the ``EXPECTED_*``
+Exit code is 1 on any gap, 2 when a source could not be read (a check
+that did not run must not pass). Deliberate exceptions live in the ``EXPECTED_*``
 tables below, each with its reason; extend those rather than silencing a check.
 """
 
@@ -95,9 +96,9 @@ SCHEMA_TO_MODEL = {
 }
 
 # Query parameters Kimai accepts that the client deliberately never sends:
-# (route, parameter) -> reason.
+# (METHOD, route, parameter) -> reason.
 EXPECTED_UNSENT = {
-    ("/timesheets", "full"): (
+    ("POST", "/timesheets", "full"): (
         "full=true answers with the Expanded schema (objects instead of ids) on POST /timesheets; "
         "the client parses TimesheetEntity there"
     ),
@@ -129,6 +130,9 @@ TRAIT_USE_RE = re.compile(r"^\s{4}use\s+(\w+)\s*;")  # inside the class body
 IMPORT_RE = re.compile(r"^use\s+App\\([\w\\]+)\s*;")
 
 _local_source: Path | None = None
+# Sources that could not be read. A check that could not run must not pass:
+# main() exits 2 when this is not empty.
+UNREADABLE: list[str] = []
 
 
 def fetch(path: str, ref: str) -> str:
@@ -261,6 +265,7 @@ def check_fields(ref: str, aliases: dict) -> list:
             sources[php] = entity_fields(f"src/{php.replace(chr(92), '/')}.php", ref)
         if not sources[php]:
             print(f"[SKIP] {alias:28} could not read {php}")
+            UNREADABLE.append(php)
             continue
         ours = model_aliases(model_name)
         if ours is None:
@@ -496,12 +501,31 @@ def check_values(call: ClientCall, route: Route) -> list[str]:
     return problems
 
 
+def _same_shape(built, expected) -> bool:
+    """``built`` parses what ``expected`` describes.
+
+    The model itself, or a subclass that only adds fields (``ProjectExtended``,
+    ``UserEntity``). A subclass that retypes an inherited field is a different
+    shape: ``TimesheetExpanded`` turns the relation ids into objects, so it
+    cannot parse a Not_Expanded response (the reverse of issue #24).
+    """
+    if built is expected:
+        return True
+    if not issubclass(built, expected):
+        return False
+    return all(
+        built.model_fields[name].annotation == field.annotation
+        for name, field in expected.model_fields.items()
+    )
+
+
 def check_endpoints(ref: str) -> list:
     from kimai_mcp import models
 
     routes = parse_routes(ref)
     if not routes:
         print(f"[SKIP] could not read src/API at {ref}")
+        UNREADABLE.append("src/API")
         return []
     calls = parse_client()
     gaps = []
@@ -522,10 +546,15 @@ def check_endpoints(ref: str) -> list:
                 gaps.append({"client": call.name, "route": f"{route.method} {route.path}",
                              "problem": "calls a deprecated route"})
             expected = {SCHEMA_TO_MODEL[s] for s in route.schemas if s in SCHEMA_TO_MODEL}
+            built = {b for b in call.built if not b.endswith(("Form", "Filter"))}
+            if built and route.schemas and not expected:
+                print(f"[GAP ] {call.name:28} {route.method} {route.path}: schema {route.schemas} "
+                      "is not in SCHEMA_TO_MODEL, so the parsed model is unchecked")
+                gaps.append({"client": call.name, "route": f"{route.method} {route.path}",
+                             "problem": f"unmapped schema {route.schemas}"})
             wrong = {
-                b for b in call.built
-                if expected and not any(issubclass(getattr(models, b), getattr(models, e)) for e in expected)
-                and not b.endswith(("Form", "Filter"))
+                b for b in built
+                if expected and not any(_same_shape(getattr(models, b), getattr(models, e)) for e in expected)
             }
             if wrong:
                 print(f"[GAP ] {call.name:28} {route.method} {route.path}: parses {sorted(wrong)}, "
@@ -535,7 +564,10 @@ def check_endpoints(ref: str) -> list:
             for problem in check_values(call, route):
                 print(f"[GAP ] {call.name:28} {route.method} {route.path}: {problem}")
                 gaps.append({"client": call.name, "route": f"{route.method} {route.path}", "problem": problem})
-            unsent = [q for q in route.query if q not in call.query and (route.path, q) not in EXPECTED_UNSENT]
+            unsent = [
+                q for q in route.query
+                if q not in call.query and (route.method, route.path, q) not in EXPECTED_UNSENT
+            ]
             if unsent:
                 print(f"[GAP ] {call.name:28} {route.method} {route.path}: cannot send query {unsent}")
                 gaps.append({"client": call.name, "route": f"{route.method} {route.path}",
@@ -559,11 +591,11 @@ def check_endpoints(ref: str) -> list:
         if key not in used or key not in deprecated:
             print(f"[GAP ] EXPECTED_DEPRECATED_USE entry {key} is stale")
             gaps.append({"client": None, "route": f"{key[0]} {key[1]}", "problem": "stale EXPECTED_DEPRECATED_USE entry"})
-    accepted = {(r.path, q) for r in routes for q in r.query}
+    accepted = {(r.method, r.path, q) for r in routes for q in r.query}
     for key in EXPECTED_UNSENT:
         if key not in accepted:
             print(f"[GAP ] EXPECTED_UNSENT entry {key} is stale (Kimai no longer accepts it)")
-            gaps.append({"client": None, "route": key[0], "problem": "stale EXPECTED_UNSENT entry"})
+            gaps.append({"client": None, "route": f"{key[0]} {key[1]}", "problem": "stale EXPECTED_UNSENT entry"})
 
     print(f"\n{len(calls)} client calls checked against {len(routes)} routes")
     return gaps
@@ -587,11 +619,13 @@ def check_duration_grammar(ref: str) -> bool:
     source = fetch("src/Validator/Constraints/Duration.php", ref)
     if not source:
         print("[SKIP] duration grammar: could not read src/Validator/Constraints/Duration.php")
+        UNREADABLE.append("src/Validator/Constraints/Duration.php")
         return True
     start = source.find("$patterns = [")
     end = source.find("];", start) if start >= 0 else -1
     if start < 0 or end < 0:
         print("[SKIP] duration grammar: $patterns array not found in Duration.php (layout changed?)")
+        UNREADABLE.append("Duration.php $patterns")
         return True
     upstream = DURATION_QUOTED_RE.findall(source[start:end])
     ours = list(_DURATION_ALTERNATIVES)
@@ -630,6 +664,9 @@ def main() -> int:
     print(f"{len(endpoint_gaps)} endpoint gap(s)")
     if endpoint_gaps:
         print(json.dumps(endpoint_gaps, indent=2))
+    if UNREADABLE:
+        print(f"\nNOT CHECKED, could not read: {UNREADABLE}")
+        return 2
     return 1 if field_gaps or endpoint_gaps or not grammar_ok else 0
 
 
