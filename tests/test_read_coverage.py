@@ -161,7 +161,7 @@ SURFACES = [
     Surface("timesheet", {"action": "get", "id": 1}, "get_timesheet", many=False),
     Surface("timer", {"action": "active"}, "get_active_timesheets", volatile=r"Elapsed: .*"),
     Surface("timer", {"action": "favorites"}, "get_favorite_timesheets"),
-    Surface("timer", {"action": "recent"}, "get_timesheets", shape=lambda rows: (rows, True, 1)),
+    Surface("timer", {"action": "recent"}, "get_recent_timesheets"),
     Surface("user_current", {}, "get_current_user", many=False),
     Surface("absence", {"action": "list", "filters": {"user_scope": "specific", "user": "1"}}, "get_absences"),
     Surface("comment", {"action": "list", "entity": "project", "entity_id": 1}, "get_comments"),
@@ -248,8 +248,6 @@ async def test_every_field_is_rendered(surface):
 
 # Client getters whose records no tool renders as such.
 NO_SURFACE = {
-    "get_recent_timesheets": "not called by any tool; timer action=recent reads /timesheets",
-    "get_users_extended": "not called by any tool",
     "get_api_tokens": "used by automatic provisioning only, never shown to a tool caller",
 }
 

@@ -208,6 +208,8 @@ def timer_tool() -> Tool:
 - Start timer: action=start, data={project:ID, activity:ID}
 - Stop timer: action=stop, id=TIMESHEET_ID
 - Show active: action=active
+- Recent activities: action=recent lists the latest record of each customer/project/activity
+  combination you worked on; restart one with action=restart, id=TIMESHEET_ID
 - Favorites (Kimai 2.66+): action=favorites lists the user's favorite timesheets (templates to restart);
   action=favorite / action=unfavorite, id=TIMESHEET_ID toggles one. Needs start_own_timesheet; own records only.
 
@@ -237,7 +239,9 @@ NOTE: Creates timesheet entries without end time. Use 'timesheet' tool for compl
                 },
                 "size": {
                     "type": "integer",
-                    "description": "Number of recent entries to return (for recent action)",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Number of recent activities to return (for recent action). Kimai caps it at 100.",
                     "default": 10
                 },
                 "begin": {
@@ -1007,16 +1011,16 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: str | None
     """Handle timer recent action."""
     
     begin_datetime = parse_local_datetime(begin, "begin") if begin else None
-    
-    # Use regular timesheet list with recent parameters
-    filter_params = TimesheetFilter(
-        size=size,
-        begin=begin_datetime,
-        page=1
+
+    # Kimai's "recent activities": the latest record of each customer/project/
+    # activity combination (Expanded, so with names), which is what a restart
+    # needs. Listing the latest records is what `timesheet action=list` is for.
+    timesheets = await client.get_recent_timesheets(begin=begin_datetime, size=size)
+
+    result = (
+        f"Recent {len(timesheets)} activities (latest record per customer/project/activity). "
+        "Restart one with timer action=restart id=<ID>.\n\n"
     )
-    timesheets, _fetched_all, _last_page = await client.get_timesheets(filter_params)
-    
-    result = f"Recent {len(timesheets)} timesheet(s):\n\n"
 
     for ts in timesheets:
         result += _describe_timesheet(ts) + "\n"

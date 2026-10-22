@@ -51,7 +51,6 @@ from .models import (
     UserCreateForm,
     UserEditForm,
     UserEntity,
-    UserFilter,
     UserOrderBy,
     Version,
 )
@@ -473,7 +472,7 @@ class KimaiClient:
         """
         params = {"size": size}
         if begin:
-            params["begin"] = begin.isoformat()
+            params["begin"] = begin.replace(microsecond=0).isoformat()
 
         data = await self._request("GET", "/timesheets/recent", params=params)
         return [TimesheetExpanded(**item) for item in data]
@@ -966,14 +965,6 @@ class KimaiClient:
     
     # Tag endpoints
     
-    async def get_tags(self, filters: TagFilter | None = None) -> list[str]:
-        """Get list of tags as strings (deprecated endpoint)."""
-        params = {}
-        if filters and filters.name:
-            params["name"] = filters.name
-        
-        return await self._request("GET", "/tags", params=params)
-    
     async def get_tags_full(self, filters: TagFilter | None = None) -> list[TagEntity]:
         """Get list of tag entities."""
         params = {}
@@ -994,19 +985,6 @@ class KimaiClient:
         await self._request("DELETE", f"/tags/{tag_id}")
     
     # Extended User endpoints
-    
-    async def get_users_extended(self, filters: UserFilter | None = None) -> list[UserEntity]:
-        """Get list of users with extended information.
-        
-        Args:
-            filters: User filters
-        """
-        params = {}
-        if filters:
-            params = filters.model_dump(exclude_none=True, by_alias=True)
-        
-        data = await self._request("GET", "/users", params=params)
-        return [UserEntity(**item) for item in data]
     
     async def get_user_extended(self, user_id: int) -> UserEntity:
         """Get extended user information by ID."""

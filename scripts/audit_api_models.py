@@ -109,9 +109,7 @@ EXPECTED_UNUSED = {
 }
 
 # Deprecated routes a client method still calls: (METHOD, route) -> reason.
-EXPECTED_DEPRECATED_USE = {
-    ("GET", "/tags"): "get_tags() is not called by any tool; entity type=tag uses /tags/find",
-}
+EXPECTED_DEPRECATED_USE: dict[tuple[str, str], str] = {}
 
 # Client routes served by plugins, not by core Kimai; nothing to compare against.
 PLUGIN_ROUTES = (

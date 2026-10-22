@@ -153,7 +153,6 @@ def make_mock_client() -> AsyncMock:
     # User / current user
     client.get_current_user.return_value = user
     client.get_users.return_value = [user, user2]
-    client.get_users_extended.return_value = [user_ext]
     client.get_user_extended.return_value = user_ext
     client.create_user.return_value = user_ext
     client.update_user.return_value = user_ext
@@ -224,7 +223,6 @@ def make_mock_client() -> AsyncMock:
     client.revoke_team_activity_access.return_value = team
 
     # Tags
-    client.get_tags.return_value = ["urgent"]
     client.get_tags_full.return_value = [tag]
     client.create_tag.return_value = tag
     client.delete_tag.return_value = None
