@@ -22,6 +22,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is set; `value: ""` matches entries where it is not. A value with spaces or a leading `!` cannot be
   expressed as a term and falls back to `name:*` plus the exact match on the MCP side. The plain
   `filters.term` still searches the description only, as before.
+- **Filters Kimai offers but no tool could send.** `timesheet action=list`: `users`, `customers`,
+  `projects`, `activities` (several IDs), `tags`, `order_by`, `order`, `modified_after` (UTC).
+  `entity action=list`: `ignore_dates`, `global_activities`, `customers` and `begin`/`end` for projects,
+  `projects` for activities, `order_by`/`order` for users, `name` for tags, `group` for holidays.
+- **Checks for the whole bug class behind the timesheet meta fields**, so the next instance fails CI
+  instead of waiting for a user to notice. `tests/test_read_coverage.py` changes every field of every
+  record a tool renders, one at a time, and fails when the output does not change; it also requires
+  that whatever a tool can write is readable again. `tests/test_filter_coverage.py` does the same for
+  filters, tool argument to client call. `scripts/audit_api_models.py` now also reads Kimai's
+  controllers and the client source: wrong response model per route, query parameters the client
+  cannot send, fixed-value parameters typed with a different value set, deprecated and unused routes.
+  It resolves traits and virtual properties, which it used to skip.
+
+### Fixed
+
+Each of these was data Kimai sent (or a filter it offered) that a tool silently dropped:
+
+- **`user_current` showed no roles, supervisor, teams or preferences**: `/users/me` was parsed as
+  `User`, which has none of them. It is a `UserEntity` now, and `UserEntity` is a subclass of `User`.
+- **`entity type=user`** printed name, title, status and colour only. `get` now shows email, account
+  number, language, locale, timezone, avatar, system account, roles, supervisor, teams (with the
+  team-lead flag) and the preferences, so a work contract written with `set_preferences` can be read back.
+- **`entity type=team action=get`** now lists the customers, projects and activities the team has
+  access to (what `team_access grant/revoke` changes), and member IDs, which `remove_member` needs.
+- **Invoices** show currency, VAT rate, creator, file name and meta fields (writable with the `meta`
+  tool since v2.12, never readable); the listing shows the same as `get`.
+- **Timesheet rows** in `timesheet list`, `timer recent`, `timer active` and `timer favorites` show
+  billable, exported, break and the rates Kimai sent; the timer rows also show the user and meta fields,
+  `timer recent` the tags and end time.
+- **Activities** show their colour and say when they are global; **holidays** their group and half-day
+  flag; a **customer** with both the structured and the legacy single-line address shows both.
+- **Finished and not yet started projects could not be listed.** Kimai's project listing returns only
+  projects running today unless the request names a day; `filters.ignore_dates=true` now lists them
+  all, `begin`/`end` select the day.
+- **`order_by` advertised sort fields Kimai's API rejects.** Projects listed eleven, the API takes
+  `id`, `name`, `customer`; anything else was a 400. The allowed values per type now come from the
+  filter models, which the audit checks against Kimai.
+- **`entity action=list` ignored filters silently** when they do not apply to the type (e.g.
+  `customer` for activities). The result now ends with a note naming them.
 
 ## [2.18.2] - 2026-10-02
 

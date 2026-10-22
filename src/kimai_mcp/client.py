@@ -35,6 +35,7 @@ from .models import (
     PublicHolidayFilter,
     Rate,
     RateForm,
+    SortOrder,
     TagEditForm,
     TagEntity,
     TagFilter,
@@ -50,6 +51,7 @@ from .models import (
     UserEditForm,
     UserEntity,
     UserFilter,
+    UserOrderBy,
     Version,
 )
 
@@ -273,23 +275,36 @@ class KimaiClient:
 
     # User endpoints
     
-    async def get_current_user(self) -> User:
-        """Get current authenticated user."""
+    async def get_current_user(self) -> UserEntity:
+        """Get current authenticated user (``UserEntity``: roles, teams, preferences)."""
         data = await self._request("GET", "/users/me")
-        return User(**data)
-    
-    async def get_users(self, visible: int = 1, term: str | None = None, full: bool = False) -> list[User]:
+        return UserEntity(**data)
+
+    async def get_users(
+        self,
+        visible: int = 1,
+        term: str | None = None,
+        full: bool = False,
+        order_by: UserOrderBy | None = None,
+        order: SortOrder | None = None,
+    ) -> list[User]:
         """Get list of users.
-        
+
         Args:
             visible: 1=visible, 2=hidden, 3=all
             term: Search term
             full: Whether to fetch full objects including subresources (default: False for performance)
+            order_by: id, username, alias or email (Kimai's default: username)
+            order: ASC or DESC
         """
         params = {"visible": visible, "full": "true" if full else "false"}
         if term:
             params["term"] = term
-        
+        if order_by:
+            params["orderBy"] = order_by
+        if order:
+            params["order"] = order
+
         data = await self._request("GET", "/users", params=params)
         return [User(**item) for item in data]
     

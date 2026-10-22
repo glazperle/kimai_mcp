@@ -61,6 +61,31 @@ def parse_local_datetime(value: str, field: str) -> datetime:
     return parsed
 
 
+def parse_utc_datetime(value: str, field: str) -> datetime:
+    r"""Parse ``modified_after`` of ``/timesheets``, which Kimai compares in UTC.
+
+    Same wire format as ``begin``/``end`` (``Y-m-d\TH:i:s``, no offset), but
+    the column is stored in UTC, so here an offset or ``Z`` is meaningful: it
+    is converted to UTC. A value without one is taken as UTC already.
+
+    Raises:
+        ToolError: if the value is not an ISO date-time.
+    """
+    text = str(value)
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        raise ToolError(
+            f"Error: Invalid date time for field {field} '{value}'. Use UTC as "
+            "YYYY-MM-DDTHH:MM:SS (an offset is converted to UTC)."
+        )
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
 def today() -> date:
     """Today's date in the server's local time zone."""
     return datetime.now(timezone.utc).astimezone().date()

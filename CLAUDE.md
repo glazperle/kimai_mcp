@@ -194,10 +194,20 @@ Tracked against **Kimai 2.66.0** (2026-09-05). The server keeps working against 
 
 ### Checking API compliance
 
-Two scripts, run after every Kimai release:
+Every hop between Kimai and the text a tool returns is checked mechanically. A field or filter can get lost at each one, and PR #34 (timesheet meta fields: parsed, writable, but never printed and not filterable) was one instance of a gap nobody had a check for.
+
+| Hop | Check | Runs |
+|---|---|---|
+| Kimai response -> model | `scripts/audit_api_models.py`, fields | after every Kimai release (needs `gh`) |
+| Kimai route -> client method: response model, query parameters, allowed values, deprecated routes, unused routes | `scripts/audit_api_models.py`, endpoints | after every Kimai release |
+| Model -> tool output | `tests/test_read_coverage.py` | CI |
+| Tool write -> tool read (what can be written must be readable) | `tests/test_read_coverage.py` | CI |
+| Tool filter argument -> client call; schema enums vs. client Literals | `tests/test_filter_coverage.py` | CI |
+| What a real instance sends | `scripts/verify_against_kimai.py` | by hand, read-only |
 
 ```bash
-# 1. Offline: models vs. Kimai's own schema definitions (needs the gh CLI only)
+# 1. Offline: client + models vs. Kimai's own sources (needs the gh CLI only;
+#    --source PATH reads a local checkout instead)
 python scripts/audit_api_models.py 2.66.0
 
 # 2. Online: what a real instance actually sends. GET requests only, safe
@@ -205,7 +215,11 @@ python scripts/audit_api_models.py 2.66.0
 KIMAI_URL=https://kimai.example.com KIMAI_API_TOKEN=... python scripts/verify_against_kimai.py
 ```
 
-The offline audit derives each response schema from the serializer groups, so it catches "Kimai serializes a field our model drops". It also compares `models._DURATION_ALTERNATIVES` verbatim with the `$patterns` array in `src/Validator/Constraints/Duration.php`, because the client rejects duration input against that transcription before Kimai sees it. It is a lower bound: entity properties that come from PHP traits (`color`, `budget`, `timeBudget`, `budgetType`) are invisible to it, which is what the online check covers. Fields Kimai sends that are deliberately not modelled (`color-safe`, `apiToken`) are listed in both scripts with the reason; extend that list rather than weakening the check.
+The audit derives each response schema from the serializer groups (properties, class- and method-level `VirtualProperty`, and the traits an entity uses, so `color` and the budget fields are covered). It reads `src/API/*Controller.php` for the routes and parses `client.py` with `ast`, so it notices when a client method parses a route into the wrong model (`/users/me` is `UserEntity`; it used to be parsed as `User`, which dropped roles, teams and preferences), cannot send a query parameter, types a fixed-value parameter (`orderBy: 'id|name|customer'`) with a different value set, or calls a route Kimai marks deprecated. It also compares `models._DURATION_ALTERNATIVES` verbatim with the `$patterns` array in `src/Validator/Constraints/Duration.php`.
+
+The two tests are differential: each field (or filter) is changed on its own and the output (or the client call) must change. That needs no knowledge of how a renderer formats a value, so booleans, nested objects and seconds shown as hours are covered alike. A new model field, client getter or filter field fails CI until it is rendered or reachable, or excused.
+
+Deliberate exceptions live in tables with a reason each: `EXPECTED_UNMODELLED`, `EXPECTED_UNSENT`, `EXPECTED_UNUSED`, `EXPECTED_DEPRECATED_USE` in the audit, `NOT_RENDERED`, `WRITE_ONLY`, `NO_SURFACE` in `test_read_coverage.py`, `NOT_EXPOSED` in `test_filter_coverage.py`. A stale entry fails too. Extend a table rather than weakening a check.
 
 ### API Version Update (December 2024)
 
@@ -244,8 +258,8 @@ Source: `gh api repos/kimai/kimai/compare/2.65.0...2.66.0`, UPGRADING.md and PRs
 | Kimai | Change | Implementation |
 |-------|--------|----------------|
 | 2.66 | Timesheet `rate`, `internalRate` (group `Timesheet_Rate`) and, on entity responses, `fixedRate`, `hourlyRate` (`Timesheet_Entity_Rate`) are **omitted per record** unless the token holds `view_rate_own_timesheet` resp. `view_rate_other_timesheet` (`src/API/Serializer/RateExclusionStrategy.php`). The default `ROLE_USER` has neither. Applies to every timesheet endpoint incl. `/active`, `/recent`, stop/restart/duplicate and the new favorites | `TimesheetEntity.rate` defaults to `None` (was `0.0`) so "stripped" and "zero" stay distinguishable; `_handle_timesheet_get` prints `Rates: not visible to this token (...)` when all four are absent. The `Rate` model of the `/rates` endpoints is a different class and untouched |
-| 2.66 | `budget`, `timeBudget`, `budgetType` moved from `*_Entity` to `Budget_Money` / `Budget_Time` (`src/Entity/BudgetTrait.php`) and are now in the **collection** responses of customers, projects and activities too, per record, only where the token holds the `budget` resp. `time` permission (`BudgetExclusionStrategy.php`) | No parse change (all three were Optional). `entity ... list` output now includes the budget lines. Stale "entity only" comments in `models.py`, the `filters.full` schema text and `test_customer_fields.py` corrected. **Absence is a permission signal, not a bug**, and the offline audit cannot see it: the fields come from a PHP trait, which `audit_api_models.py` does not parse |
-| 2.66 | Project `lockedUntil` (`DateTimeImmutable<'Y-m-d'>`, group `Default`, so in listings too). Timesheets whose `begin` is on or before that calendar day are refused: `TimesheetVoter` (create/start/stop/duplicate/edit/delete -> **403**, admins included; a *running* record stays editable so its begin can be moved) and `TimesheetProjectLockedValidator` (**400** `The project is locked until %date%, please choose a later date.`, code `kimai-timesheet-project-locked-01`, path `begin_date`). Compared by `Ymd` integer, timezone-independent. `ProjectQuery` gained orderBy `project_locked_until` | `Project.locked_until` (`date`), `ProjectEditForm.locked_until` (`str`, verbatim), `lockedUntil` in the project `data` schema, `Locked Until:` line in `serialize_project`. `format_api_error()` hints on the 400 text and on every 403. **Same per-action date format as `start`/`end`**: `ProjectEditForm.php` copies the controller's `date_format` option into the `lockedUntil` field, and `ProjectController` passes `DATE_ONLY_FORMAT` on POST but `DATE_FORMAT` on PATCH |
+| 2.66 | `budget`, `timeBudget`, `budgetType` moved from `*_Entity` to `Budget_Money` / `Budget_Time` (`src/Entity/BudgetTrait.php`) and are now in the **collection** responses of customers, projects and activities too, per record, only where the token holds the `budget` resp. `time` permission (`BudgetExclusionStrategy.php`) | No parse change (all three were Optional). `entity ... list` output now includes the budget lines. Stale "entity only" comments in `models.py`, the `filters.full` schema text and `test_customer_fields.py` corrected. **Absence is a permission signal, not a bug**. The fields come from a PHP trait (`BudgetTrait`), which `audit_api_models.py` now resolves |
+| 2.66 | Project `lockedUntil` (`DateTimeImmutable<'Y-m-d'>`, group `Default`, so in listings too). Timesheets whose `begin` is on or before that calendar day are refused: `TimesheetVoter` (create/start/stop/duplicate/edit/delete -> **403**, admins included; a *running* record stays editable so its begin can be moved) and `TimesheetProjectLockedValidator` (**400** `The project is locked until %date%, please choose a later date.`, code `kimai-timesheet-project-locked-01`, path `begin_date`). Compared by `Ymd` integer, timezone-independent. `ProjectQuery` gained orderBy `project_locked_until`, but that is the UI's sort key: the API's `orderBy` stays `id\|name\|customer` (strict) | `Project.locked_until` (`date`), `ProjectEditForm.locked_until` (`str`, verbatim), `lockedUntil` in the project `data` schema, `Locked Until:` line in `serialize_project`. `format_api_error()` hints on the 400 text and on every 403. **Same per-action date format as `start`/`end`**: `ProjectEditForm.php` copies the controller's `date_format` option into the `lockedUntil` field, and `ProjectController` passes `DATE_ONLY_FORMAT` on POST but `DATE_FORMAT` on PATCH |
 | 2.66 | `DELETE /api/invoices/{id}` (`delete_invoice`, 204) ([#6141](https://github.com/kimai/kimai/pull/6141)) | `client.delete_invoice()`, `InvoiceEntityHandler.delete()` (was a hard error), `invoice` removed from `non_deletable` and added to the `batch_delete` map |
 | 2.66 | `GET /api/favorites/timesheets` (`TimesheetCollectionExpanded`), `POST` / `DELETE /api/favorites/timesheets/{id}` (204; idempotent). Need `start_own_timesheet` and ownership ([#6143](https://github.com/kimai/kimai/pull/6143)) | `timer` actions `favorites`, `favorite`, `unfavorite`; client `get_favorite_timesheets()`, `add_favorite_timesheet()`, `remove_favorite_timesheet()`. Rows are Expanded like `/timesheets/active` (issue #24 pattern) |
 | 2.66 | Invalid forms on customer/project/activity POST/PATCH and on rate POST answer **400** instead of 200-with-form | No change; `KimaiAPIError` already carried the details either way |
@@ -359,7 +373,12 @@ The write path is `DurationType` → `DurationStringToSecondsTransformer` → `D
 - `begin` / `end` of every `/timesheets` read (`timesheet action=list`, `timer action=recent`, `analyze_project_team`) must be **local time without an offset or `Z`**: Kimai's listing accepts only `Y-m-d\TH:i:s` and interprets it in the user's timezone. All three parse through `tools/dates.py::parse_local_datetime`, which rejects an offset with a `ToolError` instead of drawing a bare 400; a new reader of `/timesheets` should use it too
 - `/api/timesheets` answers a page **past the end with 404**, not an empty list, and caps `size` at **500** (`BaseApiController::MAX_PAGE_SIZE`). The auto-pagination loops (in `client.get_timesheets` and the stats loop of `_handle_timesheet_list`) treat a 404 on page > 1 as the end, while an explicit `page` still raises, and `get_timesheets` compares against the capped size; without both, an exact multiple of the page size failed the listing and `size=1000` passed 500 rows off as complete
 - Timesheet hours in stats and listings come from Kimai's **`duration`** (end - begin - break, rounded), not the wall-clock span; `worked_hours()` falls back to end - begin - break only when `duration` was not in the response (`model_fields_set`, since the model defaults it to 0). Absence statistics count a row as one day (half with `halfDay`), or, if it has an explicit `duration`, in hours only, with no fixed hours-per-day factor. In the stats JSON `working_days_count` / `avg_hours_per_day` stay calendar days; `person_days_count` / `avg_hours_per_person_day` are the per-person figures
-- Some advanced API parameters not yet implemented (see individual tool schemas)
+- **Kimai lists only projects running today** unless the request says otherwise: `GET /api/projects` without `start`/`end` sets both to now, so finished and not yet started projects are missing even with `visible=3`. `entity type=project action=list` takes `filters.ignore_dates=true` (all dates) or `begin`/`end` (each: running on that day)
+- `order_by` is a strict per-type list on the API (`orderBy: 'id|name|customer'` for projects); the UI's sort keys (`orderNumber`, `project_locked_until`, ...) answer 400. The filter models type it as a `Literal`, the audit compares those with Kimai, and the `entity` schema text is generated from them
+- The `entity` tool's `filters` object is shared by all types. A key that does not apply to the requested type is ignored, and the result ends with a `Note: ignored filter(s) ...` line naming it
+- `timesheet action=list` `filters.users` replaces `user_scope`/`user`: Kimai adds `user` to `users[]`, so sending both would mix the current user's records in
+- Kimai 2.70 added `PATCH /api/invoices/{id}` (`InvoiceApiEditForm`); not implemented yet (tracked version is 2.66, and `audit_api_models.py 2.70.2` reports it as the one open route)
+- Every query parameter of the core routes is sendable by the client (audit) and reachable from a tool (`tests/test_filter_coverage.py`), except the `NOT_EXPOSED` / `EXPECTED_UNSENT` entries, each with its reason
 
 ### API Compliance Guidelines
 When modifying tools:
@@ -400,4 +419,4 @@ When modifying tools:
 - **Permissions**: Many operations require specific permissions (noted in API docs)
 
 ### Testing API Compliance
-See "Checking API compliance" above: `scripts/audit_api_models.py` (offline, models vs. schema definitions) and `scripts/verify_against_kimai.py` (online, read-only against a real instance).
+See "Checking API compliance" above: `scripts/audit_api_models.py` (offline, client and models vs. Kimai sources), `tests/test_read_coverage.py` and `tests/test_filter_coverage.py` (CI, tool output and filters), and `scripts/verify_against_kimai.py` (online, read-only against a real instance).

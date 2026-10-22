@@ -6,6 +6,7 @@ from mcp.types import TextContent, Tool
 from ..client import KimaiClient
 from ..models import MetaFieldForm
 from .dates import day_end, day_start
+from .entity_manager import format_user
 from .errors import ToolError
 
 
@@ -178,22 +179,7 @@ async def handle_user_current(client: KimaiClient, **params) -> list[TextContent
     # Errors propagate to the central handler in server.py
     user = await client.get_current_user()
 
-    result = f"Current User: {user.username} (ID: {user.id})\n"
-    result += f"Name: {user.alias or 'Not set'}\n"
-    result += f"Title: {user.title or 'Not set'}\n"
-    result += f"Status: {'Active' if user.enabled else 'Inactive'}\n"
-
-    if hasattr(user, 'language') and user.language:
-        result += f"Language: {user.language}\n"
-    if hasattr(user, 'timezone') and user.timezone:
-        result += f"Timezone: {user.timezone}\n"
-    if hasattr(user, 'roles') and user.roles:
-        result += f"Roles: {', '.join(user.roles)}\n"
-
-    if hasattr(user, "supervisor") and user.supervisor:
-        result += f"Supervisor: {user.supervisor.username}\n"
-
-    return [TextContent(type="text", text=result)]
+    return [TextContent(type="text", text="Current " + format_user(user))]
 
 
 async def _handle_calendar_absences(client: KimaiClient, filters: dict) -> list[TextContent]:

@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timedelta
+from typing import get_args
 
 # Bounds the extra fetching for statistics so a huge date range cannot pull an
 # unbounded number of pages into a single response.
@@ -10,9 +11,9 @@ MAX_STATS_RESULTS = 10000
 from mcp.types import TextContent, Tool
 
 from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
-from ..models import MetaFieldForm, TimesheetEditForm, TimesheetFilter
+from ..models import MetaFieldForm, SortOrder, TimesheetEditForm, TimesheetFilter, TimesheetOrderBy
 from .batch_utils import execute_batch, format_batch_result
-from .dates import parse_local_datetime
+from .dates import parse_local_datetime, parse_utc_datetime
 from .errors import ToolError
 from .timesheet_analytics import TimesheetAnalytics, worked_hours
 from .user_discovery import resolve_accessible_users
@@ -88,6 +89,20 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                         "exported": {"type": "integer", "enum": [0, 1]},
                         "active": {"type": "integer", "enum": [0, 1]},
                         "billable": {"type": "integer", "enum": [0, 1]},
+                        "users": {
+                            "type": "array", "items": {"type": "integer"},
+                            "description": "Several user IDs at once; replaces user_scope/user."
+                        },
+                        "customers": {"type": "array", "items": {"type": "integer"}, "description": "Several customer IDs (added to 'customer')."},
+                        "projects": {"type": "array", "items": {"type": "integer"}, "description": "Several project IDs (added to 'project')."},
+                        "activities": {"type": "array", "items": {"type": "integer"}, "description": "Several activity IDs (added to 'activity')."},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "Tag names; entries carrying any of them."},
+                        "order_by": {"type": "string", "enum": list(get_args(TimesheetOrderBy)), "description": "Sort field. Kimai's default: begin."},
+                        "order": {"type": "string", "enum": list(get_args(SortOrder)), "description": "Kimai's default: DESC."},
+                        "modified_after": {
+                            "type": "string",
+                            "description": "Only entries changed after this date-time, in UTC (Kimai stores it in UTC), format YYYY-MM-DDThh:mm:ss."
+                        },
                         "page": {"type": "integer", "default": 1, "description": "Page number for pagination. Default is 1."},
                         "size": {"type": "integer", "default": 50, "description": "Number of records per page. Default is 50."},
                         "term": {"type": "string"},
@@ -337,8 +352,12 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     # Handle user scope
     user_scope = filters.get("user_scope", "self")
     user_filter = None
-    
-    if user_scope == "self":
+
+    if filters.get("users"):
+        # Several users replace the scope: Kimai adds `user` to `users`, so
+        # sending the current user as well would mix their records in.
+        user_scope = "users"
+    elif user_scope == "self":
         current_user = await client.get_current_user()
         user_filter = str(current_user.id)
     elif user_scope == "specific":
@@ -373,14 +392,25 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     # Build filter
     timesheet_filter = TimesheetFilter(
         user=user_filter,
+        users=filters.get("users"),
         project=filters.get("project"),
+        projects=filters.get("projects"),
         activity=filters.get("activity"),
+        activities=filters.get("activities"),
         customer=filters.get("customer"),
+        customers=filters.get("customers"),
+        tags=filters.get("tags"),
         begin=begin_datetime,
         end=end_datetime,
+        modified_after=(
+            parse_utc_datetime(filters["modified_after"], "modified_after")
+            if filters.get("modified_after") else None
+        ),
         exported=filters.get("exported"),
         active=filters.get("active"),
         billable=filters.get("billable"),
+        order_by=filters.get("order_by"),
+        order=filters.get("order"),
         # Only pass 'page' when explicitly requested by the user,
         # otherwise the client's auto-pagination is disabled.
         page=filters.get("page"),
@@ -446,6 +476,8 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         result = f"Found {found} timesheets for all users\n\n"
     elif user_scope == "specific":
         result = f"Found {found} timesheets for user {user_filter}\n\n"
+    elif user_scope == "users":
+        result = f"Found {found} timesheets for users {', '.join(map(str, filters['users']))}\n\n"
     else:
         result = f"Found {found} timesheets for current user\n\n"
 
@@ -519,24 +551,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     
     # List timesheets
     for ts in timesheets:
-        duration = worked_hours(ts) if ts.end else "Running"
-        status = "Running" if not ts.end else "Stopped"
-        
-        result += f"ID: {ts.id} - Project ID: {ts.project} / Activity ID: {ts.activity}\n"
-        result += f"  User ID: {ts.user if ts.user else 'Unknown'}\n"
-        result += f"  Duration: {duration:.2f} hours\n" if isinstance(duration, float) else f"  Status: {status}\n"
-        result += f"  Begin: {ts.begin.strftime('%Y-%m-%d %H:%M')}\n"
-        if ts.end:
-            result += f"  End: {ts.end.strftime('%Y-%m-%d %H:%M')}\n"
-        
-        if ts.description:
-            result += f"  Description: {ts.description}\n"
-        if ts.tags:
-            result += f"  Tags: {', '.join(ts.tags)}\n"
-        meta = _format_meta_fields(ts.meta_fields)
-        if meta:
-            result += f"  Meta: {meta}\n"
-        result += "\n"
+        result += _describe_timesheet(ts) + "\n"
 
     return [TextContent(type="text", text=result)]
 
@@ -863,22 +878,57 @@ async def _handle_timer_restart(client: KimaiClient, id: int | None) -> list[Tex
     )]
 
 
-def _describe_expanded_row(ts) -> str:
-    """Head line plus description/tags for a ``TimesheetExpanded`` row.
+def _describe_timesheet(ts) -> str:
+    """One record of a listing, with every field Kimai sent for it.
 
-    ``/timesheets/active``, ``/timesheets/recent`` and ``/favorites/timesheets``
-    are Expanded schemas, so the relations are objects and can be named instead
-    of printing bare ids (issue #24).
+    ``timesheet list`` and ``timer recent`` get ``TimesheetEntity`` rows, whose
+    relations are ids. ``/timesheets/active`` and ``/favorites/timesheets`` are
+    Expanded schemas, so there the relations are objects and can be named
+    (issue #24). Rates are printed only where Kimai sent them: since 2.66 it
+    strips them per record unless the token may view rates.
     """
-    project = ts.project.name
-    if ts.project.customer:
-        project = f"{ts.project.customer.name} / {project}"
+    if isinstance(ts.project, int):
+        text = f"ID: {ts.id} - Project ID: {ts.project} / Activity ID: {ts.activity}\n"
+        text += f"  User ID: {ts.user if ts.user else 'Unknown'}\n"
+    else:
+        project = ts.project.name
+        if ts.project.customer:
+            project = f"{ts.project.customer.name} / {project}"
+        text = f"ID: {ts.id} - Project: {project} / Activity: {ts.activity.name}\n"
+        if ts.user:
+            text += f"  User: {ts.user.alias or ts.user.username} (ID: {ts.user.id})\n"
 
-    text = f"ID: {ts.id} - Project: {project} / Activity: {ts.activity.name}\n"
+    if ts.end:
+        text += f"  Duration: {worked_hours(ts):.2f} hours\n"
+    else:
+        text += "  Status: Running\n"
+    text += f"  Begin: {ts.begin.strftime('%Y-%m-%d %H:%M')}\n"
+    if ts.end:
+        text += f"  End: {ts.end.strftime('%Y-%m-%d %H:%M')}\n"
+    if ts.break_duration:
+        text += f"  Break: {ts.break_duration // 60} minutes\n"
+    text += f"  Billable: {'Yes' if ts.billable else 'No'} | Exported: {'Yes' if ts.exported else 'No'}\n"
+
+    rates = [
+        f"{label}: {value}"
+        for label, value in (
+            ("Rate", ts.rate),
+            ("Internal Rate", ts.internal_rate),
+            ("Fixed Rate", ts.fixed_rate),
+            ("Hourly Rate", ts.hourly_rate),
+        )
+        if value is not None
+    ]
+    if rates:
+        text += f"  {' | '.join(rates)}\n"
+
     if ts.description:
         text += f"  Description: {ts.description}\n"
     if ts.tags:
         text += f"  Tags: {', '.join(ts.tags)}\n"
+    meta = _format_meta_fields(ts.meta_fields)
+    if meta:
+        text += f"  Meta: {meta}\n"
     return text
 
 
@@ -896,8 +946,7 @@ async def _handle_timer_active(client: KimaiClient) -> list[TextContent]:
         now = datetime.now(ts.begin.tzinfo)
         elapsed = (now - ts.begin).total_seconds() / 3600
 
-        result += _describe_expanded_row(ts)
-        result += f"  Started: {ts.begin.strftime('%Y-%m-%d %H:%M')}\n"
+        result += _describe_timesheet(ts)
         result += f"  Elapsed: {elapsed:.2f} hours\n"
         result += "\n"
     
@@ -917,7 +966,7 @@ async def _handle_timer_favorites(client: KimaiClient) -> list[TextContent]:
     result = f"Found {len(timesheets)} favorite timesheet(s). Start one with timer action=restart id=<ID>.\n\n"
 
     for ts in timesheets:
-        result += _describe_expanded_row(ts) + "\n"
+        result += _describe_timesheet(ts) + "\n"
 
     return [TextContent(type="text", text=result)]
 
@@ -952,21 +1001,9 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: str | None
     timesheets, _fetched_all, _last_page = await client.get_timesheets(filter_params)
     
     result = f"Recent {len(timesheets)} timesheet(s):\n\n"
-    
+
     for ts in timesheets:
-        duration = worked_hours(ts) if ts.end else "Running"
-        
-        result += f"ID: {ts.id} - Project: {ts.project} / Activity: {ts.activity}\n"
-        result += f"  Date: {ts.begin.strftime('%Y-%m-%d')}\n"
-        
-        if isinstance(duration, float):
-            result += f"  Duration: {duration:.2f} hours\n"
-        else:
-            result += f"  Status: {duration}\n"
-        
-        if ts.description:
-            result += f"  Description: {ts.description}\n"
-        result += "\n"
+        result += _describe_timesheet(ts) + "\n"
 
     return [TextContent(type="text", text=result)]
 

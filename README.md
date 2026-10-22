@@ -491,6 +491,9 @@ a page can hold fewer entries than `size`.
 }
 ```
 
+Kimai lists only projects running today unless told otherwise. Add `"ignore_dates": true` to include
+finished and not yet started projects, or `"begin"` / `"end"` to list the projects running on that day.
+
 #### Get Project Details
 ```json
 {
