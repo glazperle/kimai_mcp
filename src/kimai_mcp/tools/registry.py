@@ -4,6 +4,8 @@ Having a single source of truth for the tool list and the name->handler dispatch
 prevents the two servers from drifting apart (e.g. a tool registered in one but
 not the other).
 """
+import functools
+import json
 from typing import Any
 
 import jsonschema
@@ -76,6 +78,15 @@ def tool_names() -> list[str]:
     return list(_REGISTRY.keys())
 
 
+@functools.lru_cache(maxsize=64)
+def _validator(schema_json: str) -> Any:
+    """A checked validator per distinct schema (keyed by its JSON text)."""
+    schema = json.loads(schema_json)
+    validator_class = jsonschema.validators.validator_for(schema)
+    validator_class.check_schema(schema)
+    return validator_class(schema)
+
+
 def validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
     """Validate tool arguments against the tool's own JSON schema.
 
@@ -90,7 +101,13 @@ def validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
         ToolError: if the arguments do not satisfy the schema.
     """
     try:
-        jsonschema.validate(instance=arguments, schema=tool.input_schema)
+        # jsonschema.validate() checks the schema itself against the meta-schema
+        # on every call, ~70 ms for the entity schema; a cached validator ~0.2 ms.
+        best_match = jsonschema.exceptions.best_match(
+            _validator(json.dumps(tool.input_schema, sort_keys=True)).iter_errors(arguments)
+        )
+        if best_match is not None:
+            raise best_match
     except jsonschema.ValidationError as e:
         location = "/".join(str(part) for part in e.absolute_path)
         where = f" at '{location}'" if location else ""

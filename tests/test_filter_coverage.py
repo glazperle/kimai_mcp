@@ -20,11 +20,10 @@ sort fields, of which Kimai's API accepts three.
 from __future__ import annotations
 
 import inspect
-import json
 import typing
 from dataclasses import dataclass, field
 from typing import Any, get_args, get_origin
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import BaseModel
@@ -101,18 +100,6 @@ NOT_EXPOSED: dict[str, dict[str, str]] = {
 }
 
 
-_VALIDATED: set[str] = set()
-_real_validate_arguments = registry.validate_arguments
-
-
-def _validate_once(tool, arguments):
-    """Probes must be schema-valid; the check costs ~70 ms, so once per distinct call."""
-    key = tool.name + json.dumps(arguments, sort_keys=True)
-    if key not in _VALIDATED:
-        _real_validate_arguments(tool, arguments)
-        _VALIDATED.add(key)
-
-
 def _filter_schema(tool: str) -> dict:
     tool_def = next(t for t in registry.all_tools() if t.name == tool)
     return tool_def.input_schema["properties"]["filters"]["properties"]
@@ -161,8 +148,7 @@ async def _sent(surface: ListSurface, filters: dict) -> dict[str, Any]:
     method.return_value = surface.returns
 
     arguments = {**surface.arguments, "filters": filters}
-    with patch.object(registry, "validate_arguments", _validate_once):
-        await registry.dispatch_tool(client, surface.tool, arguments)
+    await registry.dispatch_tool(client, surface.tool, arguments)
 
     bound = inspect.signature(getattr(KimaiClient, surface.client_method)).bind(
         None, *method.await_args.args, **method.await_args.kwargs

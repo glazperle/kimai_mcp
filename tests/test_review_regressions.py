@@ -99,6 +99,18 @@ async def test_valid_arguments_pass_validation():
     assert result
 
 
+def test_schema_validator_is_built_once_per_schema():
+    """jsonschema.validate() re-checks the schema on every call (~70 ms for entity)."""
+    from kimai_mcp.tools import registry
+
+    tool = registry.entity_tool()
+    registry.validate_arguments(tool, {"type": "customer", "action": "list"})
+    before = registry._validator.cache_info()
+    registry.validate_arguments(registry.entity_tool(), {"type": "project", "action": "list"})
+    after = registry._validator.cache_info()
+    assert (after.hits, after.misses) == (before.hits + 1, before.misses)
+
+
 # ---------------------------------------------------------------------------
 # Nothing may escape _call_tool as a protocol error
 # ---------------------------------------------------------------------------

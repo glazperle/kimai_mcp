@@ -29,7 +29,6 @@ as ``User`` and silently lost roles, teams and preferences).
 
 from __future__ import annotations
 
-import json
 import re
 import types
 import typing
@@ -37,7 +36,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, get_args, get_origin
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import BaseModel
@@ -45,8 +44,6 @@ from pydantic import BaseModel
 from kimai_mcp import models
 from kimai_mcp.client import KimaiClient
 from kimai_mcp.tools import registry
-
-_real_validate_arguments = registry.validate_arguments
 
 _TZ = timezone(timedelta(hours=2))
 _BASE_DT = datetime(2026, 3, 4, 9, 15, tzinfo=_TZ)
@@ -180,17 +177,6 @@ SURFACES = [
 SURFACES_BY_NAME = {s.name: s for s in SURFACES}
 
 
-_VALIDATED: set[str] = set()
-
-
-def _validate_once(tool, arguments):
-    """The schema check costs ~70 ms per call; every surface needs it only once."""
-    key = tool.name + json.dumps(arguments, sort_keys=True)
-    if key not in _VALIDATED:
-        _real_validate_arguments(tool, arguments)
-        _VALIDATED.add(key)
-
-
 async def _render(surface: Surface, payload: dict) -> str:
     record = surface.model.model_validate(payload)
     returned: Any = [record] if surface.many else record
@@ -201,8 +187,7 @@ async def _render(surface: Surface, payload: dict) -> str:
     client.get_current_user.return_value = models.UserEntity(id=1, username="me", enabled=True)
     getattr(client, surface.client_method).return_value = returned
 
-    with patch.object(registry, "validate_arguments", _validate_once):
-        content = await registry.dispatch_tool(client, surface.tool, dict(surface.arguments))
+    content = await registry.dispatch_tool(client, surface.tool, dict(surface.arguments))
     text = "\n".join(c.text for c in content)
     if surface.volatile:
         text = re.sub(surface.volatile, "", text)
