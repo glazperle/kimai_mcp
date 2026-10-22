@@ -178,7 +178,7 @@ async def test_a_truncated_team_fallback_is_refused_not_reported_empty():
     rows, _, _ = client.get_timesheets.return_value  # user 1 only, not in the team
     client.get_timesheets.side_effect = [KimaiAPIError("Cannot access user: 5", 403), (rows * 3, False, 100)]
 
-    with pytest.raises(ToolError, match="more than 3 entries"):
+    with pytest.raises(ToolError, match="at least 3 entries"):
         await dispatch_tool(client, "analyze_project_team", {
             "project_name": "Relaunch", "user_scope": "team", "team": 3, **_PERIOD,
         })
@@ -213,4 +213,53 @@ async def test_a_date_only_end_includes_that_day():
         "project_name": "Relaunch", "begin": "2025-01-01", "end": "2025-06-30",
     })
 
-    assert client.get_timesheets.await_args.args[0].end.endswith("T23:59:59")
+    assert client.get_timesheets.await_args.args[0].end.isoformat() == "2025-06-30T23:59:59"
+
+
+@pytest.mark.asyncio
+async def test_the_analysis_runs_without_permission_to_list_users():
+    """GET /users needs view_user, a super-admin permission by default; names
+    are cosmetic, so a 403 there must not stop the analysis."""
+    from kimai_mcp.client import KimaiAPIError
+
+    client = _client()
+    client.get_users.side_effect = KimaiAPIError("Access denied", 403)
+
+    text = (await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD}))[0].text
+
+    assert "User ID 1" in text
+    assert "User names are not shown" in text
+
+
+@pytest.mark.asyncio
+async def test_the_analysis_fetches_in_pages_of_500():
+    client = _client()
+    client.get_project.return_value = Project(id=7, name="Relaunch 2024")
+
+    await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD})
+
+    call = client.get_timesheets.await_args
+    assert call.args[0].size == 500
+    assert call.kwargs["fetch_all"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_project_name_with_an_excluding_word_is_matched_without_a_term():
+    """Kimai turns every word starting with '!' into an exclusion."""
+    client = _client()
+    client.get_projects.return_value = [Project(id=4, name="Website !Relaunch")]
+
+    await dispatch_tool(client, "analyze_project_team", {"project_name": "Website !Relaunch", **_PERIOD})
+
+    assert client.get_projects.await_args.args[0].term is None
+
+
+@pytest.mark.asyncio
+async def test_the_same_midnight_twice_is_that_whole_day():
+    client = _client()
+
+    await dispatch_tool(client, "analyze_project_team", {
+        "project_id": 7, "begin": "2025-06-30T00:00:00", "end": "2025-06-30T00:00:00",
+    })
+
+    assert client.get_timesheets.await_args.args[0].end.isoformat() == "2025-06-30T23:59:59"

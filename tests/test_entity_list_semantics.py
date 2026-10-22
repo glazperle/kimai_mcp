@@ -87,4 +87,5 @@ async def test_set_preferences_prints_empty_values_as_empty():
 
     assert "None" not in text
     assert "- work_start_day: (empty)" in text
-    assert "- holidays: (empty)" in text
+    # once in "Updated preferences" (the input), once in "All current preferences"
+    assert text.count("- holidays: (empty)") == 2

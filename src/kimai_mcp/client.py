@@ -313,7 +313,8 @@ class KimaiClient:
     async def get_timesheets(
         self,
         filters: TimesheetFilter | None = None,
-        max_results: int | None = None
+        max_results: int | None = None,
+        fetch_all: bool = False,
     ) -> tuple[list[TimesheetEntity], bool, int | None]:
         """Get list of timesheets.
 
@@ -321,6 +322,8 @@ class KimaiClient:
             filters: Timesheet filters
             max_results: Optional cap for auto-pagination. Fetching stops once
                 this many records have been collected (fetched_all is False then).
+            fetch_all: Page through everything in pages of ``filters.size``
+                (up to Kimai's 500), whatever the heuristics below decide.
 
         Returns:
             * List of timesheets and a flag indicating if there are more results to fetch
@@ -353,10 +356,10 @@ class KimaiClient:
             manual_pagination = filters.page is not None
             large_size = filters.size is not None and filters.size > 100
             
-            should_paginate_all = (
-                (has_time_filter or has_entity_filter) and 
-                not manual_pagination and 
-                not large_size
+            should_paginate_all = fetch_all or (
+                (has_time_filter or has_entity_filter)
+                and not manual_pagination
+                and not large_size
             )
             
             if filters.begin:

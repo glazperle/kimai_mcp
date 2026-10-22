@@ -55,3 +55,14 @@ async def test_batch_export_toggles_a_repeated_id_once():
 
     assert client.toggle_timesheet_export.await_count == 1
     assert "Exported: 1 timesheets" in content[0].text
+
+
+
+@pytest.mark.asyncio
+async def test_a_float_twin_does_not_replace_the_real_id():
+    """JSON Schema accepts 1.0 as an integer; deduplicating must keep the int."""
+    client = AsyncMock(spec=KimaiClient)
+
+    await dispatch_tool(client, "timesheet", {"action": "batch_delete", "ids": [1.0, 1]})
+
+    assert [call.args[0] for call in client.delete_timesheet.await_args_list] == [1]

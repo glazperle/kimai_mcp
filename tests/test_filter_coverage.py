@@ -193,8 +193,8 @@ def _cases():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("surface", "client_field"), list(_cases()))
 async def test_every_client_filter_is_reachable(surface, client_field):
-    if surface.client_method == "get_timesheets" and client_field == "max_results":
-        pytest.skip("client-side cap on auto-pagination, not a Kimai parameter")
+    if surface.client_method == "get_timesheets" and client_field in ("max_results", "fetch_all"):
+        pytest.skip("client-side pagination control, not a Kimai parameter")
     excused = NOT_EXPOSED.get(surface.name, {})
     schema = surface.schema()
 

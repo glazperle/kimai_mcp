@@ -39,7 +39,8 @@ async def test_list_without_date_filters_does_not_raise(filters):
 
 @pytest.mark.asyncio
 async def test_list_expands_same_day_midnight_range():
-    """When begin == end at midnight, end is bumped by one day (pre-existing behavior)."""
+    """begin == end at midnight means that whole day. Kimai's end is inclusive, so
+    the day ends at 23:59:59; the next midnight took that day's first records too."""
     client = _mock_client()
 
     await _handle_timesheet_list(
@@ -49,4 +50,4 @@ async def test_list_expands_same_day_midnight_range():
 
     timesheet_filter = client.get_timesheets.await_args.args[0]
     assert timesheet_filter.begin.isoformat() == "2026-01-15T00:00:00"
-    assert timesheet_filter.end.isoformat() == "2026-01-16T00:00:00"
+    assert timesheet_filter.end.isoformat() == "2026-01-15T23:59:59"

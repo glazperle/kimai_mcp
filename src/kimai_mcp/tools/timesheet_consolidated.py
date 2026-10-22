@@ -1,7 +1,7 @@
 """Consolidated Timesheet tools for all timesheet operations."""
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import get_args
 
 # Bounds the extra fetching for statistics so a huge date range cannot pull an
@@ -20,7 +20,7 @@ from ..models import (
     TimesheetOrderBy,
 )
 from .batch_utils import execute_batch, format_batch_result
-from .dates import parse_local_datetime, parse_local_end, parse_utc_datetime
+from .dates import parse_local_datetime, parse_local_end, parse_utc_datetime, whole_day
 from .errors import ToolError
 from .timesheet_analytics import TimesheetAnalytics, worked_hours
 from .user_discovery import resolve_accessible_users
@@ -110,8 +110,8 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                             "type": "string",
                             "description": "Only entries changed after this date-time, in UTC (Kimai stores it in UTC), format YYYY-MM-DDThh:mm:ss."
                         },
-                        "page": {"type": "integer", "default": 1, "description": "Page number for pagination. Default is 1."},
-                        "size": {"type": "integer", "default": 50, "description": "Number of records per page. Default is 50."},
+                        "page": {"type": "integer", "minimum": 1, "default": 1, "description": "Page number for pagination. Default is 1."},
+                        "size": {"type": "integer", "minimum": 1, "default": 50, "description": "Number of records per page. Default is 50."},
                         "term": {"type": "string"},
                         "meta": {
                             "type": "object",
@@ -314,8 +314,8 @@ async def handle_timer(client: KimaiClient, **params) -> list[TextContent]:
 def _format_meta_fields(meta_fields: list[dict] | None) -> str | None:
     """Render the non-empty meta fields as ``name=value, ...`` (None if there are none).
 
-    Kimai serializes every *visible* meta field definition, so an entry without a
-    value still carries ``{"name": ..., "value": null}``; those are skipped.
+    Kimai serializes the stored, visible meta rows; a stored row without a
+    value arrives as ``{"name": ..., "value": null}`` and is skipped.
     """
     parts = [
         f"{field.get('name')}={field.get('value')}"
@@ -339,29 +339,45 @@ def _meta_value(meta_fields: list[dict] | None, name: str) -> str | None:
     return None
 
 
-def _filter_by_meta(timesheets: list, name: str, wanted: str | None) -> tuple[list, int]:
+def _filter_by_meta(timesheets: list, name: str, wanted: str | None) -> tuple[list, str]:
     """Exact, case-insensitive meta match; ``wanted=None`` means "has any value".
 
-    Returns the matches and how many of them could not be checked here: a
-    record without the field matched Kimai's own search on a row that is not
-    sent back. Such a record is kept when Kimai's term asked for exactly this
-    (a value or "any value"), and is an empty value for an empty search, as
-    in Kimai's own ``name:""``. Otherwise nothing is known about it.
+    Returns the matches and a note about the records that cannot be checked
+    here because they arrive without the field (no stored row, or a row saved
+    while the field was hidden; the two look the same). Such a record is kept,
+    and counted in the note, when it may match: for an empty search, and when
+    Kimai's term asked for this value or for "any value". It is left out, and
+    counted, when Kimai could only be asked whether *some* value is stored
+    because this value cannot be expressed in its term syntax.
     """
     term = _meta_search_term(name, wanted)
-    server_matched = term is not None and (wanted is None or term != f"{name}:*")
-    kept, unverified = [], 0
+    any_value = term == f"{name}:*"
+    kept, unchecked, left_out = [], 0, 0
     for ts in timesheets:
         actual = _meta_value(ts.meta_fields, name)
         if actual is None:
-            if wanted == "":
+            if wanted == "" or (term is not None and (wanted is None or not any_value)):
                 kept.append(ts)
-            elif server_matched:
-                kept.append(ts)
-                unverified += 1
+                unchecked += 1
+            elif any_value:
+                left_out += 1
         elif (actual != "") if wanted is None else (actual.casefold() == wanted.casefold()):
             kept.append(ts)
-    return kept, unverified
+
+    notes = []
+    if unchecked and wanted == "":
+        notes.append(f"{unchecked} of these have no visible value for '{name}': saved before the field existed "
+                     "(empty) or while it was hidden (value unknown).")
+    elif unchecked and wanted is None:
+        notes.append(f"{unchecked} of these store '{name}' hidden; Kimai reports a stored value, which may be "
+                     "empty and cannot be checked here.")
+    elif unchecked:
+        notes.append(f"{unchecked} of these matched Kimai's substring search on a hidden '{name}' and are not "
+                     "checked exactly.")
+    if left_out:
+        notes.append(f"{left_out} record(s) with a hidden '{name}' were left out: Kimai could only be asked whether "
+                     "a value is stored, not for this one.")
+    return kept, "".join(f"Note: {n}\n\n" for n in notes)
 
 
 def _meta_search_term(name: str, value: str | None) -> str | None:
@@ -390,7 +406,6 @@ def _meta_search_term(name: str, value: str | None) -> str | None:
 # Timesheet action handlers
 async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[TextContent]:
     """Handle timesheet list action."""
-    from datetime import datetime
 
     # Handle user scope
     user_scope = filters.get("user_scope", "self")
@@ -414,13 +429,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     end_datetime = parse_local_end(filters["end"], "end") if filters.get("end") else None
 
 
-    if (
-        begin_datetime is not None
-        and end_datetime is not None
-        and begin_datetime == end_datetime
-        and begin_datetime.time() == datetime.min.time()
-    ):
-        end_datetime = begin_datetime + timedelta(days=1)
+    end_datetime = whole_day(begin_datetime, end_datetime)
 
     meta_filter = filters.get("meta")
     term = filters.get("term")
@@ -505,13 +514,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     # records and before the requested page is cut out.
     meta_note = ""
     if meta_filter is not None:
-        timesheets, unverified = _filter_by_meta(timesheets, meta_filter["name"], meta_filter.get("value"))
-        if unverified:
-            meta_note = (
-                f"Note: {unverified} of these matched Kimai's search on a meta row that is not sent back "
-                "(saved while the field was hidden), so they are Kimai's substring matches, not checked "
-                "exactly.\n\n"
-            )
+        timesheets, meta_note = _filter_by_meta(timesheets, meta_filter["name"], meta_filter.get("value"))
 
     matched = timesheets
     stats_input = matched if filters.get("calculate_stats") else None
@@ -555,9 +558,29 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
                 "requested. It does so when the token lacks view_other_timesheet or the requested user IDs "
                 "do not exist: it then ignores the user filter and returns the caller's own records.\n\n"
             )
+    elif user_scope == "all" and fetched and len({ts.user for ts in fetched}) == 1:
+        # user=all is honoured only with view_other_timesheet; without it
+        # Kimai returns the caller's records, which would read as everyone's.
+        me = await client.get_current_user()
+        if fetched[0].user == me.id:
+            result += (
+                "Note: every record returned is your own. Without the view_other_timesheet permission Kimai "
+                "answers user_scope='all' with the caller's records only.\n\n"
+            )
+
+    # Kimai drops project and activity IDs that do not exist and then applies
+    # no project/activity filter at all, so a wrong ID lists everything.
+    for attr, single, several in (("project", "project", "projects"), ("activity", "activity", "activities")):
+        asked = set(filters.get(several) or []) | ({filters[single]} if filters.get(single) else set())
+        stray = sorted({getattr(ts, attr) for ts in fetched} - asked) if asked else []
+        if stray:
+            result += (
+                f"Warning: Kimai returned records of {attr} ID(s) {', '.join(map(str, stray))}, which were not "
+                f"requested: it ignores {attr} IDs that do not exist and then does not filter by {attr} at all.\n\n"
+            )
 
     if not fetched_all:
-        result += f"Not all records were returned; fetched records up to page {last_page}\n\n"
+        result += f"Not all records were returned: {len(fetched)} were fetched and more exist; use 'page' or narrow the filter.\n\n"
     
     # Include user list if requested
     if filters.get("include_user_list"):

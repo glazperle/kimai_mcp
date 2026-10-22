@@ -6,14 +6,14 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
-from ..client import KimaiAPIError, KimaiClient
+from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
 from ..models import ActivityFilter, ProjectFilter, TimesheetFilter
-from .dates import parse_local_datetime, parse_local_end
+from .dates import parse_local_datetime, parse_local_end, whole_day
 from .errors import ToolError
 
-# Safety limit passed to get_timesheets. The client's own cap of 100 pages
-# (5000 records at the default page size of 50) is reached first; either way
-# the fetch comes back with fetched_all=False, which the analysis refuses.
+# Safety limit passed to get_timesheets (fetched in pages of 500, so the
+# client's own cap of 100 pages is not reached first). A fetch that stops
+# there comes back with fetched_all=False, which the analysis refuses.
 MAX_ANALYSIS_RESULTS = 10000
 
 
@@ -54,10 +54,13 @@ async def _find_project(client: KimaiClient, name: str):
     still be found next to a finished 'Support 2023'. Partial matches with
     different names stay ambiguous.
 
-    Kimai's search term reads 'a:b' as a meta-field search and a leading '!'
-    as an exclusion, so such a name is matched here without a server term.
+    Kimai splits its search term on whitespace, reads 'a:b' as a meta-field
+    search and a word starting with '!' as an exclusion, and does not escape
+    MySQL's LIKE escape character; such a name is matched here without a
+    server term.
     """
-    term = None if ":" in name or name.startswith("!") else name
+    unsafe = ":" in name or "\\" in name or any(word.startswith("!") for word in name.split())
+    term = None if unsafe else name
     projects = await client.get_projects(ProjectFilter.everything(term=term))
     wanted = name.casefold()
     matching = [p for p in projects if wanted in p.name.casefold()]
@@ -90,7 +93,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
 
     project_name = arguments.get('project_name') or ""
     begin = parse_local_datetime(arguments['begin'], "begin")
-    end = parse_local_end(arguments['end'], "end")
+    end = whole_day(begin, parse_local_end(arguments['end'], "end"))
     include_details = arguments.get('include_details', True)
 
     try:
@@ -135,20 +138,23 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                     f"❌ Error accessing team {arguments['team']}: {e!s}"
                 )
         
-        # 3. Get timesheets for this project with user filtering
+        # 3. Get timesheets for this project with user filtering. Datetimes,
+        # not strings: the client strips microseconds, which Kimai's strict
+        # Y-m-d\TH:i:s answers with a 400.
         filters = TimesheetFilter(
             project=project.id,
-            begin=begin.isoformat(),
-            end=end.isoformat(),
+            begin=begin,
+            end=end,
             user=user_filter,
             users=team_user_ids if user_scope == 'team' else None,
+            size=MAX_PAGE_SIZE,
         )
-        
+
         scope_notes: list[str] = []
 
         async def fetch_timesheets():
             try:
-                return await client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS)
+                return await client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS, fetch_all=True)
             except KimaiAPIError as e:
                 # users[] runs access_user for every member, which is a 403 for
                 # a disabled member unless the token sees everyone. Fetch all
@@ -161,7 +167,17 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                     "missing from the figures."
                 )
                 everyone = filters.model_copy(update={"user": "all", "users": None})
-                return await client.get_timesheets(everyone, max_results=MAX_ANALYSIS_RESULTS)
+                return await client.get_timesheets(everyone, max_results=MAX_ANALYSIS_RESULTS, fetch_all=True)
+
+        async def names(fetch):
+            # Names are cosmetic: GET /users needs view_user, which default Kimai
+            # grants to super admins only, so a refusal must not stop the analysis.
+            try:
+                return await fetch
+            except KimaiAPIError as e:
+                if e.status_code not in (401, 403):
+                    raise
+                return None
 
         try:
             # 4. Fetch data in parallel for better performance.
@@ -170,14 +186,17 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             timesheets, users, activities = await asyncio.gather(
                 fetch_timesheets(),
                 # Names for every record, also of disabled users and hidden activities.
-                client.get_users(visible=3, full=False),
-                client.get_activities(ActivityFilter(visible=3))
+                names(client.get_users(visible=3, full=False)),
+                names(client.get_activities(ActivityFilter(visible=3))),
             )
             timesheets, fetched_all, _last_page = timesheets
+            if users is None:
+                scope_notes.append("> User names are not shown: this token may not list users (view_user).")
+            users, activities = users or [], activities or []
         except KimaiAPIError as e:
             if e.status_code in (401, 403):
                 raise ToolError(
-                    f"❌ Insufficient permissions to access project '{project.name}' data.\n\n**Required permissions:**\n• `view_other_timesheet` - to see all team members\n• `view_user` - to access user information\n\n**Tip:** Try asking your Kimai admin to grant these permissions or use `user_scope: 'self'` to see only your own data."
+                    f"❌ Insufficient permissions to access project '{project.name}' data.\n\n**Required permission:**\n• `view_other_timesheet` - to see other users' records\n\n**Tip:** Try asking your Kimai admin to grant it or use `user_scope: 'self'` to see only your own data."
                 )
             elif e.status_code == 404:
                 raise ToolError(
@@ -193,7 +212,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
         # narrowed to a team and then reported as complete, or as empty.
         if not fetched_all:
             raise ToolError(
-                f"⚠️ Dataset too large: more than {len(timesheets)} entries found for project '{project.name}' (fetch stopped there).\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
+                f"⚠️ Dataset too large: at least {len(timesheets)} entries found for project '{project.name}' (fetch stopped there).\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
             )
         
         if user_scope == 'team':
@@ -209,6 +228,16 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                     f"📋 No timesheets found for project '{project.name}' in the specified period.",
                 ])
             )]
+
+        if user_scope == 'all' and len({ts.user for ts in timesheets}) == 1:
+            # user=all is honoured only with view_other_timesheet; without it
+            # Kimai returns the caller's records, which would read as the team.
+            me = await client.get_current_user()
+            if timesheets[0].user == me.id:
+                scope_notes.append(
+                    "> ⚠️ Every record is your own. Without the view_other_timesheet permission Kimai "
+                    "returns only the caller's records, so other members may be missing."
+                )
 
         # Create lookup dictionaries
         user_lookup = {}

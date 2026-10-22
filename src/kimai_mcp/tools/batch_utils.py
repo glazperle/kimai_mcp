@@ -32,6 +32,9 @@ async def execute_batch(
 
     # A repeated ID would run twice concurrently: a delete then reports a false
     # "Failed" (404), and a toggle (batch_export) undoes itself.
+    # JSON Schema accepts 1.0 as an integer, and 1.0 == 1 would let the float
+    # spelling (a /timesheets/1.0 URL) replace the real ID.
+    items = [int(i) if isinstance(i, float) and i.is_integer() else i for i in items]
     try:
         items = list(dict.fromkeys(items))
     except TypeError:

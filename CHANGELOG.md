@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-empty meta fields of each entry (`Meta: issue_tracker_id=CA-376`). They could be written with
   `meta_update` but never read back, although Kimai has always sent them: `metaFields` is in the
   `Timesheet` serializer group, which `GET /timesheets` uses with and without `full=true` and
-  `GET /timesheets/{id}` uses too, so this costs no extra request. Kimai only serializes fields whose
-  definition is visible, and it sends a visible field without a value as `null`; those are skipped.
+  `GET /timesheets/{id}` uses too, so this costs no extra request. Kimai serializes the stored, visible
+  meta rows; a stored row without a value arrives as `null` and is skipped.
 - **`filters.meta` on `timesheet action=list`**, e.g. `{name: "issue_tracker_id", value: "CA-376"}`.
   It is sent as Kimai's `name:value` search term as a pre-filter, and then matched exactly
   (case-insensitive, names too) on the MCP side, because Kimai compares that term with
@@ -23,9 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would hide exact matches behind near-misses. Without `value` it matches entries where the field is
   set; `value: ""` matches entries where it is not, including entries saved before the field existed
   (no server term: Kimai's `name:""` misses values cleared to `''`). A value with spaces, a leading `!`
-  or a backslash falls back to `name:*` plus the exact match. Entries saved while the field was hidden
-  are found by Kimai but sent back without it; they are listed as Kimai's substring matches, with a
-  note. The plain `filters.term` still searches the description only.
+  or a backslash falls back to `name:*` plus the exact match. An entry whose row is not sent back (saved
+  before the field existed, or while it was hidden) cannot be checked here: it counts for an empty
+  search, is kept as Kimai's match when Kimai searched this value, and is left out when it could not;
+  each case is stated in a note. The plain `filters.term` still searches the description only.
 - **Filters Kimai offers but no tool could send.** `timesheet action=list`: `users`, `customers`,
   `projects`, `activities` (several IDs), `tags`, `order_by`, `order`, `modified_after` (UTC).
   `entity action=list`: `ignore_dates`, `global_activities`, `customers` and `begin`/`end` for projects,
@@ -92,9 +93,13 @@ Each of these was data Kimai sent (or a filter it offered) that a tool silently 
   `analyze_project_team` answered "No project found" for a finished project, and it and the
   timesheet statistics showed those records as bare IDs. An exact project name now wins over partial
   matches and a visible project over a hidden one of the same name; names with `:` or a leading `!`
-  (search syntax for Kimai) are matched without a server term. `analyze_project_team` with
-  `user_scope=team` lets Kimai filter by the team's users, falling back to everyone's records (with a
-  warning in the report) when Kimai refuses a member (403), and keeps the team's records in either case.
+  (search syntax for Kimai: `:`, a word starting with `!`, a backslash) are matched without a server
+  term. `analyze_project_team` with `user_scope=team` lets Kimai filter by the team's users, falling back
+  to everyone's records (with a warning in the report) when Kimai refuses a member (403), and keeps the
+  team's records in either case.
+- **`analyze_project_team` failed for every token except a super admin's**: it lists users only to
+  print their names, and `GET /users` needs `view_user`. A refused name lookup now degrades to user IDs
+  with a note. The analysis fetches in pages of 500 (was 50, 100 requests for 5000 records).
 
 Other fixes:
 
@@ -102,14 +107,19 @@ Other fixes:
   endpoint toggles the flag; records are now read first and only toggled when not exported yet, and a
   repeated ID is processed once.
 - **`analyze_project_team` analysed a silently truncated dataset** for projects with more than 5000
-  records in the period: the client stops at 100 pages and the size guard compared against 10000. The
+  records in the period: the client stopped at 100 pages and the size guard compared against 10000. The
   analysis now refuses a truncated fetch and asks for a shorter period.
-- **A user filter Kimai ignored was not reported.** Without `view_other_timesheet`, or for user IDs
-  that do not exist, Kimai returns the caller's own records for `user`/`users`; the listing now warns
-  instead of presenting them as the requested users'.
+- **Filters Kimai ignored were not reported.** Without `view_other_timesheet`, or for user IDs that do not
+  exist, Kimai returns the caller's own records for `user`/`users`/`user_scope=all`; unknown project and
+  activity IDs make it drop that filter entirely. When the returned records show this (records of users,
+  projects or activities that were not requested, or only the caller's records for `all`), the listing
+  now says so instead of presenting them as the requested ones. Where the records cannot show it (the
+  caller has none in the period), nothing can be detected without permissions the token lacks.
 - **A date-only `end` dropped the whole last day** in `timesheet action=list` and
   `analyze_project_team`: Kimai keeps records started at or before `end`, and `2025-06-30` meant
-  midnight. A date alone now means the end of that day.
+  midnight. A date alone now means the end of that day, as does the same midnight given as begin and end
+  (the listing used the next midnight, which took that day's first records too).
+- `page` and `size` must be at least 1; a negative value used to be sliced from the end of the result.
 - **A repeated ID in a batch action** ran twice: deletes reported a false failure, exports undid
   themselves. Every batch action processes an ID once.
 - **`entity type=user action=update` needed email, language, locale and timezone on every call**, and

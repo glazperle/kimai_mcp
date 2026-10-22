@@ -275,8 +275,8 @@ USER PREFERENCES (action=set_preferences, type=user only):
                         },
                         "name": {"type": "string", "description": "type=tag: tag name filter (term works too)"},
                         "group": {"type": "integer", "description": "type=holiday: public holiday group ID"},
-                        "page": {"type": "integer", "description": "Page number"},
-                        "size": {"type": "integer", "description": "Page size"},
+                        "page": {"type": "integer", "minimum": 1, "description": "Page number"},
+                        "size": {"type": "integer", "minimum": 1, "description": "Page size"},
                         "order_by": {"type": "string", "description": _order_by_description()},
                         "order": {"type": "string", "enum": list(get_args(SortOrder)), "description": "Sort order"},
                         "begin": {

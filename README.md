@@ -431,8 +431,10 @@ the field is set, or pass `"value": ""` for entries where it is not. The filter 
 term `issue_tracker_id:CA-376` to narrow the result; because Kimai matches that term as a substring (`CA-376`
 also finds `CA-3760`), the MCP server fetches the whole result and keeps only exact matches, then shows the
 requested `page`. A value Kimai's term syntax cannot express (spaces, a leading `!`, a backslash) is narrowed
-to "field is set" on the server and matched on the MCP side. Entries saved while the field was hidden are
-found by Kimai but sent back without it; those are listed as Kimai's matches, with a note.
+to "field is set" on the server and matched on the MCP side. Kimai sends back only the meta rows that are
+stored and visible, so an entry saved before the field existed, or while it was hidden, arrives without it:
+it counts as a match for `"value": ""`, is listed as Kimai's (substring) match when Kimai searched this value,
+and is left out when the value could not be sent; each case is stated in a note.
 
 #### Create a Timesheet Entry
 ```json

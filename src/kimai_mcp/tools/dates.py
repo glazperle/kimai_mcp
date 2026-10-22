@@ -6,7 +6,8 @@ parsing keeps the strict ``YYYY-MM-DD`` contract (and the single
 ``DTZ007`` suppression that goes with it) in one place.
 """
 
-from datetime import date, datetime, timezone
+import re
+from datetime import date, datetime, time, timezone
 
 from .errors import ToolError
 
@@ -61,6 +62,9 @@ def parse_local_datetime(value: str, field: str) -> datetime:
     return parsed
 
 
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def parse_local_end(value: str, field: str) -> datetime:
     """Like :func:`parse_local_datetime`, but a date alone means the end of that day.
 
@@ -68,9 +72,21 @@ def parse_local_end(value: str, field: str) -> datetime:
     end parsed as midnight silently dropped the whole last day of a period.
     """
     parsed = parse_local_datetime(value, field)
-    if len(str(value).strip()) == len("YYYY-MM-DD"):
+    if _DATE_ONLY.fullmatch(str(value).strip()):
         parsed = parsed.replace(hour=23, minute=59, second=59)
     return parsed
+
+
+def whole_day(begin: datetime | None, end: datetime | None) -> datetime | None:
+    """``end`` for a bound pair: the same midnight twice means that whole day.
+
+    Kimai's ``end`` is inclusive (records started at or before it), so the
+    day ends at 23:59:59; the next midnight would take that day's first
+    records too.
+    """
+    if begin is not None and end is not None and begin == end and end.time() == time.min:
+        return end.replace(hour=23, minute=59, second=59)
+    return end
 
 
 def parse_utc_datetime(value: str, field: str) -> datetime:

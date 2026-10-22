@@ -1,4 +1,8 @@
-"""Timesheet meta fields in list/get output and the list meta filter."""
+"""Timesheet meta fields in list/get output and the list meta filter.
+
+Kimai serializes the stored, visible meta rows only: a record saved before a
+field existed, or while it was hidden, arrives without the field.
+"""
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
@@ -209,7 +213,7 @@ async def test_records_without_the_field_that_kimai_matched_are_kept_with_a_note
 
     assert "ID: 101 - " in text
     assert "ID: 102 - " in text
-    assert "1 of these matched Kimai's search on a meta row that is not sent back" in text
+    assert "1 of these matched Kimai's substring search on a hidden 'issue_tracker_id'" in text
 
 
 @pytest.mark.asyncio
@@ -286,3 +290,64 @@ async def test_a_date_only_end_includes_that_day():
 
     sent = client.get_timesheets.await_args.args[0]
     assert sent.end.isoformat() == "2025-06-30T23:59:59"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_search_notes_the_records_without_the_field():
+    """A record without the field may be empty (no row) or hold a hidden value."""
+    client = _mock_client([_without_row(101), _without_row(102)])
+
+    text = (await _handle_timesheet_list(client, {"meta": {"name": "internal_ref", "value": ""}}))[0].text
+
+    assert text.startswith("Found 2 timesheets")
+    assert "2 of these have no visible value for 'internal_ref'" in text
+
+
+@pytest.mark.asyncio
+async def test_an_unexpressible_value_leaves_hidden_records_out_with_a_note():
+    client = _mock_client([_without_row(101)])
+
+    text = (await _handle_timesheet_list(client, {"meta": {"name": "internal_ref", "value": "two words"}}))[0].text
+
+    assert text.startswith("Found 0 timesheets")
+    assert "1 record(s) with a hidden 'internal_ref' were left out" in text
+
+
+@pytest.mark.asyncio
+async def test_an_any_value_search_says_a_hidden_value_may_be_empty():
+    client = _mock_client([_without_row(101)])
+
+    text = (await _handle_timesheet_list(client, {"meta": {"name": "internal_ref"}}))[0].text
+
+    assert "ID: 101 - " in text
+    assert "which may be empty" in text
+    assert "substring" not in text
+
+
+@pytest.mark.asyncio
+async def test_all_scope_with_only_own_records_is_noted():
+    """Without view_other_timesheet Kimai answers user=all with the caller's records."""
+    client = _mock_client([_timesheet(101, None), _timesheet(102, None)])  # both user 1, the caller
+
+    text = (await _handle_timesheet_list(client, {"user_scope": "all"}))[0].text
+
+    assert "every record returned is your own" in text
+
+
+@pytest.mark.asyncio
+async def test_records_of_unrequested_projects_are_flagged():
+    """Kimai drops unknown project IDs and then does not filter by project."""
+    client = _mock_client([_timesheet(101, None)])  # project 1
+
+    text = (await _handle_timesheet_list(client, {"project": 99999}))[0].text
+
+    assert "Warning: Kimai returned records of project ID(s) 1" in text
+
+
+def test_negative_pages_are_rejected_by_the_schema():
+    from kimai_mcp.tools.errors import ToolError
+    from kimai_mcp.tools.registry import all_tools, validate_arguments
+
+    tool = next(t for t in all_tools() if t.name == "timesheet")
+    with pytest.raises(ToolError, match="minimum"):
+        validate_arguments(tool, {"action": "list", "filters": {"page": -1}})
