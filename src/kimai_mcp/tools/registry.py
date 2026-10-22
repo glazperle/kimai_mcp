@@ -12,6 +12,7 @@ import jsonschema
 import pydantic
 from mcp.types import TextContent, Tool
 
+from .. import models
 from ..client import KimaiClient
 from .absence_manager import absence_tool, handle_absence
 from .calendar_meta import (
@@ -138,18 +139,24 @@ def validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
     Raises:
         ToolError: if the arguments do not satisfy the schema.
     """
-    try:
-        # jsonschema.validate() checks the schema itself against the meta-schema
-        # on every call, ~70 ms for the entity schema; a cached validator ~0.2 ms.
-        best_match = jsonschema.exceptions.best_match(
-            _validator(json.dumps(tool.input_schema, sort_keys=True)).iter_errors(arguments)
-        )
-        if best_match is not None:
-            raise best_match
-    except jsonschema.ValidationError as e:
-        location = "/".join(str(part) for part in e.absolute_path)
+    # jsonschema.validate() checks the schema itself against the meta-schema
+    # on every call, ~70 ms for the entity schema; a cached validator ~0.2 ms.
+    _check(_validator(json.dumps(tool.input_schema, sort_keys=True)), arguments)
+
+
+def _check(validator: Any, arguments: dict[str, Any]) -> None:
+    error = jsonschema.exceptions.best_match(validator.iter_errors(arguments))
+    if error is not None:
+        location = "/".join(str(part) for part in error.absolute_path)
         where = f" at '{location}'" if location else ""
-        raise ToolError(f"Input validation error{where}: {e.message}")
+        raise ToolError(f"Input validation error{where}: {error.message}")
+
+
+@functools.cache
+def _tool_validator(name: str) -> Any:
+    """The validator of a registered tool, its schema built and closed once."""
+    factory, _run = _REGISTRY[name]
+    return _validator(json.dumps(_build(factory).input_schema, sort_keys=True))
 
 
 async def dispatch_tool(
@@ -162,9 +169,9 @@ async def dispatch_tool(
         raise ToolError(
             f"Unknown tool: {name}. Available tools: {', '.join(_REGISTRY)}"
         )
-    factory, run = entry
+    _factory, run = entry
     arguments = arguments or {}
-    validate_arguments(_build(factory), arguments)
+    _check(_tool_validator(name), arguments)
     try:
         return await run(client, arguments)
     except pydantic.ValidationError as e:
@@ -179,8 +186,20 @@ async def dispatch_tool(
 
 
 def _format_input_error(error: "pydantic.ValidationError") -> str:
+    """One line per problem, naming the field as the caller sends it.
+
+    A handler that builds a form by Python name (``break_duration=...``)
+    gets that name in pydantic's location; the alias (``break``) is what the
+    tool schema and the caller use for a form. Filters are the other way
+    round: the tools take their Python names (``order_by``), so those stay.
+    """
+    model = getattr(models, error.title, None) if error.title.endswith("Form") else None
+    fields = getattr(model, "model_fields", {})
     problems = []
     for detail in error.errors():
-        field = ".".join(str(part) for part in detail["loc"]) or "input"
+        loc = [str(part) for part in detail["loc"]]
+        if loc and loc[0] in fields:
+            loc[0] = fields[loc[0]].alias or loc[0]
+        field = ".".join(loc) or "input"
         problems.append(f"'{field}': {detail['msg'].removeprefix('Value error, ')}")
     return "Error: invalid value for " + "; ".join(problems)

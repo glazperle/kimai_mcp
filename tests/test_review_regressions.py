@@ -370,3 +370,15 @@ async def test_invalid_input_value_is_a_readable_tool_error():
     assert "'id', 'name' or 'customer'" in message
     assert "errors.pydantic.dev" not in message
     client.get_projects.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_invalid_form_value_names_the_field_as_the_caller_sends_it():
+    """timesheet create builds its form with break_duration=...; the caller and
+    the schema call the field `break`."""
+    client = AsyncMock(spec=KimaiClient)
+    with pytest.raises(ToolError) as excinfo:
+        await dispatch_tool(client, "timesheet", {
+            "action": "create", "data": {"project": 1, "activity": 1, "break": "90"},
+        })
+    assert "invalid value for 'break':" in str(excinfo.value)
