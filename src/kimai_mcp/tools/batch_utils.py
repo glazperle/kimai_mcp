@@ -72,8 +72,9 @@ def format_batch_result(
     Returns:
         Formatted result string
     """
+    past = operation_name + ("d" if operation_name.endswith("e") else "ed")  # Deleted, Exported
     result = f"Batch {operation_name} Complete\n"
-    result += f"✓ {operation_name}d: {len(success)} {item_name}\n"
+    result += f"✓ {past}: {len(success)} {item_name}\n"
 
     if failed:
         result += f"✗ Failed: {len(failed)}\n"

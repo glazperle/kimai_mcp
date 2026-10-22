@@ -1029,10 +1029,18 @@ async def _handle_batch_export(client: KimaiClient, ids: list[int]) -> list[Text
     if not ids:
         raise ToolError("Error: 'ids' parameter is required for batch_export action")
 
-    async def export_one(id: int) -> int:
+    # PATCH /timesheets/{id}/export *toggles* the flag (setExported(!isExported())),
+    # so a record that is exported already must be left alone, or "mark as
+    # exported" would un-export it.
+    async def export_one(id: int) -> bool:
+        if (await client.get_timesheet(id)).exported:
+            return False
         await client.toggle_timesheet_export(id)
-        return id
+        return True
 
     success, failed = await execute_batch(ids, export_one)
-    result = format_batch_result("Export", success, failed, "timesheets")
+    newly = [changed for changed in success if changed]
+    result = format_batch_result("Export", newly, failed, "timesheets")
+    if len(newly) < len(success):
+        result += f"- Already exported, left unchanged: {len(success) - len(newly)}\n"
     return [TextContent(type="text", text=result)]
