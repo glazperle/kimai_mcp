@@ -43,13 +43,26 @@ class ListSurface:
     returns: Any = field(default_factory=list)
     # client field -> the tool filters that should set it, where not {field: probe}
     probes: dict[str, dict] = field(default_factory=dict)
+    # where the tool takes these parameters; None means top-level arguments
+    filters_key: str | None = "filters"
 
     @property
     def name(self) -> str:
-        return " ".join(str(v) for v in (self.tool, self.arguments.get("type", ""), "list") if v)
+        action = self.arguments.get("action", "")
+        verb = "list" if action in ("", "list") else action
+        return " ".join(str(v) for v in (self.tool, self.arguments.get("type", ""), verb) if v)
+
+    def schema(self) -> dict:
+        tool = next(t for t in registry.all_tools() if t.name == self.tool)
+        root = tool.input_schema["properties"]
+        return root[self.filters_key]["properties"] if self.filters_key else root
 
 
 LIST_SURFACES = [
+    ListSurface(
+        "timer", {"action": "recent"}, "get_recent_timesheets", filters_key=None,
+        probes={"begin": {"begin": _DATETIME}},
+    ),
     ListSurface(
         "timesheet", {"action": "list"}, "get_timesheets", returns=([], True, 1),
         probes={
@@ -156,7 +169,7 @@ async def _sent(surface: ListSurface, filters: dict) -> dict[str, Any]:
     method = getattr(client, surface.client_method)
     method.return_value = surface.returns
 
-    arguments = {**surface.arguments, "filters": filters}
+    arguments = {**surface.arguments, surface.filters_key: filters} if surface.filters_key else {**surface.arguments, **filters}
     await registry.dispatch_tool(client, surface.tool, arguments)
 
     bound = inspect.signature(getattr(KimaiClient, surface.client_method)).bind(
@@ -182,7 +195,7 @@ async def test_every_client_filter_is_reachable(surface, client_field):
     if surface.client_method == "get_timesheets" and client_field == "max_results":
         pytest.skip("client-side cap on auto-pagination, not a Kimai parameter")
     excused = NOT_EXPOSED.get(surface.name, {})
-    schema = _filter_schema(surface.tool)
+    schema = surface.schema()
 
     probe = surface.probes.get(client_field)
     if probe is None:
@@ -281,3 +294,37 @@ def test_entity_order_by_lists_exactly_the_api_sort_fields():
                                ("customer", models.CustomerFilter), ("user", models.UserFilter)):
         values = _literal_args(model.model_fields["order_by"].annotation)
         assert f"{entity_type}: {', '.join(values)}" in description
+
+
+# The client method an entity type's list action calls.
+LIST_METHOD = {
+    "project": "get_projects", "activity": "get_activities", "customer": "get_customers",
+    "user": "get_users", "team": "get_teams", "tag": "get_tags_full",
+    "invoice": "get_invoices", "holiday": "get_public_holidays",
+}
+
+
+async def _entity_request(entity_type: str, filters: dict) -> list:
+    """What the list action handed to the client, comparable across calls."""
+    from kimai_mcp.tools.entity_manager import handle_entity
+
+    client = AsyncMock(spec=KimaiClient)
+    getattr(client, LIST_METHOD[entity_type]).return_value = []
+    await handle_entity(client, type=entity_type, action="list", filters=filters)
+    call = getattr(client, LIST_METHOD[entity_type]).await_args
+    dump = [a.model_dump() if isinstance(a, BaseModel) else a for a in call.args]
+    return [dump, call.kwargs]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity_type", list(LIST_METHOD))
+async def test_every_claimed_list_filter_changes_the_request(entity_type):
+    """`list_filters` decides which keys are reported as ignored. A key listed
+    there but not applied would be neither applied nor reported."""
+    schema = _filter_schema("entity")
+    base = await _entity_request(entity_type, {})
+    for key in sorted(_list_filters(entity_type)):
+        value = ORDER_BY_PROBE.get(entity_type, "id") if key == "order_by" else _probe(schema[key])
+        assert await _entity_request(entity_type, {key: value}) != base, (
+            f"type={entity_type}: '{key}' is in list_filters but does not change the request"
+        )

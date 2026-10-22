@@ -44,21 +44,6 @@ def _objects(schema, path=""):
                 yield from _objects(sub, f"{path}/allOf/{part}/{key}")
 
 
-def _declared(schema) -> set[str]:
-    names: set[str] = set()
-
-    def walk(node):
-        if isinstance(node, dict):
-            names.update(node.get("properties", {}))
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(schema)
-    return names
-
 
 @pytest.mark.parametrize("tool", registry.all_tools(), ids=lambda t: t.name)
 def test_every_input_object_is_closed(tool):
@@ -95,21 +80,47 @@ def _handler_modules() -> dict:
     ("module", "tools"), list(_handler_modules().items()), ids=lambda v: getattr(v, "__name__", "")
 )
 def test_every_key_a_handler_reads_is_declared(module, tools):
-    declared = set().union(*(_declared(t.input_schema) for t in tools))
-    read: dict[str, int] = {}
+    """Per variable, against the object it holds: a key read as ``filters.X``
+    must be declared under ``filters``, not just anywhere in the schema."""
+    declared = {var: set().union(*(_declared_at(t.input_schema, var) for t in tools)) for var in INPUT_NAMES}
+    undeclared: dict[str, int] = {}
     for node in ast.walk(ast.parse(inspect.getsource(module))):
-        key = None
+        var = key = None
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get"
                 and isinstance(node.func.value, ast.Name) and node.func.value.id in INPUT_NAMES
                 and node.args and isinstance(node.args[0], ast.Constant)):
-            key = node.args[0].value
+            var, key = node.func.value.id, node.args[0].value
         elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
               and node.value.id in INPUT_NAMES and isinstance(node.slice, ast.Constant)):
-            key = node.slice.value
-        if isinstance(key, str):
-            read.setdefault(key, node.lineno)
-    undeclared = {k: line for k, line in read.items() if k not in declared}
-    assert not undeclared, f"{module.__name__} reads keys no schema declares (key: line): {undeclared}"
+            var, key = node.value.id, node.slice.value
+        if isinstance(key, str) and key not in declared[var]:
+            undeclared.setdefault(f"{var}.{key}", node.lineno)
+    assert not undeclared, f"{module.__name__} reads keys its schema does not declare there (key: line): {undeclared}"
+
+
+def _declared_at(schema: dict, var: str) -> set[str]:
+    """Property names of the object a handler variable holds."""
+    root = schema.get("properties", {})
+    if var in ("params", "arguments"):
+        return set(root)
+    if var == "filters":
+        return set(root.get("filters", {}).get("properties", {}))
+    if var == "meta_filter":
+        return set(root.get("filters", {}).get("properties", {}).get("meta", {}).get("properties", {}))
+    # data: the shared object and every per-type branch
+    names = set(root.get("data", {}).get("properties", {}))
+    for branch in schema.get("allOf", []):
+        names |= set(branch.get("then", {}).get("properties", {}).get("data", {}).get("properties", {}))
+    return names
+
+
+def test_key_check_sees_a_key_declared_only_elsewhere():
+    """The case the union over all property names missed: `name` exists in many
+    data branches, so deleting it from filters went unnoticed."""
+    schema = next(t for t in registry.all_tools() if t.name == "entity").input_schema
+    assert "name" in _declared_at(schema, "filters")
+    assert "name" in _declared_at(schema, "data")
+    assert "ignore_dates" not in _declared_at(schema, "data")
 
 
 # --- write schemas vs. request models ---------------------------------------
@@ -117,6 +128,12 @@ def test_every_key_a_handler_reads_is_declared(module, tools):
 
 # Entity writes the handler refuses outright, so no data schema is needed.
 UNSUPPORTED_WRITES = {("invoice", "create"), ("holiday", "create"), ("holiday", "update"), ("tag", "update")}
+
+# Write schemas that deliberately take a subset of their request model.
+SUBSET_BY_DESIGN = {
+    ("timer", None): "timer start takes project, activity, description and tags; "
+                     "everything else is the timesheet tool's",
+}
 
 WRITE_SCHEMAS = [
     ("entity", ("customer", "create"), models.CustomerEditForm),
@@ -134,6 +151,8 @@ WRITE_SCHEMAS = [
     ("timesheet", None, models.TimesheetEditForm),
     ("absence", None, models.AbsenceForm),
     ("comment", None, models.CommentForm),
+    ("rate", None, models.RateForm),
+    ("timer", None, models.TimesheetEditForm),
 ]
 
 
@@ -158,10 +177,15 @@ def test_write_schema_matches_its_request_model(tool, where, form):
     data = _entity_data(*where) if where else _tool(tool).input_schema["properties"]["data"]
     assert data is not None, f"{tool} {where}: no data schema"
     declared = set(data["properties"])
-    fields = {info.alias or name for name, info in form.model_fields.items()}
-    assert declared == fields, (
-        f"{tool} {where}: schema only {sorted(declared - fields)}, model only {sorted(fields - declared)}"
-    )
+    # A schema key may use the wire name or the Python name (the rate handler
+    # maps internal_rate itself); either way it must be one field of the model.
+    names = {name: {name, info.alias or name} for name, info in form.model_fields.items()}
+    unknown = sorted(k for k in declared if not any(k in spellings for spellings in names.values()))
+    missing = sorted(n for n, spellings in names.items() if not spellings & declared)
+    assert not unknown, f"{tool} {where}: schema keys the model does not have: {unknown}"
+    if (tool, where) in SUBSET_BY_DESIGN:
+        return
+    assert not missing, f"{tool} {where}: model fields the schema cannot send: {missing}"
 
 
 def test_every_supported_entity_write_has_a_closed_data_schema():
