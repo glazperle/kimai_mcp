@@ -11,7 +11,14 @@ MAX_STATS_RESULTS = 10000
 from mcp.types import TextContent, Tool
 
 from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
-from ..models import MetaFieldForm, SortOrder, TimesheetEditForm, TimesheetFilter, TimesheetOrderBy
+from ..models import (
+    MetaFieldForm,
+    ProjectFilter,
+    SortOrder,
+    TimesheetEditForm,
+    TimesheetFilter,
+    TimesheetOrderBy,
+)
 from .batch_utils import execute_batch, format_batch_result
 from .dates import parse_local_datetime, parse_utc_datetime
 from .errors import ToolError
@@ -528,7 +535,8 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         
         # Load project names for better display
         try:
-            projects = await client.get_projects()
+            # All projects: by default Kimai lists only visible ones running today.
+            projects = await client.get_projects(ProjectFilter(visible=3, ignore_dates="1"))
             project_map = {p.id: p.name for p in projects}
             stats["project_names"] = project_map
         # Project names are cosmetic; without them the report shows IDs.

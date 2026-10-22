@@ -7,7 +7,7 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from ..client import KimaiAPIError, KimaiClient
-from ..models import ProjectFilter, TimesheetFilter
+from ..models import ActivityFilter, ProjectFilter, TimesheetFilter
 from .dates import parse_local_datetime
 from .errors import ToolError
 
@@ -40,6 +40,10 @@ def analyze_project_team_tool() -> Tool:
     )
 
 
+# Kimai's project listing defaults to visible projects running today.
+ANY_PROJECT = {"visible": 3, "ignore_dates": "1"}
+
+
 async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle comprehensive project team analysis."""
     missing = [f for f in ("project_name", "begin", "end") if not arguments.get(f)]
@@ -52,13 +56,15 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
     include_details = arguments.get('include_details', True)
 
     try:
-        # 1. Find project by name (server-side term search instead of loading all projects)
-        projects = await client.get_projects(ProjectFilter(term=project_name))
+        # 1. Find project by name (server-side term search instead of loading all projects).
+        # Kimai lists only visible projects running today by default; the
+        # analysed period can be any, so finished and hidden projects count too.
+        projects = await client.get_projects(ProjectFilter(term=project_name, **ANY_PROJECT))
         matching_projects = [p for p in projects if project_name.lower() in p.name.lower()]
 
         if not matching_projects:
             # Load all projects only to present available options
-            all_projects = await client.get_projects()
+            all_projects = await client.get_projects(ProjectFilter(**ANY_PROJECT))
             raise ToolError(
                 f"❌ No project found matching '{project_name}'. Available projects:\n" +
                 "\n".join([f"• {p.name}" for p in all_projects[:10]])
@@ -93,11 +99,12 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             # For team scope, we'll need to get team members first
             try:
                 team = await client.get_team(arguments['team'])
-                team_user_ids = [str(member.user.id) for member in team.members]
+                team_user_ids = [member.user.id for member in team.members]
                 if not team_user_ids:
                     raise ToolError(f"❌ Team ID {arguments['team']} has no members.")
-                # Note: Kimai API doesn't support multiple user IDs in filter, so we'll filter post-processing
-                user_filter = 'all'  # Get all and filter later
+                # Kimai filters by several users itself (users[]), so the cap
+                # below applies to the team's records, not to everyone's.
+                user_filter = None
             except ToolError:
                 raise
             # Anything else is turned into a client-facing tool error naming the team.
@@ -111,7 +118,8 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             project=project.id,
             begin=begin.isoformat(),
             end=end.isoformat(),
-            user=user_filter
+            user=user_filter,
+            users=team_user_ids if user_scope == 'team' else None,
         )
         
         try:
@@ -120,15 +128,11 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             # don't get downloaded completely before the safety check.
             timesheets, users, activities = await asyncio.gather(
                 client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS),
-                client.get_users(full=False),  # Use optimized performance mode
-                client.get_activities()
+                # Names for every record, also of disabled users and hidden activities.
+                client.get_users(visible=3, full=False),
+                client.get_activities(ActivityFilter(visible=3))
             )
             timesheets, _fetched_all, _last_page = timesheets
-
-            # Post-process team filtering if needed
-            if user_scope == 'team':
-                team_user_ids_int = [int(uid) for uid in team_user_ids]
-                timesheets = [ts for ts in timesheets if ts.user in team_user_ids_int]
         except KimaiAPIError as e:
             if e.status_code in (401, 403):
                 raise ToolError(
