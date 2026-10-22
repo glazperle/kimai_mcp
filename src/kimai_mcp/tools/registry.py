@@ -9,6 +9,7 @@ import json
 from typing import Any
 
 import jsonschema
+import pydantic
 from mcp.types import TextContent, Tool
 
 from ..client import KimaiClient
@@ -164,4 +165,22 @@ async def dispatch_tool(
     factory, run = entry
     arguments = arguments or {}
     validate_arguments(_build(factory), arguments)
-    return await run(client, arguments)
+    try:
+        return await run(client, arguments)
+    except pydantic.ValidationError as e:
+        # A request model (*Form, *Filter) rejected a value the schema let
+        # through (a sort field Kimai does not take, an ambiguous duration).
+        # Say which and why, without pydantic's type codes and links. A
+        # response model failing means Kimai sent something unexpected; that
+        # is not the caller's input and propagates unchanged.
+        if not e.title.endswith(("Form", "Filter")):
+            raise
+        raise ToolError(_format_input_error(e)) from None
+
+
+def _format_input_error(error: "pydantic.ValidationError") -> str:
+    problems = []
+    for detail in error.errors():
+        field = ".".join(str(part) for part in detail["loc"]) or "input"
+        problems.append(f"'{field}': {detail['msg'].removeprefix('Value error, ')}")
+    return "Error: invalid value for " + "; ".join(problems)

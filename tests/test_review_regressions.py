@@ -353,3 +353,20 @@ async def test_an_ordinary_entity_response_is_not_mistaken_for_an_error(httpx_mo
         ts = await client.update_timesheet(1, TimesheetEditForm(description="x"))
 
     assert ts.id == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_input_value_is_a_readable_tool_error():
+    """A value the schema allows but a request model rejects (here a sort field
+    Kimai's API does not accept) must say which field and why, not dump
+    pydantic's report with type codes and documentation links."""
+    client = AsyncMock(spec=KimaiClient)
+    with pytest.raises(ToolError) as excinfo:
+        await dispatch_tool(client, "entity", {
+            "type": "project", "action": "list", "filters": {"order_by": "orderNumber"},
+        })
+    message = str(excinfo.value)
+    assert "'order_by'" in message
+    assert "'id', 'name' or 'customer'" in message
+    assert "errors.pydantic.dev" not in message
+    client.get_projects.assert_not_called()
