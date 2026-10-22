@@ -52,7 +52,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = "kimai/kimai"
-DEFAULT_REF = "2.66.0"
+DEFAULT_REF = "2.70.2"
 CACHE = Path(__file__).parent / ".kimai-api-cache"
 CLIENT_SOURCE = Path(__file__).parent.parent / "src" / "kimai_mcp" / "client.py"
 

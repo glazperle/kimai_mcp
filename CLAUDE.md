@@ -162,7 +162,7 @@ The project requires `mcp>=2.0,<3` and therefore speaks protocol revision **2026
 - Protocol model fields are snake_case (`input_schema`, `is_error`). camelCase still works when *constructing* a model (the SDK sets `alias_generator=to_camel`), but **attribute access** must use the snake_case name.
 - Raising an exception no longer produces `is_error=true` automatically. Both transports catch `ToolError`/`KimaiAPIError`/`Exception` and return `error_result(...)` explicitly.
 - `StreamableHTTPSessionManager` and the whole `mcp.server.auth.*` surface used by `oauth.py` are unchanged from 1.x, so the OAuth server needed no porting. `StreamableHTTPSessionManager` did gain `session_idle_timeout`, which defaults to `None` (sessions are then never reclaimed) and is set to 30 minutes here.
-- **SDK 2.x no longer validates tool arguments server-side.** 1.x ran `jsonschema.validate(arguments, tool.inputSchema)` before the handler and answered `Input validation error: ...`; in 2.x jsonschema is client-side only. `tools/registry.py::validate_arguments` restores it, which matters because the entity `data` sub-schemas are `additionalProperties: false` while the Pydantic forms ignore extras, so an unvalidated typo would otherwise become an empty PATCH reported as success.
+- **SDK 2.x no longer validates tool arguments server-side.** 1.x ran `jsonschema.validate(arguments, tool.inputSchema)` before the handler and answered `Input validation error: ...`; in 2.x jsonschema is client-side only. `tools/registry.py::validate_arguments` restores it, which matters because the Pydantic forms ignore extras, so an unvalidated typo would otherwise become an empty PATCH reported as success. The registry also **closes every input object** of every tool (`_build` -> `_close`: `additionalProperties: false` on the root and everything below `properties`/`items`, never on an `if`/`then`/`else` schema itself), so a misspelt filter or field is an input error, not a silently ignored key. The validator is built once per schema (`_validator`, cached): `jsonschema.validate()` re-checks the schema against the meta-schema on every call, about 70 ms for the entity tool. A `ValidationError` of a request model (`*Form`, `*Filter`) is turned into a `ToolError` naming the field.
 - `tests/test_mcp_protocol.py` drives both transports through a real in-memory `Client` session (handshake, `tools/list`, `tools/call`, `is_error`). Run it after any SDK bump: it is the test that catches a removed or renamed SDK API, which a handler-level unit test cannot (see issue #21).
 
 ### Authentication Flow
@@ -190,7 +190,7 @@ Each consolidated tool follows this structure:
 - **Schema sources** (what the audit script below reads): `config/packages/nelmio_api_doc.yaml` and `src/Entity/*.php` in [kimai/kimai](https://github.com/kimai/kimai) at the matching tag.
 - A locally exported `api_documentation.json` may exist outside the repository; treat any such export as a snapshot of the version it was taken from, not as current truth. `api_documentation.json` is gitignored.
 
-Tracked against **Kimai 2.66.0** (2026-09-05). The server keeps working against older instances; features that need a specific version are marked as such in the tool schemas.
+Tracked against **Kimai 2.70.2** (2026-10-21). The server keeps working against older instances; features that need a specific version are marked as such in the tool schemas.
 
 ### Checking API compliance
 
@@ -208,7 +208,7 @@ Every hop between Kimai and the text a tool returns is checked mechanically. A f
 ```bash
 # 1. Offline: client + models vs. Kimai's own sources (needs the gh CLI only;
 #    --source PATH reads a local checkout instead)
-python scripts/audit_api_models.py 2.66.0
+python scripts/audit_api_models.py 2.70.2
 
 # 2. Online: what a real instance actually sends. GET requests only, safe
 #    against production. Credentials come from the environment, never the repo.
@@ -250,6 +250,20 @@ The `entity` tool now supports both `lock_month` and `unlock_month` actions for 
 - **`comment` tool** (12th tool, `tools/comment_tool.py`): Comments on projects and customers - actions `list`, `create`, `delete`, `pin` (toggle). Requires **Kimai 2.57+**. Markdown is supported in messages; pinned comments are listed first.
 - **`meta` tool supports `invoice`** (requires **Kimai 2.56+**). Special case: invoice meta fields are sent in a SINGLE request containing all fields (`update_invoice_meta`); all other entity types still use one request per field.
 - **OAuth 2.1** for the streamable HTTP server (see `oauth.py` and the server section above).
+
+### Kimai 2.67 - 2.70
+
+Source: the release notes of 2.67.0 to 2.70.2 and a diff of `src/API`, `src/Entity`, `src/Form` and `config/packages/nelmio_api_doc.yaml` between the tags. `scripts/audit_api_models.py 2.70.2` is clean. Server-side duration parsing is unchanged: the 2.68 "integers below 10 are hours, others minutes" rule is a frontend `parse_mode` of `DurationType` and does not touch the API.
+
+| Kimai | Change | Implementation |
+|-------|--------|----------------|
+| 2.68 | `PATCH /api/invoices/{id}` (`InvoiceApiEditForm`: `comment`, `status`, `paymentDate` as `Y-m-d`, `metaFields`; permission `edit_invoice`) ([#6184](https://github.com/kimai/kimai/pull/6184)) | `entity type=invoice action=update`, `client.update_invoice()`, `InvoiceEditForm`. Meta fields stay with the `meta` tool (`/custom-fields`) |
+| 2.68 | Invoice `paymentDate` is serialized as `Y-m-d` instead of a date-time (BC) | `Invoice.payment_date` is a `date`; a date-time from older Kimai is cut to its date part |
+| 2.68 | `systemAccount` and `requiresPasswordReset` are on the user PATCH form only with the `roles` permission (was `password`) | Conditional-fields table below; field notes in the user `data` schema |
+| 2.68 | Timesheet PATCH puts `user` on the form only with `edit_other_timesheet` (was `edit` on the record) | Conditional-fields table below |
+| 2.68 | `GET /api/teams/{id}` checks `view` on that team | No code change; a 403 carries the permission hint |
+| 2.67 | `GET /api/timesheets/recent` validates `size`; 2.70 caps it at 100 | `timer action=recent` (which now reads this endpoint) declares `maximum: 100` |
+| 2.70 | Preferences whose normalized name starts with `__` (internal ones) are refused with 403 via the API | No code change |
 
 ### Kimai 2.66 (implemented in v2.18.0)
 
@@ -377,7 +391,6 @@ The write path is `DurationType` → `DurationStringToSecondsTransformer` → `D
 - `order_by` is a strict per-type list on the API (`orderBy: 'id|name|customer'` for projects); the UI's sort keys (`orderNumber`, `project_locked_until`, ...) answer 400. The filter models type it as a `Literal`, the audit compares those with Kimai, and the `entity` schema text is generated from them
 - The `entity` tool's `filters` object is shared by all types. A key that does not apply to the requested type is ignored, and the result ends with a `Note: ignored filter(s) ...` line naming it
 - `timesheet action=list` `filters.users` replaces `user_scope`/`user`: Kimai adds `user` to `users[]`, so sending both would mix the current user's records in
-- Kimai 2.70 added `PATCH /api/invoices/{id}` (`InvoiceApiEditForm`); not implemented yet (tracked version is 2.66, and `audit_api_models.py 2.70.2` reports it as the one open route)
 - Every query parameter of the core routes is sendable by the client (audit) and reachable from a tool (`tests/test_filter_coverage.py`), except the `NOT_EXPOSED` / `EXPECTED_UNSENT` entries, each with its reason
 
 ### API Compliance Guidelines
@@ -388,10 +401,10 @@ When modifying tools:
 3. **Method Names**: Ensure client method names match actual API endpoints
 4. **Data Models**: Verify Pydantic models match API schemas with proper aliases
 5. **Parameter Validation**: Check API documentation for supported parameters
-6. **Write schemas are closed**: the customer, project and activity `data` sub-schemas are `additionalProperties: false` and `tools/registry.py::validate_arguments` enforces them, so a field missing from the schema is not merely undocumented: it cannot be sent at all. Adding a field to an `*EditForm` without adding it to the schema leaves it unreachable (this is how `budget`/`timeBudget`/`budgetType` were unwritable before #27)
+6. **Write schemas are closed**: every `data` schema is `additionalProperties: false` and `tools/registry.py::validate_arguments` enforces it, so a field missing from the schema is not merely undocumented: it cannot be sent at all. `tests/test_schema_closure.py` requires each write schema to list exactly the fields of its request model (this is how `budget`/`timeBudget`/`budgetType` were unwritable before #27, and a customer's `color` and a timesheet's `exported` until the test existed). The user, team, tag and invoice schemas are derived from their forms (`_form_data_schema`); customer, project and activity are written by hand for their descriptions and checked by the same test
 7. **Never manufacture a write field.** Kimai builds every API form per token and per instance setting; a field on the wire that is not on the form fails the whole request with `This form should not contain extra fields.` The client drops only `None` (`model_dump(exclude_none=True)`), so a handler default such as `data.get("billable", True)` or a model default such as `= False` is sent on every request. Omitted means "Kimai default", nothing else. `tests/test_write_payloads.py` pins this from both ends: each write action it covers, driven with its minimal input, must produce a payload whose keys are a subset of the caller's keys, and no `*Form` model may have a non-`None` default. Add a case there when you add a write action. PR #29 (`billable=True`) and the punch-mode `begin` were the two instances that motivated it
 
-   Fields Kimai 2.66 only puts on the API form conditionally (from `src/API/*Controller.php`, `src/Form/**`):
+   Fields Kimai 2.70 only puts on the API form conditionally (from `src/API/*Controller.php`, `src/Form/**`):
 
    | Form | Field(s) | Present only when |
    |---|---|---|
@@ -399,7 +412,7 @@ When modifying tools:
    | | `billable` | `edit_billable_own/other_timesheet` |
    | | `fixedRate`, `hourlyRate` | `edit_rate_own/other_timesheet` |
    | | `exported` | `edit_export_own/other_timesheet` |
-   | | `user` | `create_other_timesheet` (create) / `edit` (update) |
+   | | `user` | `create_other_timesheet` (create) / `edit_other_timesheet` (update, 2.68+; `edit` on the record before) |
    | | `break` | Settings > Timesheet > Break time |
    | Customer / Project / Activity | `budget` | `budget_*` permission on that entity |
    | | `timeBudget` | `time_*` permission |
@@ -408,7 +421,7 @@ When modifying tools:
    | Activity | `project` | create, or the activity is not global |
    | Customer | `address` (legacy single line) | that customer already has a non-empty address, so never on create; use `addressLine1`-`3`, `postCode`, `city` |
    | User create | `roles` | `roles` permission |
-   | User update | `roles`; `enabled` (not on self); `language`, `locale`, `timezone` (`preferences`); `supervisor`; `systemAccount`, `requiresPasswordReset` (`password`) | respective permission |
+   | User update | `roles`; `enabled` (not on self); `language`, `locale`, `timezone` (`preferences`); `supervisor`; `systemAccount`, `requiresPasswordReset` (`roles` since 2.68, `password` before) | respective permission |
    | User create/update | `avatar` | the instance sets `theme.avatar_url` (**off by default**) |
    | Rates, Teams, Tags, Comments | none | always the full form |
 

@@ -34,6 +34,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controllers and the client source: wrong response model per route, query parameters the client
   cannot send, fixed-value parameters typed with a different value set, deprecated and unused routes.
   It resolves traits and virtual properties, which it used to skip.
+- **`entity type=invoice action=update`** sets status, payment date and comment (Kimai 2.68+,
+  permission `edit_invoice`, `PATCH /api/invoices/{id}`).
+
+### Changed
+
+- **Every tool input object is closed** (`additionalProperties: false`), set centrally in the tool
+  registry so it covers every tool. A misspelt key (`filters.projet`, `data.emial`) is now an input
+  validation error naming it; before, it was ignored while the call reported success. User, team, tag
+  and invoice writes got closed `data` schemas derived from their request models.
+  `tests/test_schema_closure.py` checks that every key a handler reads is declared and that each write
+  schema lists exactly its model's fields.
+- **`timer action=recent`** reads Kimai's recent activities (`/timesheets/recent`): the latest record of
+  each customer/project/activity combination, with names, ready for `timer action=restart`. It used to
+  repeat `timesheet action=list` with IDs. `size` is capped at 100, as Kimai 2.67+ does.
+- **Tracked against Kimai 2.70.2** (was 2.66.0). Kimai 2.68 serializes an invoice's `paymentDate` as a
+  date; both forms parse. The conditional form fields changed for the timesheet `user` and the user
+  flags `systemAccount` / `requiresPasswordReset`; see CLAUDE.md.
+- Argument validation builds the schema validator once per tool instead of on every call
+  (`jsonschema.validate()` re-checked the schema each time, about 70 ms for the entity tool).
 
 ### Fixed
 
@@ -61,6 +80,24 @@ Each of these was data Kimai sent (or a filter it offered) that a tool silently 
   filter models, which the audit checks against Kimai.
 - **`entity action=list` ignored filters silently** when they do not apply to the type (e.g.
   `customer` for activities). The result now ends with a note naming them.
+- **Lookups missed finished projects, hidden activities and disabled users**, for the same reason:
+  `analyze_project_team` answered "No project found" for a finished project, and it and the
+  timesheet statistics showed those records as bare IDs. `analyze_project_team` with
+  `user_scope=team` now lets Kimai filter by the team's users instead of fetching everyone's records.
+
+Other fixes:
+
+- **`timesheet action=batch_export` un-exported records that were exported already.** Kimai's export
+  endpoint toggles the flag; records are now read first and only toggled when not exported yet.
+- **`entity type=user action=update` needed email, language, locale and timezone on every call**, and
+  the last three are only on Kimai's form with the `preferences` permission, so a token without it
+  could not change a user's title at all. A team rename needed the whole member list. Both take
+  just the changed fields now.
+- **A customer's `color` and a timesheet's `exported` could not be written**: the closed schemas did
+  not list them although the request models had them.
+- **An invalid value** (a sort field Kimai does not accept, an ambiguous duration) is reported as
+  "invalid value for 'order_by': ..." instead of pydantic's full report with type codes and links.
+- Batch results said "Exportd" and "Rejectd".
 
 ## [2.18.2] - 2026-10-02
 
