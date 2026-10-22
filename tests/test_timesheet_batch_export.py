@@ -42,3 +42,16 @@ async def test_batch_export_toggles_only_records_that_are_not_exported():
     assert "Exported: 1 timesheets" in text
     assert "Already exported, left unchanged: 1" in text
     assert "Failed: 1" in text
+
+
+@pytest.mark.asyncio
+async def test_batch_export_toggles_a_repeated_id_once():
+    """The batch runs concurrently: both reads of a repeated id saw "not exported"
+    and the second toggle undid the first, while the result said "Exported: 2"."""
+    client = AsyncMock(spec=KimaiClient)
+    client.get_timesheet.return_value = _timesheet(5, exported=False)
+
+    content = await dispatch_tool(client, "timesheet", {"action": "batch_export", "ids": [5, 5]})
+
+    assert client.toggle_timesheet_export.await_count == 1
+    assert "Exported: 1 timesheets" in content[0].text

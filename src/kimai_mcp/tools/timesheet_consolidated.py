@@ -325,20 +325,21 @@ def _format_meta_fields(meta_fields: list[dict] | None) -> str | None:
     return ", ".join(parts) if parts else None
 
 
-def _meta_value(meta_fields: list[dict] | None, name: str) -> str:
-    """Value of the meta field ``name`` as a string, '' when missing or empty."""
+def _matches_meta(meta_fields: list[dict] | None, name: str, wanted: str | None) -> bool | None:
+    """Exact, case-insensitive meta match; ``wanted=None`` means "has any value".
+
+    None when the record does not carry the field at all: Kimai serializes
+    only meta fields whose definition is visible, while its search term also
+    matches invisible ones, so such a record cannot be checked here. Names are
+    compared case-insensitively, like Kimai's own search does.
+    """
     for field in meta_fields or []:
-        if field.get("name") == name and field.get("value") is not None:
-            return str(field["value"])
-    return ""
-
-
-def _matches_meta(meta_fields: list[dict] | None, name: str, wanted: str | None) -> bool:
-    """Exact, case-insensitive meta match; ``wanted=None`` means "has any value"."""
-    actual = _meta_value(meta_fields, name)
-    if wanted is None:
-        return actual != ""
-    return actual.casefold() == str(wanted).casefold()
+        if str(field.get("name", "")).casefold() == name.casefold():
+            actual = "" if field.get("value") is None else str(field["value"])
+            if wanted is None:
+                return actual != ""
+            return actual.casefold() == str(wanted).casefold()
+    return None
 
 
 def _meta_search_term(name: str, value: str | None) -> str | None:
@@ -348,16 +349,18 @@ def _meta_search_term(name: str, value: str | None) -> str | None:
     returns ``CA-3760``), which makes the server-side term a pre-filter only;
     the exact comparison happens afterwards in ``_handle_timesheet_list``.
     The term is split on spaces and ``!``, ``*``, ``~`` and ``""`` are operators,
-    so a value that cannot be expressed falls back to ``name:*`` (any value).
-    Returns None when even the name cannot be expressed.
+    and the LIKE pattern is not escaped (a backslash is MySQL's escape
+    character), so such a value falls back to ``name:*`` (any value).
+    Returns None when no term may be sent: the name cannot be expressed, or
+    the value is empty. Kimai turns ``name:""`` into "value IS NULL or no such
+    field", which misses a value cleared to ``''`` (all ``meta_update`` can
+    store), so empty values are matched here only.
     """
-    if not name or any(c.isspace() for c in name) or ":" in name:
+    if not name or any(c.isspace() for c in name) or ":" in name or value == "":
         return None
     if value is None:
         return f"{name}:*"
-    if value == "":
-        return f'{name}:""'
-    if any(c.isspace() for c in value) or value.startswith("!") or value in ("*", "~", '""'):
+    if any(c.isspace() for c in value) or value.startswith("!") or value in ("*", "~", '""') or "\\" in value:
         return f"{name}:*"
     return f"{name}:{value}"
 
@@ -439,18 +442,21 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     requested_page = filters.get("page") or 1
     page_size = min(timesheet_filter.size or 50, MAX_PAGE_SIZE)
     stats_input = None
+    # Statistics cover the whole filter. So does the exact meta match: Kimai
+    # paginates its LIKE pre-filter, so a requested page full of near-misses
+    # would hide the exact matches on later pages. Both fetch everything and
+    # cut the requested page out afterwards.
+    fetch_everything = bool(filters.get("calculate_stats")) or meta_filter is not None
 
-    if filters.get("calculate_stats") and requested_page > 1:
-        # Statistics cover the whole filter: start at page 1 rather than
-        # fetching the requested page first and throwing it away.
+    if fetch_everything and requested_page > 1:
+        # Start at page 1 rather than fetching the requested page first and
+        # throwing it away.
         timesheet_filter.page = 1
-        timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
-    else:
-        timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
+    timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
 
-    # Auto-fetch remaining pages if calculate_stats is enabled and the client
-    # did not already fetch everything (e.g. manual pagination was used).
-    if filters.get("calculate_stats") and not fetched_all:
+    # Auto-fetch remaining pages if the client did not already fetch
+    # everything (manual pagination, or no filter that triggers it).
+    if fetch_everything and not fetched_all:
         all_timesheets = list(timesheets)
         page = (last_page or 1) + 1
         while len(all_timesheets) < MAX_STATS_RESULTS:
@@ -473,23 +479,39 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         timesheets = all_timesheets
 
     # The server-side term is a substring pre-filter (see _meta_search_term);
-    # narrow it down to exact matches here, after pagination and before the
-    # statistics see the records.
+    # narrow it down to exact matches here, before the statistics see the
+    # records and before the requested page is cut out.
+    meta_note = ""
     if meta_filter is not None:
-        timesheets = [
-            ts for ts in timesheets
-            if _matches_meta(ts.meta_fields, meta_filter["name"], meta_filter.get("value"))
-        ]
+        name, wanted = meta_filter["name"], meta_filter.get("value")
+        checked = [(ts, _matches_meta(ts.meta_fields, name, wanted)) for ts in timesheets]
+        if checked and all(match is None for _, match in checked):
+            # No record carries the field: its definition is not visible, so
+            # only Kimai's own (substring) match is available.
+            if _meta_search_term(name, wanted) in (None, f"{name}:*"):
+                raise ToolError(
+                    f"Error: meta field '{name}' is not in Kimai's API responses (its definition is not "
+                    "visible), so it cannot be matched exactly or checked for an empty value. "
+                    "Search a value instead, or make the field visible in the plugin that defines it."
+                )
+            meta_note = (
+                f"Note: meta field '{name}' is not in Kimai's API responses (definition not visible); "
+                "these are Kimai's substring matches, which may include longer values.\n\n"
+            )
+        else:
+            timesheets = [ts for ts, match in checked if match]
 
-    if filters.get("calculate_stats"):
-        stats_input = timesheets
-        if requested_page > 1:
-            # The listing after the report still shows only the requested page.
+    matched = timesheets
+    total = len(matched)
+    if fetch_everything:
+        stats_input = timesheets if filters.get("calculate_stats") else None
+        if filters.get("page") is not None:
+            # The listing shows only the requested page.
             start = (requested_page - 1) * page_size
             timesheets = timesheets[start:start + page_size]
 
     # Build response
-    found = len(stats_input) if stats_input is not None else len(timesheets)
+    found = total if fetch_everything else len(timesheets)
     if user_scope == "all":
         result = f"Found {found} timesheets for all users\n\n"
     elif user_scope == "specific":
@@ -502,6 +524,24 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     if meta_filter is not None:
         wanted = meta_filter.get("value")
         result += f"Meta filter: {meta_filter['name']}={'<any>' if wanted is None else wanted}\n\n"
+        result += meta_note
+
+    # Without view_other_timesheet Kimai ignores user/users[] and returns the
+    # caller's own records; a header naming the requested users would then
+    # present them as someone else's.
+    requested_users = (
+        set(filters["users"]) if user_scope == "users"
+        else {int(user_filter)} if user_scope == "specific" and str(user_filter).isdigit()
+        else None
+    )
+    if requested_users is not None:
+        foreign = sorted({ts.user for ts in matched if ts.user is not None} - requested_users)
+        if foreign:
+            result += (
+                f"Warning: Kimai returned records of user(s) {', '.join(map(str, foreign))}, not of the "
+                "requested ones. Without the view_other_timesheet permission it ignores the user filter "
+                "and returns the caller's own records.\n\n"
+            )
 
     if not fetched_all:
         result += f"Not all records were returned; fetched records up to page {last_page}\n\n"
@@ -902,9 +942,9 @@ async def _handle_timer_restart(client: KimaiClient, id: int | None) -> list[Tex
 def _describe_timesheet(ts) -> str:
     """One record of a listing, with every field Kimai sent for it.
 
-    ``timesheet list`` and ``timer recent`` get ``TimesheetEntity`` rows, whose
-    relations are ids. ``/timesheets/active`` and ``/favorites/timesheets`` are
-    Expanded schemas, so there the relations are objects and can be named
+    ``timesheet list`` gets ``TimesheetEntity`` rows, whose relations are ids.
+    ``/timesheets/active``, ``/timesheets/recent`` and ``/favorites/timesheets``
+    are Expanded schemas, so there the relations are objects and can be named
     (issue #24). Rates are printed only where Kimai sent them: since 2.66 it
     strips them per record unless the token may view rates.
     """
@@ -1052,7 +1092,11 @@ async def _handle_batch_export(client: KimaiClient, ids: list[int]) -> list[Text
 
     # PATCH /timesheets/{id}/export *toggles* the flag (setExported(!isExported())),
     # so a record that is exported already must be left alone, or "mark as
-    # exported" would un-export it.
+    # exported" would un-export it. Duplicates go first: the batch runs
+    # concurrently, so both reads of a repeated id would see "not exported"
+    # and the second toggle would undo the first.
+    ids = list(dict.fromkeys(ids))
+
     async def export_one(id: int) -> bool:
         if (await client.get_timesheet(id)).exported:
             return False
