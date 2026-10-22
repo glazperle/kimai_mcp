@@ -408,6 +408,32 @@ Then use this Claude Desktop configuration:
 }
 ```
 
+`list` and `get` print the non-empty timesheet meta fields of each entry (e.g. `Meta: issue_tracker_id=CA-376`).
+Kimai only serializes meta fields whose definition is marked visible (`setIsVisible(true)` in the plugin).
+
+#### List Timesheets by Meta Field
+```json
+{
+  "tool": "timesheet",
+  "parameters": {
+    "action": "list",
+    "filters": {
+      "user_scope": "all",
+      "begin": "2026-10-01T00:00:00",
+      "meta": {"name": "issue_tracker_id", "value": "CA-376"}
+    }
+  }
+}
+```
+
+The value must match exactly (case-insensitive). Omit `value` to get every entry where the field is set,
+or pass `"value": ""` for entries where it is not. The filter is sent to Kimai as the search term
+`issue_tracker_id:CA-376`, so it is applied before pagination; because Kimai matches that term as a
+substring (`CA-376` also finds `CA-3760`), the MCP server keeps only exact matches afterwards. A value
+containing spaces, or starting with `!`, cannot be expressed in Kimai's term syntax: Kimai then returns every
+entry that has the field set and the MCP server filters that result, so with manual pagination (`page`)
+a page can hold fewer entries than `size`.
+
 #### Create a Timesheet Entry
 ```json
 {

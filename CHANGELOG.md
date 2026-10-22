@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Timesheet meta fields are readable.** `timesheet action=list` and `action=get` now print the
+  non-empty meta fields of each entry (`Meta: issue_tracker_id=CA-376`). They could be written with
+  `meta_update` but never read back, although Kimai has always sent them: `metaFields` is in the
+  `Timesheet` serializer group, which `GET /timesheets` uses with and without `full=true` and
+  `GET /timesheets/{id}` uses too, so this costs no extra request. Kimai only serializes fields whose
+  definition is visible, and it sends a visible field without a value as `null`; those are skipped.
+- **`filters.meta` on `timesheet action=list`**, e.g. `{name: "issue_tracker_id", value: "CA-376"}`.
+  It is sent as Kimai's `name:value` search term, so Kimai filters before paginating, and then matched
+  exactly (case-insensitive) on the MCP side, because Kimai compares that term with `LIKE '%value%'`
+  and `CA-376` would otherwise also return `CA-3760`. Without `value` it matches entries where the field
+  is set; `value: ""` matches entries where it is not. A value with spaces or a leading `!` cannot be
+  expressed as a term and falls back to `name:*` plus the exact match on the MCP side. The plain
+  `filters.term` still searches the description only, as before.
+
 ## [2.18.2] - 2026-10-02
 
 ### Fixed

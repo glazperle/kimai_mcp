@@ -91,6 +91,19 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                         "page": {"type": "integer", "default": 1, "description": "Page number for pagination. Default is 1."},
                         "size": {"type": "integer", "default": 50, "description": "Number of records per page. Default is 50."},
                         "term": {"type": "string"},
+                        "meta": {
+                            "type": "object",
+                            "description": (
+                                "Only return entries whose timesheet meta field 'name' equals 'value' "
+                                "(exact match, case-insensitive), e.g. {name: 'issue_tracker_id', value: 'CA-376'}. "
+                                "Omit 'value' to match any non-empty value; value '' matches entries without one."
+                            ),
+                            "required": ["name"],
+                            "properties": {
+                                "name": {"type": "string"},
+                                "value": {"type": "string"}
+                            }
+                        },
                         "include_user_list": {"type": "boolean", "default": False},
                         "calculate_stats": {"type": "boolean", "default": False, "description": "Calculate statistics from the results"},
                         "stats_format": {"type": "string", "enum": ["summary", "detailed", "json"], "default": "summary"},
@@ -265,6 +278,57 @@ async def handle_timer(client: KimaiClient, **params) -> list[TextContent]:
         )
 
 
+def _format_meta_fields(meta_fields: list[dict] | None) -> str | None:
+    """Render the non-empty meta fields as ``name=value, ...`` (None if there are none).
+
+    Kimai serializes every *visible* meta field definition, so an entry without a
+    value still carries ``{"name": ..., "value": null}``; those are skipped.
+    """
+    parts = [
+        f"{field.get('name')}={field.get('value')}"
+        for field in meta_fields or []
+        if field.get("value") not in (None, "")
+    ]
+    return ", ".join(parts) if parts else None
+
+
+def _meta_value(meta_fields: list[dict] | None, name: str) -> str:
+    """Value of the meta field ``name`` as a string, '' when missing or empty."""
+    for field in meta_fields or []:
+        if field.get("name") == name and field.get("value") is not None:
+            return str(field["value"])
+    return ""
+
+
+def _matches_meta(meta_fields: list[dict] | None, name: str, wanted: str | None) -> bool:
+    """Exact, case-insensitive meta match; ``wanted=None`` means "has any value"."""
+    actual = _meta_value(meta_fields, name)
+    if wanted is None:
+        return actual != ""
+    return actual.casefold() == str(wanted).casefold()
+
+
+def _meta_search_term(name: str, value: str | None) -> str | None:
+    """Translate a meta filter into Kimai's ``name:value`` search term syntax.
+
+    Kimai matches ``name:value`` with ``LIKE '%value%'`` (so ``CA-376`` also
+    returns ``CA-3760``), which makes the server-side term a pre-filter only;
+    the exact comparison happens afterwards in ``_handle_timesheet_list``.
+    The term is split on spaces and ``!``, ``*``, ``~`` and ``""`` are operators,
+    so a value that cannot be expressed falls back to ``name:*`` (any value).
+    Returns None when even the name cannot be expressed.
+    """
+    if not name or any(c.isspace() for c in name) or ":" in name:
+        return None
+    if value is None:
+        return f"{name}:*"
+    if value == "":
+        return f'{name}:""'
+    if any(c.isspace() for c in value) or value.startswith("!") or value in ("*", "~", '""'):
+        return f"{name}:*"
+    return f"{name}:{value}"
+
+
 # Timesheet action handlers
 async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[TextContent]:
     """Handle timesheet list action."""
@@ -295,7 +359,17 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         and begin_datetime.time() == datetime.min.time()
     ):
         end_datetime = begin_datetime + timedelta(days=1)
-    
+
+    meta_filter = filters.get("meta")
+    term = filters.get("term")
+    if meta_filter is not None:
+        if not isinstance(meta_filter, dict) or not meta_filter.get("name"):
+            raise ToolError("Error: 'meta' filter requires a 'name', e.g. {name: 'issue_tracker_id', value: 'CA-376'}")
+        meta_term = _meta_search_term(meta_filter["name"], meta_filter.get("value"))
+        if meta_term:
+            # Kimai ANDs the space-separated parts of a search term.
+            term = f"{term} {meta_term}" if term else meta_term
+
     # Build filter
     timesheet_filter = TimesheetFilter(
         user=user_filter,
@@ -311,7 +385,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         # otherwise the client's auto-pagination is disabled.
         page=filters.get("page"),
         size=filters.get("size", 50),
-        term=filters.get("term")
+        term=term
     )
 
     requested_page = filters.get("page") or 1
@@ -350,13 +424,22 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             page += 1
         timesheets = all_timesheets
 
+    # The server-side term is a substring pre-filter (see _meta_search_term);
+    # narrow it down to exact matches here, after pagination and before the
+    # statistics see the records.
+    if meta_filter is not None:
+        timesheets = [
+            ts for ts in timesheets
+            if _matches_meta(ts.meta_fields, meta_filter["name"], meta_filter.get("value"))
+        ]
+
     if filters.get("calculate_stats"):
         stats_input = timesheets
         if requested_page > 1:
             # The listing after the report still shows only the requested page.
             start = (requested_page - 1) * page_size
             timesheets = timesheets[start:start + page_size]
-    
+
     # Build response
     found = len(stats_input) if stats_input is not None else len(timesheets)
     if user_scope == "all":
@@ -365,6 +448,10 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         result = f"Found {found} timesheets for user {user_filter}\n\n"
     else:
         result = f"Found {found} timesheets for current user\n\n"
+
+    if meta_filter is not None:
+        wanted = meta_filter.get("value")
+        result += f"Meta filter: {meta_filter['name']}={'<any>' if wanted is None else wanted}\n\n"
 
     if not fetched_all:
         result += f"Not all records were returned; fetched records up to page {last_page}\n\n"
@@ -446,8 +533,11 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             result += f"  Description: {ts.description}\n"
         if ts.tags:
             result += f"  Tags: {', '.join(ts.tags)}\n"
+        meta = _format_meta_fields(ts.meta_fields)
+        if meta:
+            result += f"  Meta: {meta}\n"
         result += "\n"
-    
+
     return [TextContent(type="text", text=result)]
 
 
@@ -495,6 +585,9 @@ async def _handle_timesheet_get(client: KimaiClient, id: int | None) -> list[Tex
         result += f"Hourly Rate: {ts.hourly_rate}\n"
     if ts.break_duration:
         result += f"Break: {ts.break_duration // 60} minutes\n"
+    meta = _format_meta_fields(ts.meta_fields)
+    if meta:
+        result += f"Meta: {meta}\n"
 
     return [TextContent(type="text", text=result)]
 
