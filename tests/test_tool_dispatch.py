@@ -233,6 +233,7 @@ def make_mock_client() -> AsyncMock:
     client.get_invoices.return_value = [invoice]
     client.get_invoice.return_value = invoice
     client.update_invoice_meta.return_value = invoice
+    client.update_invoice.return_value = invoice  # Kimai 2.68+
     client.delete_invoice.return_value = None  # Kimai 2.66+
 
     # Favorites (Kimai 2.66+): TimesheetCollectionExpanded like /timesheets/active
@@ -304,7 +305,6 @@ ENTITY_ERROR_CASES = {
     ("tag", "get"),
     ("tag", "update"),
     ("invoice", "create"),
-    ("invoice", "update"),
     ("holiday", "get"),
     ("holiday", "create"),
     ("holiday", "update"),
@@ -350,7 +350,7 @@ ENTITY_UPDATE_DATA = {
     },
     "team": {"name": "Updated Team", "members": [{"user": 1, "teamlead": True}]},
     "tag": {"name": "irrelevant"},
-    "invoice": {"name": "irrelevant"},
+    "invoice": {"status": "paid", "paymentDate": "2026-10-20"},  # Kimai 2.68+
     "holiday": {"name": "irrelevant"},
 }
 

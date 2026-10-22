@@ -68,9 +68,46 @@ _REGISTRY = {
 }
 
 
+def _close(schema: dict) -> None:
+    """Set ``additionalProperties: false`` on every input object, in place.
+
+    Reaches the root, everything below ``properties`` and ``items``, and the
+    objects a conditional branch declares under its ``properties``, but never
+    an ``if``/``then``/``else`` schema itself: a closed ``if`` would stop
+    matching, a closed ``then`` would reject every key it does not repeat.
+    An explicit ``additionalProperties`` (the entity ``data`` object, closed
+    per type by its branches) is left as it is.
+    """
+    if "properties" in schema:
+        schema.setdefault("additionalProperties", False)
+        for sub in schema["properties"].values():
+            if isinstance(sub, dict):
+                _close(sub)
+    if isinstance(schema.get("items"), dict):
+        _close(schema["items"])
+    for branch in schema.get("allOf", []):
+        for part in ("then", "else"):
+            for sub in branch.get(part, {}).get("properties", {}).values():
+                if isinstance(sub, dict):
+                    _close(sub)
+
+
+def _build(factory) -> Tool:
+    """A tool definition as advertised and validated: every input object closed.
+
+    SDK 2.x validates nothing server-side, and the Pydantic forms ignore
+    unknown keys, so an open object turns a misspelt key into a silently
+    ignored one while the call reports success. Closing them centrally covers
+    every tool, including the next one.
+    """
+    tool = factory()
+    _close(tool.input_schema)
+    return tool
+
+
 def all_tools() -> list[Tool]:
     """Return the full list of Tool definitions, in advertised order."""
-    return [factory() for factory, _ in _REGISTRY.values()]
+    return [_build(factory) for factory, _ in _REGISTRY.values()]
 
 
 def tool_names() -> list[str]:
@@ -126,5 +163,5 @@ async def dispatch_tool(
         )
     factory, run = entry
     arguments = arguments or {}
-    validate_arguments(factory(), arguments)
+    validate_arguments(_build(factory), arguments)
     return await run(client, arguments)

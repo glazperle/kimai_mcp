@@ -529,10 +529,15 @@ class TeamMember(KimaiModel):
 
 
 class TeamEditForm(KimaiModel):
-    """Form for creating/editing teams."""
-    name: str
+    """Form for creating/editing teams.
+
+    ``name`` and ``members`` are needed to create a team (the handler checks
+    that); on update Kimai keeps what is not sent, and ``members`` replaces the
+    whole member list.
+    """
+    name: str | None = None
     color: str | None = None
-    members: list[dict[str, Any]]  # List of {user: int, teamlead: bool}
+    members: list[dict[str, Any]] | None = None  # List of {user: int, teamlead: bool}
 
 
 class Team(KimaiModel):
@@ -575,6 +580,16 @@ class TagFilter(KimaiModel):
 
 # Invoice models
 
+def _date_part(value: Any) -> Any:
+    """Kimai < 2.68 serializes ``paymentDate`` as a date-time, 2.68+ as ``Y-m-d``."""
+    if isinstance(value, str) and len(value) > 10 and value[10] == "T":
+        return value[:10]
+    return value
+
+
+PaymentDate = Annotated[date | None, BeforeValidator(_date_part)]
+
+
 class Invoice(KimaiModel):
     """Invoice model."""
     id: int | None = None
@@ -589,10 +604,20 @@ class Invoice(KimaiModel):
     due_days: int = Field(30, alias="dueDays")
     vat: float = 0.0
     status: str = "new"
-    payment_date: datetime | None = Field(None, alias="paymentDate")
+    payment_date: PaymentDate = Field(None, alias="paymentDate")
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
     overdue: bool | None = None  # Whether the invoice is overdue
     invoice_filename: str | None = Field(None, alias="invoiceFilename")
+
+
+class InvoiceEditForm(KimaiModel):
+    """PATCH /api/invoices/{id} (Kimai 2.68+, ``InvoiceApiEditForm``).
+
+    Meta fields go through the ``meta`` tool (``/invoices/{id}/custom-fields``).
+    """
+    comment: str | None = None
+    status: InvoiceStatus | None = None
+    payment_date: str | None = Field(None, alias="paymentDate")  # YYYY-MM-DD
 
 
 class InvoiceFilter(KimaiModel):
@@ -682,16 +707,22 @@ class UserPreference(KimaiModel):
 
 
 class UserEditForm(KimaiModel):
-    """Form for updating users."""
+    """Form for updating users (PATCH: Kimai keeps every field not sent).
+
+    Nothing is required: ``language``/``locale``/``timezone`` are only on
+    Kimai's form when the token holds the ``preferences`` permission for that
+    user, so requiring them made a plain title change impossible for a token
+    without it, and needlessly verbose for every other one.
+    """
     alias: str | None = None
     title: str | None = None
     account_number: str | None = Field(None, alias="accountNumber")
     avatar: str | None = None
     color: str | None = None
-    email: str
-    language: str
-    locale: str
-    timezone: str
+    email: str | None = None
+    language: str | None = None
+    locale: str | None = None
+    timezone: str | None = None
     supervisor: int | None = None
     roles: list[str] | None = None
     enabled: bool | None = None

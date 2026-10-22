@@ -24,6 +24,7 @@ from .models import (
     CustomerExtended,
     CustomerFilter,
     Invoice,
+    InvoiceEditForm,
     InvoiceFilter,
     MetaFieldForm,
     Plugin,
@@ -1121,6 +1122,12 @@ class KimaiClient:
     async def get_invoice(self, invoice_id: int) -> Invoice:
         """Get a specific invoice by ID."""
         data = await self._request("GET", f"/invoices/{invoice_id}")
+        return Invoice(**data)
+
+    async def update_invoice(self, invoice_id: int, invoice: InvoiceEditForm) -> Invoice:
+        """Update status, payment date or comment of an invoice (Kimai 2.68+, permission edit_invoice)."""
+        payload = invoice.model_dump(exclude_none=True, by_alias=True)
+        data = await self._request("PATCH", f"/invoices/{invoice_id}", json=payload)
         return Invoice(**data)
 
     async def delete_invoice(self, invoice_id: int) -> None:

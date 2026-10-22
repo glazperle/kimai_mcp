@@ -280,6 +280,7 @@ WRITE_FORMS = {
     models.UserEditForm: "entity get user",
     models.TeamEditForm: "entity get team",
     models.TagEditForm: "entity list tag",
+    models.InvoiceEditForm: "entity get invoice",
     models.RateForm: "rate list customer",
     models.CommentForm: "comment list project",
     models.AbsenceForm: "absence list",

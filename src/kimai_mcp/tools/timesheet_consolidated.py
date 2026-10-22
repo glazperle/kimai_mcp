@@ -157,6 +157,13 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                         },
                         "fixedRate": {"type": "number"},
                         "hourlyRate": {"type": "number"},
+                        "exported": {
+                            "type": "boolean",
+                            "description": (
+                                "Export flag. Only send this when the token has edit_export_own_timesheet "
+                                "(or edit_export_other_timesheet); otherwise Kimai rejects the request."
+                            )
+                        },
                         "break": {
                             "type": ["integer", "string"],
                             "description": (
@@ -663,6 +670,7 @@ async def _handle_timesheet_create(client: KimaiClient, data: dict) -> list[Text
         billable=data.get("billable"),
         fixedRate=data.get("fixedRate"),
         hourlyRate=data.get("hourlyRate"),
+        exported=data.get("exported"),
         break_duration=data.get("break")
     )
 

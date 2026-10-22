@@ -1,7 +1,8 @@
 """Consolidated Entity Manager tool for all CRUD operations."""
 import builtins
 import logging
-from typing import get_args
+from types import UnionType
+from typing import Annotated, Literal, Union, get_args, get_origin
 
 from mcp.types import TextContent, Tool
 
@@ -14,6 +15,7 @@ from ..models import (
     CustomerEditForm,
     CustomerFilter,
     CustomerOrderBy,
+    InvoiceEditForm,
     InvoiceFilter,
     InvoiceStatus,
     ProjectEditForm,
@@ -94,6 +96,98 @@ def _order_by_description() -> str:
     return f"Sort field. Allowed per type - {values}."
 
 
+def _json_type(annotation) -> dict:
+    """JSON schema for a form field annotation (Optional and Annotated unwrapped)."""
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _json_type(get_args(annotation)[0])
+    if origin in (Union, UnionType):
+        return _json_type(next(a for a in get_args(annotation) if a is not type(None)))
+    if origin is Literal:
+        return {"type": "string", "enum": list(get_args(annotation))}
+    if origin is list:
+        return {"type": "array", "items": _json_type(get_args(annotation)[0])}
+    simple = {bool: "boolean", int: "integer", float: "number", str: "string"}
+    return {"type": simple[annotation]} if annotation in simple else {"type": "object"}
+
+
+def _form_data_schema(form, description: str, notes: dict | None = None, override: dict | None = None,
+                      required: bool = False) -> dict:
+    """The closed ``data`` object of a create/update branch, derived from its form model.
+
+    Derived rather than written by hand, so the schema cannot lack a field the
+    request model sends, or offer one it drops. ``notes`` adds descriptions,
+    ``override`` replaces a field's schema; ``required`` takes the model's
+    required fields over.
+    """
+    properties = {}
+    for name, info in form.model_fields.items():
+        alias = info.alias or name
+        prop = dict((override or {}).get(alias) or _json_type(info.annotation))
+        if notes and alias in notes:
+            prop["description"] = notes[alias]
+        properties[alias] = prop
+    schema = {"type": "object", "description": description, "properties": properties, "additionalProperties": False}
+    if required:
+        schema["required"] = [info.alias or name for name, info in form.model_fields.items() if info.is_required()]
+    return schema
+
+
+def _data_branch(entity: str, actions: list[str], data: dict) -> dict:
+    return {
+        "if": {"properties": {"type": {"const": entity}, "action": {"enum": actions}}},
+        "then": {"properties": {"data": data}, "required": ["data"]},
+    }
+
+
+_USER_NOTES = {
+    "language": "Needs the 'preferences' permission for the user on update.",
+    "locale": "Needs the 'preferences' permission for the user on update.",
+    "timezone": "e.g. Europe/Berlin. Needs the 'preferences' permission for the user on update.",
+    "supervisor": "User ID of the supervisor; needs the 'supervisor' permission.",
+    "roles": "e.g. ROLE_USER, ROLE_TEAMLEAD, ROLE_ADMIN, ROLE_SUPER_ADMIN; needs the 'roles' permission.",
+    "enabled": "Not settable on your own account.",
+    "systemAccount": "Needs the 'roles' permission (Kimai 2.68+; 'password' before).",
+    "requiresPasswordReset": "Needs the 'roles' permission (Kimai 2.68+; 'password' before).",
+    "avatar": "URL; only accepted when the instance enables avatars (theme.avatar_url).",
+    "plainPassword": "Initial password.",
+}
+
+
+def _user_branches() -> list[dict]:
+    return [
+        _data_branch("user", ["create"], _form_data_schema(
+            UserCreateForm, "Fields of a new user.", _USER_NOTES, required=True)),
+        _data_branch("user", ["update"], _form_data_schema(
+            UserEditForm, "Fields to change; Kimai keeps everything not sent.", _USER_NOTES)),
+    ]
+
+
+def _team_tag_invoice_branches() -> list[dict]:
+    members = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {"user": {"type": "integer"}, "teamlead": {"type": "boolean"}},
+            "required": ["user"],
+        },
+        "description": (
+            "Team members as {user: ID, teamlead: bool}; required to create a team. On update it "
+            "replaces the whole member list, use team_access add_member/remove_member to change one."
+        ),
+    }
+    return [
+        _data_branch("team", ["create", "update"], _form_data_schema(
+            TeamEditForm, "Team fields; name and members are needed to create one.",
+            override={"members": members})),
+        _data_branch("tag", ["create"], _form_data_schema(TagEditForm, "Tag fields.")),
+        _data_branch("invoice", ["update"], _form_data_schema(
+            InvoiceEditForm,
+            "Invoice fields to change (Kimai 2.68+, permission edit_invoice). Meta fields: use the meta tool.",
+            {"paymentDate": "Date of the payment, YYYY-MM-DD.", "comment": "Invoice description."})),
+    ]
+
+
 def _meta_fields_schema(entity: str) -> dict:
     return {
         "type": "array",
@@ -138,7 +232,7 @@ COMMON TASKS:
 - Lock timesheet month: action=lock_month, type=user, id=USER_ID, month="2024-12-01"
 - Create project: action=create, type=project, data={name:"...", customer:ID}
 - Lock a project's past: action=update, type=project, id=ID, data={lockedUntil:"2026-08-31T00:00:00"} (Kimai 2.66+)
-- Invoices: list/get/delete (delete needs Kimai 2.66+ and delete_invoice); create/update are not available via the API
+- Invoices: list/get; update status, payment date, comment (Kimai 2.68+, edit_invoice); delete (2.66+, delete_invoice). Invoices are created in Kimai's UI
 
 USER PREFERENCES (action=set_preferences, type=user only):
   holidays (vacation days), hours_per_week, work_contract_type, work_monday..work_sunday""",
@@ -396,6 +490,10 @@ OTHER:
                                         "format": "uri",
                                         "description": "Customer's website URL"
                                     },
+                                    "color": {
+                                        "type": "string",
+                                        "description": "The assigned display color for the customer in HTML hex format (e.g., #dd1d00). If left empty, a color might be auto-calculated."
+                                    },
                                     "timezone": {
                                         "type": "string",
                                         "maxLength": 64,
@@ -588,6 +686,8 @@ OTHER:
                         "required": ["data"]
                     },
                 },
+                *_user_branches(),
+                *_team_tag_invoice_branches(),
                 {
                     "if": {
                         "properties": {
@@ -1456,6 +1556,9 @@ class TeamEntityHandler(BaseEntityHandler):
         return [TextContent(type="text", text=result)]
 
     async def create(self, data: dict) -> builtins.list[TextContent]:
+        missing = [field for field in ("name", "members") if not data.get(field)]
+        if missing:
+            raise ToolError(f"Error: Missing required team fields: {', '.join(missing)}")
         form = TeamEditForm(**data)
         team = await self.client.create_team(form)
         return [TextContent(
@@ -1582,9 +1685,10 @@ class InvoiceEntityHandler(BaseEntityHandler):
         )
 
     async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
-        raise ToolError(
-            "Error: Invoice updates are not supported through this API."
-        )
+        # PATCH /api/invoices/{id} exists since Kimai 2.68 (#6184); older
+        # instances answer 404/405.
+        invoice = await self.client.update_invoice(id, InvoiceEditForm(**data))
+        return [TextContent(type="text", text="Updated " + self.serialize_invoice(invoice))]
 
     async def delete(self, id: int) -> builtins.list[TextContent]:
         # DELETE /api/invoices/{id} exists since Kimai 2.66 (#6141) and needs

@@ -104,13 +104,27 @@ for _entity in ("customer", "project", "activity", "user", "team", "tag"):
         id=f"entity-{_entity}-create-minimal",
     ))
 
-for _entity in ("customer", "project", "activity"):
+for _entity in ("customer", "project", "activity", "team"):
     WRITE_CASES.append(pytest.param(
         "entity",
         {"type": _entity, "action": "update", "id": 1, "data": {"name": "Renamed"}},
         f"update_{_entity}",
         id=f"entity-{_entity}-update-one-field",
     ))
+
+# A PATCH needs only the changed field: UserEditForm used to require email,
+# language, locale and timezone, which Kimai only puts on the form with the
+# `preferences` permission. TeamEditForm required the whole member list.
+WRITE_CASES += [
+    pytest.param(
+        "entity", {"type": "user", "action": "update", "id": 1, "data": {"title": "Lead"}},
+        "update_user", id="entity-user-update-one-field",
+    ),
+    pytest.param(
+        "entity", {"type": "invoice", "action": "update", "id": 1, "data": {"status": "paid"}},
+        "update_invoice", id="entity-invoice-update-one-field",
+    ),
+]
 
 
 @pytest.mark.asyncio
