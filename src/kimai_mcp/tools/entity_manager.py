@@ -174,6 +174,11 @@ def _team_tag_invoice_branches() -> list[dict]:
     ]
 
 
+def _shown(value) -> str:
+    """A meta field or preference value as printed: '(empty)' for null and ''."""
+    return "(empty)" if value is None or value == "" else str(value)
+
+
 def _meta_fields_schema(entity: str) -> dict:
     return {
         "type": "array",
@@ -892,7 +897,7 @@ class BaseEntityHandler:
         for mf in meta_fields:
             name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
             value = mf.value if hasattr(mf, 'value') else mf.get('value')
-            result += f"  - {name}: {'(empty)' if value is None else value}\n"
+            result += f"  - {name}: {_shown(value)}\n"
         return result
 
     async def list(self, filters: dict) -> list[TextContent]:
@@ -1281,7 +1286,7 @@ def format_user(user) -> str:
         result += "Preferences:\n"
         for pref in preferences:
             value = pref.get('value')
-            result += f"  - {pref.get('name')}: {'(empty)' if value is None else value}\n"
+            result += f"  - {pref.get('name')}: {_shown(value)}\n"
     return result
 
 
@@ -1496,12 +1501,12 @@ class UserEntityHandler(BaseEntityHandler):
         result = f"Updated preferences for {user.username} (ID: {user.id})\n\n"
         result += "Updated preferences:\n"
         for pref in preferences:
-            result += f"  - {pref['name']}: {pref.get('value', '(empty)')}\n"
+            result += f"  - {pref['name']}: {_shown(pref.get('value'))}\n"
 
         if user.preferences:
             result += "\nAll current preferences:\n"
             for pref in user.preferences:
-                result += f"  - {pref.get('name')}: {pref.get('value', '(empty)')}\n"
+                result += f"  - {pref.get('name')}: {_shown(pref.get('value'))}\n"
 
         return [TextContent(type="text", text=result)]
 

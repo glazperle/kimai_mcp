@@ -61,6 +61,18 @@ def parse_local_datetime(value: str, field: str) -> datetime:
     return parsed
 
 
+def parse_local_end(value: str, field: str) -> datetime:
+    """Like :func:`parse_local_datetime`, but a date alone means the end of that day.
+
+    Kimai keeps records that *started* at or before ``end``, so a date-only
+    end parsed as midnight silently dropped the whole last day of a period.
+    """
+    parsed = parse_local_datetime(value, field)
+    if len(str(value).strip()) == len("YYYY-MM-DD"):
+        parsed = parsed.replace(hour=23, minute=59, second=59)
+    return parsed
+
+
 def parse_utc_datetime(value: str, field: str) -> datetime:
     r"""Parse ``modified_after`` of ``/timesheets``, which Kimai compares in UTC.
 

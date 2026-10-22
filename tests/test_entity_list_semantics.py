@@ -69,3 +69,22 @@ async def test_empty_meta_values_are_not_printed_as_none():
 
     assert "- po: (empty)" in text
     assert "None" not in text
+
+
+@pytest.mark.asyncio
+async def test_set_preferences_prints_empty_values_as_empty():
+    from kimai_mcp.models import UserEntity
+
+    client = AsyncMock(spec=KimaiClient)
+    client.update_user_preferences.return_value = UserEntity(
+        id=5, username="john", enabled=True,
+        preferences=[{"name": "work_start_day", "value": None}, {"name": "holidays", "value": ""}],
+    )
+
+    text = (await dispatch_tool(client, "entity", {
+        "type": "user", "action": "set_preferences", "id": 5, "preferences": [{"name": "holidays", "value": ""}],
+    }))[0].text
+
+    assert "None" not in text
+    assert "- work_start_day: (empty)" in text
+    assert "- holidays: (empty)" in text

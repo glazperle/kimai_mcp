@@ -153,6 +153,24 @@ def _check(validator: Any, arguments: dict[str, Any]) -> None:
 
 
 @functools.cache
+def _declared_names(name: str) -> frozenset[str]:
+    """Every property name a registered tool's schema declares, at any depth."""
+    names: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            names.update(node.get("properties", {}))
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(_REGISTRY[name][0]().input_schema)
+    return frozenset(names)
+
+
+@functools.cache
 def _tool_validator(name: str) -> Any:
     """The validator of a registered tool, its schema built and closed once."""
     factory, _run = _REGISTRY[name]
@@ -182,24 +200,30 @@ async def dispatch_tool(
         # is not the caller's input and propagates unchanged.
         if not e.title.endswith(("Form", "Filter")):
             raise
-        raise ToolError(_format_input_error(e)) from None
+        raise ToolError(_format_input_error(e, _declared_names(name))) from None
 
 
-def _format_input_error(error: "pydantic.ValidationError") -> str:
+def _format_input_error(error: "pydantic.ValidationError", declared: frozenset[str]) -> str:
     """One line per problem, naming the field as the caller sends it.
 
-    A handler that builds a form by Python name (``break_duration=...``)
-    gets that name in pydantic's location; the alias (``break``) is what the
-    tool schema and the caller use for a form. Filters are the other way
-    round: the tools take their Python names (``order_by``), so those stay.
+    Pydantic reports either spelling of a field, depending on how the handler
+    built the model (``break_duration=...`` vs. ``**data``), while each tool
+    schema declares one: the wire name for most forms (``break``), the Python
+    name for filters (``order_by``) and for the rate data (``internal_rate``).
+    The spelling the tool declares is the one reported.
     """
-    model = getattr(models, error.title, None) if error.title.endswith("Form") else None
+    model = getattr(models, error.title, None)
     fields = getattr(model, "model_fields", {})
     problems = []
     for detail in error.errors():
         loc = [str(part) for part in detail["loc"]]
-        if loc and loc[0] in fields:
-            loc[0] = fields[loc[0]].alias or loc[0]
+        info = fields.get(loc[0]) if loc else None
+        if info is None and loc:
+            info = next((f for f in fields.values() if f.alias == loc[0]), None)
+        if info is not None:
+            python_name = next(n for n, f in fields.items() if f is info)
+            spellings = [python_name, info.alias or python_name]
+            loc[0] = next((s for s in spellings if s in declared), loc[0])
         field = ".".join(loc) or "input"
         problems.append(f"'{field}': {detail['msg'].removeprefix('Value error, ')}")
     return "Error: invalid value for " + "; ".join(problems)

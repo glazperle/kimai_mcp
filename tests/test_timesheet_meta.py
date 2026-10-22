@@ -176,39 +176,79 @@ async def test_meta_filter_matches_exactly_across_pages():
     assert "ID: 302 - " in text
 
 
+def _without_row(id: int) -> TimesheetEntity:
+    """A record Kimai sends without the field: saved before the field existed,
+    or saved while it was hidden (Kimai serializes stored, visible rows only)."""
+    return _timesheet(id, None).model_copy(update={"meta_fields": []})
+
+
 @pytest.mark.asyncio
 async def test_meta_filter_compares_names_case_insensitively():
-    client = _mock_client([_timesheet(101, "CA-376")])
+    """With a case-sensitive name comparison every record would look like one
+    without the field and be kept unchecked, CA-3760 included."""
+    client = _mock_client([_timesheet(101, "CA-376"), _timesheet(102, "CA-3760")])
 
     text = (await _handle_timesheet_list(
         client, {"meta": {"name": "Issue_Tracker_Id", "value": "ca-376"}}
     ))[0].text
 
     assert "ID: 101 - " in text
+    assert "ID: 102 - " not in text
 
 
 @pytest.mark.asyncio
-async def test_meta_filter_on_an_invisible_field_keeps_kimais_matches_with_a_note():
-    """Kimai's search also matches meta fields whose definition is not visible,
-    but those are never serialized, so they cannot be checked here."""
-    hidden = _timesheet(101, None).model_copy(update={"meta_fields": []})
-    client = _mock_client([hidden])
+async def test_records_without_the_field_that_kimai_matched_are_kept_with_a_note():
+    """Kimai's search also matches rows saved while the field was hidden; they
+    are not sent back, so they are kept unchecked rather than silently dropped
+    because another record does carry the field."""
+    client = _mock_client([_timesheet(101, "CA-376"), _without_row(102)])
 
     text = (await _handle_timesheet_list(
-        client, {"meta": {"name": "internal_ref", "value": "X1"}}
+        client, {"meta": {"name": "issue_tracker_id", "value": "CA-376"}}
     ))[0].text
 
     assert "ID: 101 - " in text
-    assert "not in Kimai's API responses" in text
+    assert "ID: 102 - " in text
+    assert "1 of these matched Kimai's search on a meta row that is not sent back" in text
 
 
 @pytest.mark.asyncio
-async def test_meta_filter_for_an_empty_invisible_field_is_refused():
-    from kimai_mcp.tools.errors import ToolError
+async def test_an_empty_search_includes_records_without_the_field():
+    """Kimai's own name:"" is IS NULL OR NOT EXISTS: a record saved before the
+    field existed has no value. It used to be dropped, or raised an error."""
+    client = _mock_client([_timesheet(101, None), _without_row(102), _timesheet(103, "CA-1")])
 
-    hidden = _timesheet(101, None).model_copy(update={"meta_fields": []})
-    with pytest.raises(ToolError, match="not in Kimai's API responses"):
-        await _handle_timesheet_list(_mock_client([hidden]), {"meta": {"name": "internal_ref", "value": ""}})
+    text = (await _handle_timesheet_list(
+        client, {"meta": {"name": "issue_tracker_id", "value": ""}}
+    ))[0].text
+
+    assert text.startswith("Found 2 timesheets")
+    assert "ID: 103 - " not in text
+
+
+@pytest.mark.asyncio
+async def test_records_without_the_field_are_dropped_when_kimai_did_not_match_the_value():
+    """A value Kimai's term cannot express falls back to name:* (any value), so
+    a record without a visible row says nothing about this value."""
+    client = _mock_client([_timesheet(101, "two words"), _without_row(102)])
+
+    text = (await _handle_timesheet_list(
+        client, {"meta": {"name": "issue_tracker_id", "value": "two words"}}
+    ))[0].text
+
+    assert "ID: 101 - " in text
+    assert "ID: 102 - " not in text
+
+
+@pytest.mark.asyncio
+async def test_a_meta_search_fetches_in_pages_of_500():
+    """Matching needs the whole result; 50-record pages made that 10x slower."""
+    client = _mock_client([_timesheet(101, "CA-1")])
+
+    await _handle_timesheet_list(client, {"page": 3, "meta": {"name": "issue_tracker_id", "value": "CA-1"}})
+
+    sent = client.get_timesheets.await_args.args[0]
+    assert (sent.page, sent.size) == (1, 500)
 
 
 @pytest.mark.asyncio
@@ -220,3 +260,29 @@ async def test_records_of_other_users_than_requested_are_flagged():
     text = (await _handle_timesheet_list(client, {"users": [7, 9]}))[0].text
 
     assert "Warning: Kimai returned records of user(s) 1" in text
+
+
+@pytest.mark.asyncio
+async def test_foreign_records_are_flagged_before_the_meta_match_narrows_them():
+    """Kimai returned the caller's own records for users=[7]; the meta match
+    then drops them all, which must not read as "user 7 has none"."""
+    client = _mock_client([_timesheet(101, "CA-10")])  # user 1
+
+    text = (await _handle_timesheet_list(
+        client, {"users": [7], "meta": {"name": "issue_tracker_id", "value": "CA-1"}}
+    ))[0].text
+
+    assert text.startswith("Found 0 timesheets")
+    assert "Warning: Kimai returned records of user(s) 1" in text
+
+
+@pytest.mark.asyncio
+async def test_a_date_only_end_includes_that_day():
+    """Kimai keeps records started at or before `end`; a date-only end parsed
+    as midnight dropped the whole last day."""
+    client = _mock_client([])
+
+    await _handle_timesheet_list(client, {"begin": "2025-06-01", "end": "2025-06-30"})
+
+    sent = client.get_timesheets.await_args.args[0]
+    assert sent.end.isoformat() == "2025-06-30T23:59:59"

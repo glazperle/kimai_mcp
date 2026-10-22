@@ -147,4 +147,70 @@ async def test_project_analysis_team_falls_back_when_users_filter_is_refused():
 
     fallback = client.get_timesheets.await_args.args[0]
     assert (fallback.user, fallback.users) == ("all", None)
+    assert "User ID 5" in text  # the member's record survives the post-filter
     assert "User ID 8" not in text
+    assert "Kimai refused the team filter (Cannot access user: 5)" in text
+
+
+@pytest.mark.asyncio
+async def test_partial_matches_with_different_names_stay_ambiguous():
+    """The visible-wins tie-break is for projects of the same name only."""
+    from kimai_mcp.tools.errors import ToolError
+
+    client = _client()
+    client.get_projects.return_value = [
+        Project(id=1, name="Support 2023", visible=False), Project(id=2, name="Support Hotline"),
+    ]
+
+    with pytest.raises(ToolError, match="Multiple projects found"):
+        await dispatch_tool(client, "analyze_project_team", {"project_name": "Support", **_PERIOD})
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_team_fallback_is_refused_not_reported_empty():
+    """The size guard must run before the team filter: 5000 fetched rows with no
+    team record among them used to read 'No timesheets found'."""
+    from kimai_mcp.client import KimaiAPIError
+    from kimai_mcp.tools.errors import ToolError
+
+    client = _client()
+    client.get_team.return_value = Team(id=3, name="Web", members=[TeamMember(user=User(id=5, username="a", enabled=True))])
+    rows, _, _ = client.get_timesheets.return_value  # user 1 only, not in the team
+    client.get_timesheets.side_effect = [KimaiAPIError("Cannot access user: 5", 403), (rows * 3, False, 100)]
+
+    with pytest.raises(ToolError, match="more than 3 entries"):
+        await dispatch_tool(client, "analyze_project_team", {
+            "project_name": "Relaunch", "user_scope": "team", "team": 3, **_PERIOD,
+        })
+
+
+@pytest.mark.asyncio
+async def test_missing_project_is_named_in_the_error():
+    """A schema anyOf reported neither field; the handler's message names both."""
+    from kimai_mcp.tools.errors import ToolError
+
+    with pytest.raises(ToolError, match="project_name or project_id"):
+        await dispatch_tool(_client(), "analyze_project_team", dict(_PERIOD))
+
+
+@pytest.mark.asyncio
+async def test_a_project_name_with_a_colon_is_matched_without_a_search_term():
+    """Kimai reads 'ACME:Relaunch' as a search in meta field ACME."""
+    client = _client()
+    client.get_projects.return_value = [Project(id=4, name="ACME:Relaunch")]
+
+    await dispatch_tool(client, "analyze_project_team", {"project_name": "ACME:Relaunch", **_PERIOD})
+
+    assert client.get_projects.await_args.args[0].term is None
+    assert client.get_timesheets.await_args.args[0].project == 4
+
+
+@pytest.mark.asyncio
+async def test_a_date_only_end_includes_that_day():
+    client = _client()
+
+    await dispatch_tool(client, "analyze_project_team", {
+        "project_name": "Relaunch", "begin": "2025-01-01", "end": "2025-06-30",
+    })
+
+    assert client.get_timesheets.await_args.args[0].end.endswith("T23:59:59")

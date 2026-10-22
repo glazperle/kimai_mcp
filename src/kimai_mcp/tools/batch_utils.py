@@ -30,6 +30,13 @@ async def execute_batch(
     if not items:
         return [], []
 
+    # A repeated ID would run twice concurrently: a delete then reports a false
+    # "Failed" (404), and a toggle (batch_export) undoes itself.
+    try:
+        items = list(dict.fromkeys(items))
+    except TypeError:
+        pass  # unhashable items (models) are not IDs and are not repeated
+
     semaphore = asyncio.Semaphore(max_concurrent)
 
     async def limited_operation(item: Any) -> Any:

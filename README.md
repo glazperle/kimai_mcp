@@ -426,13 +426,13 @@ Kimai only serializes meta fields whose definition is marked visible (`setIsVisi
 }
 ```
 
-The value must match exactly (case-insensitive). Omit `value` to get every entry where the field is set,
-or pass `"value": ""` for entries where it is not. The filter is sent to Kimai as the search term
-`issue_tracker_id:CA-376`, so it is applied before pagination; because Kimai matches that term as a
-substring (`CA-376` also finds `CA-3760`), the MCP server keeps only exact matches afterwards. A value
-containing spaces, or starting with `!`, cannot be expressed in Kimai's term syntax: Kimai then returns every
-entry that has the field set and the MCP server filters that result, so with manual pagination (`page`)
-a page can hold fewer entries than `size`.
+The value must match exactly (case-insensitive, the field name too). Omit `value` to get every entry where
+the field is set, or pass `"value": ""` for entries where it is not. The filter is sent to Kimai as the search
+term `issue_tracker_id:CA-376` to narrow the result; because Kimai matches that term as a substring (`CA-376`
+also finds `CA-3760`), the MCP server fetches the whole result and keeps only exact matches, then shows the
+requested `page`. A value Kimai's term syntax cannot express (spaces, a leading `!`, a backslash) is narrowed
+to "field is set" on the server and matched on the MCP side. Entries saved while the field was hidden are
+found by Kimai but sent back without it; those are listed as Kimai's matches, with a note.
 
 #### Create a Timesheet Entry
 ```json
@@ -492,7 +492,8 @@ a page can hold fewer entries than `size`.
 ```
 
 Kimai lists only projects running today unless told otherwise. Add `"ignore_dates": true` to include
-finished and not yet started projects, or `"begin"` / `"end"` to list the projects running on that day.
+finished and not yet started projects, or `"begin"` / `"end"` to list the projects running at any time in
+that period.
 
 #### Get Project Details
 ```json
@@ -540,7 +541,8 @@ finished and not yet started projects, or `"begin"` / `"end"` to list the projec
     "action": "create",
     "data": {
       "name": "Development Team",
-      "color": "#3498db"
+      "color": "#3498db",
+      "members": [{"user": 5, "teamlead": true}]
     }
   }
 }

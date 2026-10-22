@@ -382,3 +382,29 @@ async def test_invalid_form_value_names_the_field_as_the_caller_sends_it():
             "action": "create", "data": {"project": 1, "activity": 1, "break": "90"},
         })
     assert "invalid value for 'break':" in str(excinfo.value)
+
+
+
+@pytest.mark.asyncio
+async def test_dispatch_builds_each_tool_validator_once():
+    from kimai_mcp.tools import registry
+
+    client = AsyncMock(spec=KimaiClient)
+    client.get_customers.return_value = []
+    await dispatch_tool(client, "entity", {"type": "customer", "action": "list"})
+    before = registry._tool_validator.cache_info()
+    await dispatch_tool(client, "entity", {"type": "customer", "action": "list"})
+    after = registry._tool_validator.cache_info()
+    assert (after.hits, after.misses) == (before.hits + 1, before.misses)
+
+
+@pytest.mark.asyncio
+async def test_rate_errors_name_the_key_the_rate_schema_declares():
+    """The rate data schema declares internal_rate (Python name), unlike most
+    forms; naming the alias would point at a key the schema rejects."""
+    client = AsyncMock(spec=KimaiClient)
+    with pytest.raises(ToolError, match="'internal_rate'"):
+        await dispatch_tool(client, "rate", {
+            "entity": "project", "entity_id": 1, "action": "add",
+            "data": {"rate": 1, "internal_rate": 10 ** 400},
+        })

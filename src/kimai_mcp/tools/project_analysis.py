@@ -8,10 +8,12 @@ from mcp.types import TextContent, Tool
 
 from ..client import KimaiAPIError, KimaiClient
 from ..models import ActivityFilter, ProjectFilter, TimesheetFilter
-from .dates import parse_local_datetime
+from .dates import parse_local_datetime, parse_local_end
 from .errors import ToolError
 
-# Safety limit: stop fetching timesheets once this many entries were collected
+# Safety limit passed to get_timesheets. The client's own cap of 100 pages
+# (5000 records at the default page size of 50) is reached first; either way
+# the fetch comes back with fetched_all=False, which the analysis refuses.
 MAX_ANALYSIS_RESULTS = 10000
 
 
@@ -22,8 +24,9 @@ def analyze_project_team_tool() -> Tool:
         description="Comprehensive analysis of all team members working on a project. Automatically finds project by name, fetches ALL timesheets from ALL users, and provides detailed statistics.",
         input_schema={
             "type": "object",
+            # project_name or project_id: checked by the handler, whose message
+            # names both; a schema anyOf would report neither.
             "required": ["begin", "end"],
-            "anyOf": [{"required": ["project_name"]}, {"required": ["project_id"]}],
             "properties": {
                 "project_name": {"type": "string", "description": "Project name (an exact name wins over partial matches)"},
                 "project_id": {"type": "integer", "description": "Project ID, instead of project_name when names are ambiguous"},
@@ -44,13 +47,18 @@ def analyze_project_team_tool() -> Tool:
 
 async def _find_project(client: KimaiClient, name: str):
     """The one project a name means: an exact name wins over partial matches,
-    and among several with that name a visible one wins.
+    and among several with exactly that name a visible one wins.
 
     Finished and hidden projects are searched too (the analysed period can be
     any), which is why the preferences are needed: a running 'Support' must
-    still be found next to a finished 'Support 2023'.
+    still be found next to a finished 'Support 2023'. Partial matches with
+    different names stay ambiguous.
+
+    Kimai's search term reads 'a:b' as a meta-field search and a leading '!'
+    as an exclusion, so such a name is matched here without a server term.
     """
-    projects = await client.get_projects(ProjectFilter.everything(term=name))
+    term = None if ":" in name or name.startswith("!") else name
+    projects = await client.get_projects(ProjectFilter.everything(term=term))
     wanted = name.casefold()
     matching = [p for p in projects if wanted in p.name.casefold()]
     if not matching:
@@ -61,9 +69,8 @@ async def _find_project(client: KimaiClient, name: str):
             "\n".join([f"• {p.name}" for p in all_projects[:10]])
         )
 
-    candidates = [p for p in matching if p.name.casefold() == wanted] or matching
-    if len(candidates) > 1:
-        candidates = [p for p in candidates if p.visible] or candidates
+    exact = [p for p in matching if p.name.casefold() == wanted]
+    candidates = ([p for p in exact if p.visible] or exact) if len(exact) > 1 else (exact or matching)
     if len(candidates) > 1:
         project_list = "\n".join([f"• {p.name} (ID: {p.id})" for p in candidates])
         raise ToolError(
@@ -83,7 +90,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
 
     project_name = arguments.get('project_name') or ""
     begin = parse_local_datetime(arguments['begin'], "begin")
-    end = parse_local_datetime(arguments['end'], "end")
+    end = parse_local_end(arguments['end'], "end")
     include_details = arguments.get('include_details', True)
 
     try:
@@ -137,6 +144,8 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             users=team_user_ids if user_scope == 'team' else None,
         )
         
+        scope_notes: list[str] = []
+
         async def fetch_timesheets():
             try:
                 return await client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS)
@@ -146,6 +155,11 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                 # and keep the team's records below, as before users[].
                 if user_scope != 'team' or e.status_code != 403:
                     raise
+                scope_notes.append(
+                    f"> ⚠️ Kimai refused the team filter ({e.message}). Records were fetched for every user "
+                    "this token may see and narrowed to the team, so members whose records it may not see are "
+                    "missing from the figures."
+                )
                 everyone = filters.model_copy(update={"user": "all", "users": None})
                 return await client.get_timesheets(everyone, max_results=MAX_ANALYSIS_RESULTS)
 
@@ -160,10 +174,6 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                 client.get_activities(ActivityFilter(visible=3))
             )
             timesheets, fetched_all, _last_page = timesheets
-            if user_scope == 'team':
-                # Also when Kimai ignored users[] (no view_other_timesheet) and
-                # returned the caller's own records instead.
-                timesheets = [ts for ts in timesheets if ts.user in team_user_ids]
         except KimaiAPIError as e:
             if e.status_code in (401, 403):
                 raise ToolError(
@@ -179,19 +189,27 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                     f"❌ API Error while analyzing project '{project.name}': {e!s}\n\nPlease check your Kimai connection and try again."
                 )
 
-        if not timesheets:
-            return [TextContent(
-                type="text",
-                text=f"📋 No timesheets found for project '{project.name}' in the specified period."
-            )]
-
-        # Safety check: the fetch stopped before the end (max_results, or the
-        # client's page cap, which comes first: 100 pages of 50).
+        # Safety check first: a fetch that stopped before the end must not be
+        # narrowed to a team and then reported as complete, or as empty.
         if not fetched_all:
             raise ToolError(
                 f"⚠️ Dataset too large: more than {len(timesheets)} entries found for project '{project.name}' (fetch stopped there).\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
             )
         
+        if user_scope == 'team':
+            # Also when Kimai ignored users[] (no view_other_timesheet) and
+            # returned the caller's own records instead.
+            timesheets = [ts for ts in timesheets if ts.user in team_user_ids]
+
+        if not timesheets:
+            return [TextContent(
+                type="text",
+                text="\n".join([
+                    *scope_notes,
+                    f"📋 No timesheets found for project '{project.name}' in the specified period.",
+                ])
+            )]
+
         # Create lookup dictionaries
         user_lookup = {}
         for u in users:
@@ -234,7 +252,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             user_stats[user_id]['activities'][activity_id]['entries'] += 1
         
         # 5. Format results
-        result_parts = []
+        result_parts = list(scope_notes)
         
         # Header
         result_parts.append(f"""# 📊 Project Team Analysis: {project.name}

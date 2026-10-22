@@ -292,7 +292,8 @@ Parameters: {
   "action": "create",
   "data": {
     "name": "Development Team",
-    "color": "#3498db"
+    "color": "#3498db",
+    "members": [{"user": 5, "teamlead": true}]
   }
 }
 ```

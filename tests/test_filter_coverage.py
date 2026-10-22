@@ -74,7 +74,8 @@ LIST_SURFACES = [
     ),
     ListSurface(
         "entity", {"type": "project", "action": "list"}, "get_projects",
-        probes={"order_by": {"order_by": "customer"}},
+        # start/end are excused below; their probes check they stay unreached.
+        probes={"order_by": {"order_by": "customer"}, "start": {"begin": _DATETIME}, "end": {"end": _DATETIME}},
     ),
     ListSurface("entity", {"type": "activity", "action": "list"}, "get_activities",
                 probes={"order_by": {"order_by": "project"}}),
