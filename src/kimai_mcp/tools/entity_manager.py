@@ -32,6 +32,7 @@ from ..models import (
     UserOrderBy,
 )
 from .batch_utils import execute_batch, format_batch_result
+from .dates import parse_local_datetime
 from .errors import ToolError
 from .user_discovery import resolve_accessible_users
 
@@ -276,12 +277,12 @@ USER PREFERENCES (action=set_preferences, type=user only):
                         "begin": {
                             "type": "string",
                             "format": "date-time",
-                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00) Only records after this date will be included. type=project: only projects running on that day."
+                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00) Only records after this date will be included. type=project: projects running at any time between begin and end."
                         },
                         "end": {
                             "type": "string",
                             "format": "date-time",
-                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00). Only records before this date will be included. type=project: only projects running on that day."
+                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00). Only records before this date will be included. type=project: see begin."
                         },
                         "customers": {"type": "array", "items": {"type": "integer"},
                                       "description": "Customer IDs (for projects and invoices)"},
@@ -890,8 +891,8 @@ class BaseEntityHandler:
         result = "Meta Fields:\n"
         for mf in meta_fields:
             name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
-            value = mf.value if hasattr(mf, 'value') else mf.get('value', '')
-            result += f"  - {name}: {value}\n"
+            value = mf.value if hasattr(mf, 'value') else mf.get('value')
+            result += f"  - {name}: {'(empty)' if value is None else value}\n"
         return result
 
     async def list(self, filters: dict) -> list[TextContent]:
@@ -959,6 +960,13 @@ class ProjectEntityHandler(BaseEntityHandler):
         return result
 
     async def list(self, filters: dict) -> list[TextContent]:
+        # begin/end select the projects running at any time in that period.
+        # Kimai's own start/end can't say that: each means "running on that
+        # day" and both together are ANDed, so a project that started or
+        # ended inside the period would be missing. Ask for all dates and
+        # compare each project's own start/end here instead.
+        first = parse_local_datetime(filters["begin"], "begin").date() if filters.get("begin") else None
+        last = parse_local_datetime(filters["end"], "end").date() if filters.get("end") else None
         project_filter = ProjectFilter(
             customer=filters.get("customer"),
             customers=filters.get("customers"),
@@ -966,13 +974,16 @@ class ProjectEntityHandler(BaseEntityHandler):
             visible=filters.get("visible", 1),
             order=filters.get("order"),
             order_by=filters.get("order_by"),
-            # Kimai's `start`/`end` each mean "running on that day".
-            start=filters.get("begin"),
-            end=filters.get("end"),
-            ignore_dates="1" if filters.get("ignore_dates") else None,
+            ignore_dates="1" if filters.get("ignore_dates") or first or last else None,
             global_activities=filters.get("global_activities"),
         )
         projects = await self.client.get_projects(project_filter)
+        if first or last:
+            projects = [
+                p for p in projects
+                if (last is None or p.start is None or p.start.date() <= last)
+                and (first is None or p.end is None or p.end.date() >= first)
+            ]
 
         result = f"Found {len(projects)} projects\n\n"
         for project in projects:
@@ -1269,7 +1280,8 @@ def format_user(user) -> str:
     if preferences:
         result += "Preferences:\n"
         for pref in preferences:
-            result += f"  - {pref.get('name')}: {pref.get('value')}\n"
+            value = pref.get('value')
+            result += f"  - {pref.get('name')}: {'(empty)' if value is None else value}\n"
     return result
 
 
@@ -1576,6 +1588,8 @@ class TagEntityHandler(BaseEntityHandler):
 
     async def list(self, filters: dict) -> list[TextContent]:
         # Pass the name filter through to the API (server-side filtering)
+        if filters.get("name") and filters.get("term") and filters["name"] != filters["term"]:
+            raise ToolError("Error: tags are filtered by name only; pass either 'name' or 'term', not both")
         name = filters.get("name") or filters.get("term")
         tag_filter = TagFilter(name=name) if name else None
         tags = await self.client.get_tags_full(tag_filter)

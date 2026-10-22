@@ -61,7 +61,7 @@ LIST_SURFACES = [
     ),
     ListSurface(
         "entity", {"type": "project", "action": "list"}, "get_projects",
-        probes={"start": {"begin": _DATETIME}, "end": {"end": _DATETIME}, "order_by": {"order_by": "customer"}},
+        probes={"order_by": {"order_by": "customer"}},
     ),
     ListSurface("entity", {"type": "activity", "action": "list"}, "get_activities",
                 probes={"order_by": {"order_by": "project"}}),
@@ -89,10 +89,19 @@ LIST_SURFACES = [
     ),
 ]
 
+_PERIOD_LOCALLY = (
+    "begin/end are matched locally against each project's start/end (any overlap); Kimai's "
+    "start/end each mean 'running on that day' and are ANDed, so they cannot express a period"
+)
+
 # Client-side filter fields no tool argument sets: surface -> {field: why}.
 NOT_EXPOSED: dict[str, dict[str, str]] = {
     "timesheet list": {
         "full": "switches the listing to the Expanded schema (objects for ids); the client parses TimesheetEntity",
+    },
+    "entity project list": {
+        "start": _PERIOD_LOCALLY,
+        "end": _PERIOD_LOCALLY,
     },
     "entity user list": {
         "full": "adds the UserEntity fields, but the listing is parsed as User; entity get shows them",

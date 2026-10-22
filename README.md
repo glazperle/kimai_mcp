@@ -231,7 +231,7 @@ Options for the Streamable HTTP server (`kimai-mcp-streamable`):
 - **Team Management** - Create teams, manage members, control access permissions
 - **Absence Management** - Create, approve, reject, and track absences
 - **Tag Management** - Create and manage tags for better organization
-- **Invoice Queries** - View invoice information and status; delete invoices (Kimai 2.66+, permission `delete_invoice`)
+- **Invoice Management** - View invoices with status, totals, payment date and meta fields; update status, payment date and comment (Kimai 2.68+, permission `edit_invoice`); delete invoices (Kimai 2.66+, permission `delete_invoice`)
 - **Comments** - Manage pinned and regular comments on projects and customers (Kimai 2.57+)
 
 ### Advanced Features
