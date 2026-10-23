@@ -31,6 +31,7 @@ from kimai_mcp.models import (
     Project,
     TimesheetEntity,
     TimesheetExpanded,
+    TimesheetFilter,
     User,
     UserEntity,
 )
@@ -168,6 +169,22 @@ async def main() -> int:
                   f"(unknown: {sorted(extra) or 'none'})")
             check(True, f"entity rate fields present: "
                         f"{sorted((RATE_GROUP | RATE_ENTITY_GROUP) & set(detail)) or 'none'}")
+
+        # timesheet action=list reads one page with full=true (Expanded rows,
+        # names instead of IDs) and takes the total from the pagination
+        # headers; a proxy that strips them leaves only "this page".
+        page = await client.get_timesheet_page(TimesheetFilter(size=2, full="true"))
+        check(page.total is not None and page.total_pages is not None,
+              f"/timesheets?full=true sends X-Total-Count / X-Total-Pages "
+              f"(total {page.total}, pages {page.total_pages})")
+        if page.rows:
+            raw = await client._request("GET", "/timesheets", params={"size": 1, "full": "true"})
+            extra = unmodelled(raw[0], TimesheetExpanded)
+            check(not extra,
+                  f"/timesheets?full=true rows modelled by TimesheetExpanded (unknown: {sorted(extra) or 'none'})")
+        rendered = await dispatch_tool(client, "timesheet", {"action": "list", "filters": {"size": 3}})
+        check(rendered[0].text.startswith("Found "),
+              f"timesheet list rendered: {rendered[0].text.splitlines()[0]}")
 
         # Favorites (2.66+): read-only probe of the new collection endpoint.
         if (major, minor) >= (2, 66):

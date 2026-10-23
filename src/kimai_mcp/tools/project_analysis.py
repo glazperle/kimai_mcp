@@ -7,9 +7,11 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
-from ..models import ActivityFilter, ProjectFilter, TimesheetFilter
+from ..models import ActivityFilter, ProjectFilter, TimesheetFilter, UserFilter
 from .dates import parse_local_datetime, parse_local_end, whole_day
 from .errors import ToolError
+from .lookups import best_effort
+from .search_term import is_literal
 from .user_discovery import own_records_note
 
 # Safety limit passed to get_timesheets (fetched in pages of 500, so the
@@ -55,13 +57,10 @@ async def _find_project(client: KimaiClient, name: str):
     still be found next to a finished 'Support 2023'. Partial matches with
     different names stay ambiguous.
 
-    Kimai splits its search term on whitespace, reads 'a:b' as a meta-field
-    search and a word starting with '!' as an exclusion, and does not escape
-    MySQL's LIKE escape character; such a name is matched here without a
-    server term.
+    A name Kimai's search term would not take literally (see
+    ``search_term.is_literal``) is matched here without a server term.
     """
-    unsafe = ":" in name or "\\" in name or any(word.startswith("!") for word in name.split())
-    term = None if unsafe else name
+    term = name if is_literal(name) else None
     projects = await client.get_projects(ProjectFilter.everything(term=term))
     wanted = name.casefold()
     matching = [p for p in projects if wanted in p.name.casefold()]
@@ -86,12 +85,18 @@ async def _find_project(client: KimaiClient, name: str):
 
 async def _project_by_id(client: KimaiClient, project_id: int):
     """GET /projects/{id} needs the 'view' permission on the project, which a
-    default ROLE_USER lacks; the listing needs API access only."""
-    try:
-        return await client.get_project(project_id)
-    except KimaiAPIError as e:
-        if e.status_code != 403:
-            raise
+    default ROLE_USER lacks (a team lead has it for its teams' projects); the
+    listing needs API access only. The client remembers each refused project,
+    so a second analysis of it asks the listing directly."""
+    denied = getattr(client, "denied_project_views", None)
+    if denied is None or project_id not in denied:
+        try:
+            return await client.get_project(project_id)
+        except KimaiAPIError as e:
+            if e.status_code != 403:
+                raise
+            if denied is not None:
+                denied.add(project_id)
     project = next((p for p in await client.get_projects(ProjectFilter.everything()) if p.id == project_id), None)
     if project is None:
         raise ToolError(f"❌ Project ID {project_id} is not visible to this token.")
@@ -171,7 +176,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
 
         async def fetch_timesheets():
             try:
-                return await client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS, fetch_all=True)
+                return await client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS)
             except KimaiAPIError as e:
                 # users[] runs access_user for every member, which is a 403 for
                 # a disabled member unless the token sees everyone. Fetch all
@@ -184,21 +189,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                     "missing from the figures."
                 )
                 everyone = filters.model_copy(update={"user": "all", "users": None})
-                return await client.get_timesheets(everyone, max_results=MAX_ANALYSIS_RESULTS, fetch_all=True)
-
-        async def names(fetch):
-            # Names are cosmetic: GET /users needs view_user, which default Kimai
-            # grants to super admins only, so no failure of these lookups may
-            # stop the analysis. A 401 (token gone) propagates: the server
-            # rebuilds the session on it.
-            try:
-                return await fetch
-            except KimaiAPIError as e:
-                if e.status_code == 401:
-                    raise
-                return None
-            except Exception:  # noqa: BLE001 - names only; IDs are shown instead
-                return None
+                return await client.get_timesheets(everyone, max_results=MAX_ANALYSIS_RESULTS)
 
         try:
             # 4. Fetch data in parallel for better performance.
@@ -206,13 +197,21 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             # don't get downloaded completely before the safety check.
             timesheets, users, activities = await asyncio.gather(
                 fetch_timesheets(),
-                # Names for every record, also of disabled users and hidden activities.
-                names(client.get_users(visible=3, full=False)),
-                names(client.get_activities(ActivityFilter(visible=3))),
+                # Names for every record, also of disabled users and hidden
+                # activities. Cosmetic: GET /users needs view_user (super
+                # admins by default), so a failure only drops the names.
+                best_effort(client.get_users(UserFilter(visible=3))),
+                best_effort(client.get_activities(ActivityFilter(visible=3))),
             )
-            timesheets, fetched_all, _last_page = timesheets
+            timesheets, fetched_all = timesheets
             if users is None and not team_users:
-                scope_notes.append("> User names are not shown: the user list could not be loaded (it needs view_user).")
+                # The caller is named at least, as in timesheet list.
+                me = await best_effort(client.get_current_user())
+                team_users = [me] if me is not None else []
+                scope_notes.append(
+                    "> Only your own name is shown; other users appear by ID: the user list could not be "
+                    "loaded (it needs view_user)."
+                )
             users, activities = users or team_users, activities or []
         except KimaiAPIError as e:
             if e.status_code == 401:
@@ -260,6 +259,14 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             timesheets = [ts for ts in timesheets if ts.user in team_user_ids]
 
         if not timesheets:
+            if user_scope in ('all', 'specific'):
+                # Kimai searched the caller's records only if it ignored the
+                # user filter; then "none" may just mean the caller has none.
+                scope_notes.append(
+                    "> Note: Kimai ignores the user filter, and searches only your own records, when the token "
+                    "lacks view_other_timesheet or the requested user does not exist; so this may only mean "
+                    "that you have none in this project and period."
+                )
             return [TextContent(
                 type="text",
                 text="\n".join([

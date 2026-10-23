@@ -44,7 +44,7 @@ def test_stats_carry_no_balance_estimate():
 @pytest.mark.parametrize("stats_format", ["json", "summary", None])
 async def test_every_stats_format_carries_the_note(stats_format):
     client = AsyncMock(spec=KimaiClient)
-    client.get_timesheets.return_value = (_timesheets(), True, 1)
+    client.get_timesheets.return_value = (_timesheets(), True)
     client.get_projects.return_value = []
     filters = {"user_scope": "self", "calculate_stats": True}
     if stats_format:
@@ -59,4 +59,4 @@ async def test_every_stats_format_carries_the_note(stats_format):
     else:
         assert WORKING_TIME_NOTE in text
         # Summary is the default: no per-record listing after the report.
-        assert "ID: 1" not in text
+        assert "#1 " not in text

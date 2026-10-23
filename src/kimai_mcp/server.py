@@ -9,6 +9,7 @@ import platform
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from kimai_mcp import __version__
 
@@ -39,6 +40,25 @@ from .tools.registry import all_tools, dispatch_tool
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+_SECRET_KEYS = ("password", "token", "secret")
+
+
+def redact_secrets(value: Any) -> Any:
+    """``value`` with the values of password, token and secret keys masked, for a log line.
+
+    ``entity type=user action=create`` carries ``plainPassword`` and
+    ``plainApiToken``; a failed call used to write them to the log.
+    """
+    if isinstance(value, dict):
+        return {
+            k: "***" if any(word in str(k).lower() for word in _SECRET_KEYS) else redact_secrets(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_secrets(v) for v in value]
+    return value
 
 
 def format_api_error(e: KimaiAPIError) -> str:
@@ -218,11 +238,11 @@ class KimaiMCPServer:
             return error_result(str(e))
         except KimaiAPIError as e:
             logger.error(f"Kimai API Error in tool {name}: {e.message} (Status: {e.status_code})")
-            logger.error(f"Arguments were: {arguments}")
+            logger.error(f"Arguments were: {redact_secrets(arguments)}")
             return error_result(format_api_error(e))
         except Exception as e:
             logger.exception(f"Error calling tool {name}")
-            logger.error(f"Arguments were: {arguments}")
+            logger.error(f"Arguments were: {redact_secrets(arguments)}")
             return error_result(f"Error: {e!s}")
 
     async def run(self):

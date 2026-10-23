@@ -29,7 +29,7 @@ import pytest
 from pydantic import BaseModel
 
 from kimai_mcp import models
-from kimai_mcp.client import KimaiClient
+from kimai_mcp.client import KimaiClient, TimesheetPage
 from kimai_mcp.tools import registry
 
 _DATETIME = "2026-01-02T03:04:05"
@@ -64,7 +64,7 @@ LIST_SURFACES = [
         probes={"begin": {"begin": _DATETIME}},
     ),
     ListSurface(
-        "timesheet", {"action": "list"}, "get_timesheets", returns=([], True, 1),
+        "timesheet", {"action": "list"}, "get_timesheet_page", returns=TimesheetPage(rows=[], page=1, size=50),
         probes={
             "user": {"user_scope": "all"},
             "begin": {"begin": _DATETIME},
@@ -111,7 +111,7 @@ _PERIOD_LOCALLY = (
 # Client-side filter fields no tool argument sets: surface -> {field: why}.
 NOT_EXPOSED: dict[str, dict[str, str]] = {
     "timesheet list": {
-        "full": "switches the listing to the Expanded schema (objects for ids); the client parses TimesheetEntity",
+        "full": "always set: the listing asks for the Expanded rows, which name project, activity and user",
     },
     "entity project list": {
         "start": _PERIOD_LOCALLY,
@@ -193,8 +193,6 @@ def _cases():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("surface", "client_field"), list(_cases()))
 async def test_every_client_filter_is_reachable(surface, client_field):
-    if surface.client_method == "get_timesheets" and client_field in ("max_results", "fetch_all"):
-        pytest.skip("client-side pagination control, not a Kimai parameter")
     excused = NOT_EXPOSED.get(surface.name, {})
     schema = surface.schema()
 
@@ -329,3 +327,26 @@ async def test_every_claimed_list_filter_changes_the_request(entity_type):
         assert await _entity_request(entity_type, {key: value}) != base, (
             f"type={entity_type}: '{key}' is in list_filters but does not change the request"
         )
+
+
+@pytest.mark.asyncio
+async def test_statistics_send_the_same_filter_as_the_listing():
+    """The listing reads one page (get_timesheet_page), statistics read everything
+    (get_timesheets); the surface above probes the first, this pins the second."""
+    filters = {
+        "user_scope": "all", "project": 7, "projects": [8], "activity": 3, "customers": [2], "tags": ["x"],
+        "begin": _DATETIME, "end": _DATETIME, "exported": 1, "billable": 0, "active": 0,
+        "order_by": "rate", "order": "ASC", "term": "abc", "modified_after": _DATETIME,
+    }
+    client = AsyncMock(spec=KimaiClient)
+    client.get_timesheet_page.return_value = TimesheetPage(rows=[], page=1, size=50)
+    client.get_timesheets.return_value = ([], True)
+    client.get_projects.return_value = []
+
+    await registry.dispatch_tool(client, "timesheet", {"action": "list", "filters": filters})
+    await registry.dispatch_tool(client, "timesheet", {"action": "list", "filters": {**filters, "calculate_stats": True}})
+
+    differ = {"page", "size", "full"}
+    listing = client.get_timesheet_page.await_args.args[0].model_dump(exclude=differ)
+    statistics = client.get_timesheets.await_args.args[0].model_dump(exclude=differ)
+    assert listing == statistics

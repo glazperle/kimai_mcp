@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.20.0] - 2026-10-23
+
+### Changed
+
+- **`timesheet action=list` returns one page, with names.** Without `page` it used to fetch every page and
+  ignore `size`; now it reads exactly the requested page (`page`, default 1; `size`, default 50, at most
+  500), reports Kimai's total from the `X-Total-Count` / `X-Total-Pages` headers ("Found 57 timesheets,
+  showing 1-50") and says which `page` comes next. A page past the end is a sentence, not an error. It asks
+  Kimai for the Expanded rows (`full=true`), so each entry names its customer, project, activity and user
+  instead of listing IDs. `calculate_stats` and `filters.meta` still read the whole filter, and show the
+  requested page of the result.
+- **Compact timesheet rows** in `timesheet action=list` and `timer action=active|recent|favorites`: one
+  line with date, times, hours, break, `Customer / Project (#id) / Activity (#id)`, user and description,
+  plus a line for `not billable` / `exported` / rates and one for tags and meta only when they apply. Fifty
+  entries are about a third shorter than before (measured in characters), names included. The user is
+  printed only where other users' records were asked for; `timer` actions never print it, since those
+  endpoints return the token's own records only.
+- **Shorter tool schemas.** All tool schemas together went from about 41,000 to 30,500 characters
+  (roughly 10k to 7.6k tokens per request). The customer, project and activity `data` schemas are now
+  derived from their forms like the other types, the budget explanation is stated once per field instead
+  of at length, and descriptions that only repeated the field name are gone. Schema defaults that invited
+  a client to send `visible: true` / `billable: true` are gone too. A test caps the total.
+
+- Kimai's 4xx answers are logged as warnings instead of errors: they are answers to the request, which
+  the tool reports, and the name lookups draw a 403 from `GET /users` routinely. 5xx answers and
+  connection failures stay errors.
+
+### Added
+
+- **Retries for reads.** A GET that gets 429, 502 or 503, or whose established connection breaks (a
+  reset, or a keep-alive connection the server had closed), is retried twice (0.5 s, 1.5 s; a
+  `Retry-After` of up to 10 s wins). Not retried, because each would fail the same way again and cost up
+  to the full timeout: a refused connection, an unknown host, a timeout, a 504 (the gateway gave up on a
+  slow Kimai) and a `Retry-After` above 10 s. Writes are never retried: a POST or PATCH that timed out
+  may have reached Kimai, and repeating it could create a record twice or toggle a flag back.
+- **More notes when Kimai ignored a filter.** Records of a customer that was not requested are flagged like
+  those of other projects and activities (Kimai drops unknown customer IDs and then does not filter by
+  customer). An empty result for `user_scope=all`, or for users other than the caller alone, says that
+  Kimai may have ignored the user filter: without `view_other_timesheet` it searches the caller's records
+  only, and the caller may have none.
+- With one page listed, the "every record returned is your own" note asks Kimai for one record of the
+  same filter for the caller alone and compares the totals, instead of reading every page.
+
+### Security
+
+- **A failed write logged its request body.** When Kimai refused `entity type=user action=create` (for
+  example "The username is already used."), the log line carried the whole payload, the new user's
+  `plainPassword` and `plainApiToken` included; on the streamable server that log is shared by all users,
+  and the stdio server also logged the tool arguments. The client now logs only the query string, and the
+  server masks every password, token and secret value in the arguments it logs.
+
+### Fixed
+
+- A fetch that ended exactly at the record limit (10,000 for statistics and the meta filter, 5,000 for
+  the analysis) was reported as cut off. The page loop now stops at Kimai's `X-Total-Pages`, which also
+  saves the 404 probe after a full last page; a record Kimai repeats on a later page is counted once.
+  When the limit does cut the result off, the listing says "Found at least N".
+- A `Retry-After` given as an HTTP date (RFC 9110) was ignored and the request retried at once.
+- `analyze_project_team` names the caller when the user list is not readable (it showed "User ID 1"
+  where `timesheet list` showed the name), and an empty analysis for `all` or a specific user notes that
+  Kimai may have searched the caller's records only.
+- `analyze_project_team` with `project_id` asked `GET /projects/{id}` again for a project that had
+  already answered 403; the client now remembers each refused project.
+- Records whose customer cannot be told (their project is not in the readable project list, or that
+  list failed) are counted in a note instead of silently escaping the customer check.
+- A free search term like `name:~` or `name:""` makes Kimai count a record once per meta field it has
+  (Kimai 2.70.2, `SearchHelper` without DISTINCT); the listing says so instead of reporting the
+  inflated total.
+- The empty-result notes name both reasons Kimai ignores a user filter (no `view_other_timesheet`, or a
+  user ID that does not exist), and `user_scope=all` no longer fetches the current user for it.
+
+### Internal
+
+- The name lookups ask for the activities of the shown rows' projects only (Kimai adds the global ones)
+  instead of every activity, and the client remembers a 403 from `GET /users` (view_user is role-wide).
+- `client.get_timesheets` always reads every page and returns `(records, fetched_all)`; one page with
+  Kimai's totals is `get_timesheet_page`. The heuristic that decided by itself whether to page through
+  everything is gone, and so is the handler's second page loop. `get_users` takes a `UserFilter`. Shared
+  helpers: `tools/lookups.py` (`best_effort`, `record_names`, which looks up only what is printed) and
+  `tools/search_term.py` (what Kimai's search term takes literally; a colon in a meta value is literal
+  since Kimai 2.35, which splits `name:value` at the first colon).
+- `scripts/audit_api_models.py` follows `_request_with_headers` and knows that `GET /timesheets?full=true`
+  returns `TimesheetExpanded` (`EXPECTED_SHAPES`); `scripts/verify_against_kimai.py` checks the pagination
+  headers and the Expanded listing on a live instance. `tests/test_read_coverage.py` maps the
+  `TimesheetPage` container to its rows, so a getter returning it cannot escape the surface check.
+
 ## [2.19.0] - 2026-10-23
 
 ### Added

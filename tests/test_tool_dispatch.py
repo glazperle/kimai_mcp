@@ -22,7 +22,7 @@ import pytest
 from mcp.types import TextContent, Tool
 
 from kimai_mcp import models as m
-from kimai_mcp.client import KimaiClient
+from kimai_mcp.client import KimaiClient, TimesheetPage
 from kimai_mcp.tools import (
     absence_manager,
     calendar_meta,
@@ -161,7 +161,10 @@ def make_mock_client() -> AsyncMock:
     client.unlock_work_contract_month.return_value = None
 
     # Timesheets / timer
-    client.get_timesheets.return_value = ([completed_ts], True, 1)
+    client.get_timesheets.return_value = ([completed_ts], True)
+    client.get_timesheet_page.return_value = TimesheetPage(
+        rows=[completed_expanded_ts], page=1, size=50, total=1, total_pages=1
+    )
     client.get_timesheet.return_value = completed_ts
     client.get_active_timesheets.return_value = [running_expanded_ts]
     client.get_recent_timesheets.return_value = [completed_expanded_ts]

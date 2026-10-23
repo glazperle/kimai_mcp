@@ -197,3 +197,17 @@ def test_every_supported_entity_write_has_a_closed_data_schema():
             data = _entity_data(entity, action)
             assert data is not None, (entity, action)
             assert data.get("additionalProperties") is False, (entity, action)
+
+
+def test_the_tool_schemas_stay_within_their_token_budget():
+    """Every word of the tool schemas is sent with every request, before the
+    caller has asked anything. They were 41k characters (about 10k tokens),
+    half of it the entity tool repeating the same budget explanation three
+    times. Raise the limit only for a field that needs the words."""
+    import json
+
+    size = sum(
+        len(json.dumps(tool.model_dump(by_alias=True, exclude_none=True), separators=(",", ":")))
+        for tool in registry.all_tools()
+    )
+    assert size <= 32_000, f"tool schemas are {size} characters (about {size // 4} tokens)"

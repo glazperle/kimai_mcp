@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from kimai_mcp.client import TimesheetPage
 from kimai_mcp.models import User
 from kimai_mcp.tools.timesheet_consolidated import _handle_timesheet_list
 
@@ -11,7 +12,7 @@ from kimai_mcp.tools.timesheet_consolidated import _handle_timesheet_list
 def _mock_client() -> AsyncMock:
     client = AsyncMock()
     client.get_current_user.return_value = User(id=1, username="tester", enabled=True)
-    client.get_timesheets.return_value = ([], True, None)
+    client.get_timesheet_page.return_value = TimesheetPage(rows=[], page=1, size=50, total=0, total_pages=0)
     return client
 
 
@@ -32,7 +33,7 @@ async def test_list_without_date_filters_does_not_raise(filters):
 
     assert result
     assert result[0].type == "text"
-    timesheet_filter = client.get_timesheets.await_args.args[0]
+    timesheet_filter = client.get_timesheet_page.await_args.args[0]
     assert timesheet_filter.begin is None
     assert timesheet_filter.end is None
 
@@ -48,6 +49,6 @@ async def test_list_expands_same_day_midnight_range():
         {"begin": "2026-01-15T00:00:00", "end": "2026-01-15T00:00:00"},
     )
 
-    timesheet_filter = client.get_timesheets.await_args.args[0]
+    timesheet_filter = client.get_timesheet_page.await_args.args[0]
     assert timesheet_filter.begin.isoformat() == "2026-01-15T00:00:00"
     assert timesheet_filter.end.isoformat() == "2026-01-15T23:59:59"

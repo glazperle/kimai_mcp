@@ -179,7 +179,7 @@ async def test_offset_date_filters_are_rejected_with_a_clear_error():
     from kimai_mcp.tools import timesheet_consolidated as ts
 
     client = AsyncMock(spec=KimaiClient)
-    client.get_timesheets.return_value = ([], True, 1)
+    client.get_timesheets.return_value = ([], True)
     client.get_projects.return_value = []
     for end in ("2026-06-01T00:00:00+00:00", "2026-06-01T00:00:00Z"):
         with pytest.raises(ToolError, match="without an offset"):
