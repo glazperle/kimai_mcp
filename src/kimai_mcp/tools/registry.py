@@ -187,9 +187,10 @@ async def dispatch_tool(
         raise ToolError(
             f"Unknown tool: {name}. Available tools: {', '.join(_REGISTRY)}"
         )
-    _factory, run = entry
+    factory, run = entry
     arguments = arguments or {}
     _check(_tool_validator(name), arguments)
+    arguments = _integers(_build(factory).input_schema, arguments)
     try:
         return await run(client, arguments)
     except pydantic.ValidationError as e:
@@ -201,6 +202,39 @@ async def dispatch_tool(
         if not e.title.endswith(("Form", "Filter")):
             raise
         raise ToolError(_format_input_error(e, _declared_names(name))) from None
+
+
+def _integers(schema: dict, value: Any) -> Any:
+    """``value`` with every integral float the schema types as integer made an int.
+
+    JSON Schema's "integer" accepts 1.0, and 1.0 would reach Kimai as
+    ``/timesheets/1.0`` (404) or ``size=10.0`` (400). Untyped values (a meta
+    field's value) are left alone.
+    """
+    types = schema.get("type")
+    types = types if isinstance(types, list) else [types]
+    if isinstance(value, float) and value.is_integer() and "integer" in types:
+        return int(value)
+    if isinstance(value, list):
+        items = schema.get("items", {})
+        return [_integers(items, v) for v in value] if isinstance(items, dict) else value
+    if isinstance(value, dict):
+        properties = dict(schema.get("properties", {}))
+        for branch in schema.get("allOf", []):
+            for part in ("then", "else"):
+                for key, sub in branch.get(part, {}).get("properties", {}).items():
+                    properties.setdefault(key, {})
+                    # a key typed in a branch (the per-type entity data) wins
+                    if sub.get("properties") or sub.get("type"):
+                        properties[key] = _merge(properties[key], sub)
+        return {k: _integers(properties.get(k, {}), v) for k, v in value.items()}
+    return value
+
+
+def _merge(base: dict, extra: dict) -> dict:
+    merged = {**base, **extra}
+    merged["properties"] = {**base.get("properties", {}), **extra.get("properties", {})}
+    return merged
 
 
 def _format_input_error(error: "pydantic.ValidationError", declared: frozenset[str]) -> str:

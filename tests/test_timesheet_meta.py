@@ -351,3 +351,32 @@ def test_negative_pages_are_rejected_by_the_schema():
     tool = next(t for t in all_tools() if t.name == "timesheet")
     with pytest.raises(ToolError, match="minimum"):
         validate_arguments(tool, {"action": "list", "filters": {"page": -1}})
+
+
+@pytest.mark.asyncio
+async def test_records_of_unrequested_activities_are_flagged():
+    client = _mock_client([_timesheet(101, None)])  # activity 1
+
+    text = (await _handle_timesheet_list(client, {"activity": 0}))[0].text
+
+    assert "Warning: Kimai returned records of activity ID(s) 1" in text
+
+
+@pytest.mark.asyncio
+async def test_a_meta_name_kimai_cannot_search_notes_left_out_records():
+    """'issue ref' cannot be a search term; records without a visible row are
+    then unknown and left out, with a note instead of silently."""
+    client = _mock_client([_without_row(101)])
+
+    text = (await _handle_timesheet_list(client, {"meta": {"name": "issue ref", "value": "X"}}))[0].text
+
+    assert "1 record(s) with a hidden 'issue ref' were left out" in text
+
+
+@pytest.mark.asyncio
+async def test_an_integral_float_page_does_not_break_the_slice():
+    client = _mock_client([_timesheet(101, "CA-1")])
+
+    text = (await _handle_timesheet_list(client, {"page": 1.0, "meta": {"name": "issue_tracker_id", "value": "CA-1"}}))[0].text
+
+    assert "ID: 101 - " in text

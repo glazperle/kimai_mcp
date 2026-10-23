@@ -23,7 +23,7 @@ from .batch_utils import execute_batch, format_batch_result
 from .dates import parse_local_datetime, parse_local_end, parse_utc_datetime, whole_day
 from .errors import ToolError
 from .timesheet_analytics import TimesheetAnalytics, worked_hours
-from .user_discovery import resolve_accessible_users
+from .user_discovery import own_records_note, resolve_accessible_users
 
 
 def timesheet_tool() -> Tool:
@@ -359,7 +359,9 @@ def _filter_by_meta(timesheets: list, name: str, wanted: str | None) -> tuple[li
             if wanted == "" or (term is not None and (wanted is None or not any_value)):
                 kept.append(ts)
                 unchecked += 1
-            elif any_value:
+            else:
+                # Kimai could not be asked for this value (fallback name:*, or
+                # a name its term syntax cannot carry), so nothing is known.
                 left_out += 1
         elif (actual != "") if wanted is None else (actual.casefold() == wanted.casefold()):
             kept.append(ts)
@@ -375,8 +377,8 @@ def _filter_by_meta(timesheets: list, name: str, wanted: str | None) -> tuple[li
         notes.append(f"{unchecked} of these matched Kimai's substring search on a hidden '{name}' and are not "
                      "checked exactly.")
     if left_out:
-        notes.append(f"{left_out} record(s) with a hidden '{name}' were left out: Kimai could only be asked whether "
-                     "a value is stored, not for this one.")
+        notes.append(f"{left_out} record(s) with a hidden '{name}' were left out: their value cannot be checked, "
+                     "and Kimai's search cannot express this one.")
     return kept, "".join(f"Note: {n}\n\n" for n in notes)
 
 
@@ -470,7 +472,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         term=term
     )
 
-    requested_page = filters.get("page") or 1
+    requested_page = timesheet_filter.page or 1  # coerced to int by the model
     page_size = min(timesheet_filter.size or 50, MAX_PAGE_SIZE)
     # Statistics cover the whole filter. So does the exact meta match: Kimai
     # paginates its LIKE pre-filter, so a requested page full of near-misses
@@ -559,19 +561,14 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
                 "do not exist: it then ignores the user filter and returns the caller's own records.\n\n"
             )
     elif user_scope == "all" and fetched and len({ts.user for ts in fetched}) == 1:
-        # user=all is honoured only with view_other_timesheet; without it
-        # Kimai returns the caller's records, which would read as everyone's.
-        me = await client.get_current_user()
-        if fetched[0].user == me.id:
-            result += (
-                "Note: every record returned is your own. Without the view_other_timesheet permission Kimai "
-                "answers user_scope='all' with the caller's records only.\n\n"
-            )
+        note = await own_records_note(client, fetched[0].user)
+        if note:
+            result += note + "\n\n"
 
     # Kimai drops project and activity IDs that do not exist and then applies
     # no project/activity filter at all, so a wrong ID lists everything.
     for attr, single, several in (("project", "project", "projects"), ("activity", "activity", "activities")):
-        asked = set(filters.get(several) or []) | ({filters[single]} if filters.get(single) else set())
+        asked = set(filters.get(several) or []) | ({filters[single]} if filters.get(single) is not None else set())
         stray = sorted({getattr(ts, attr) for ts in fetched} - asked) if asked else []
         if stray:
             result += (
@@ -580,7 +577,13 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             )
 
     if not fetched_all:
-        result += f"Not all records were returned: {len(fetched)} were fetched and more exist; use 'page' or narrow the filter.\n\n"
+        if fetch_everything:
+            result += (
+                f"Not all records were used: the first {len(fetched)} were fetched (the limit is "
+                f"{MAX_STATS_RESULTS}); narrow the filter, e.g. a shorter period.\n\n"
+            )
+        else:
+            result += f"There may be more records: use 'page' {requested_page + 1} for the next ones.\n\n"
     
     # Include user list if requested
     if filters.get("include_user_list"):

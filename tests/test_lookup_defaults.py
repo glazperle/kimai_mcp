@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from kimai_mcp.client import KimaiClient
+from kimai_mcp.client import KimaiAPIError, KimaiClient
 from kimai_mcp.models import Project, Team, TeamMember, TimesheetEntity, User, UserEntity
 from kimai_mcp.tools.registry import dispatch_tool
 
@@ -147,7 +147,7 @@ async def test_project_analysis_team_falls_back_when_users_filter_is_refused():
 
     fallback = client.get_timesheets.await_args.args[0]
     assert (fallback.user, fallback.users) == ("all", None)
-    assert "User ID 5" in text  # the member's record survives the post-filter
+    assert "ana" in text  # the member's record survives the post-filter, named from the team
     assert "User ID 8" not in text
     assert "Kimai refused the team filter (Cannot access user: 5)" in text
 
@@ -263,3 +263,86 @@ async def test_the_same_midnight_twice_is_that_whole_day():
     })
 
     assert client.get_timesheets.await_args.args[0].end.isoformat() == "2025-06-30T23:59:59"
+
+
+@pytest.mark.asyncio
+async def test_a_specific_user_analysis_refuses_the_callers_records():
+    """Without view_other_timesheet Kimai returns the caller's records for any
+    user filter; analysing them as user 5 would report the wrong person."""
+    from kimai_mcp.tools.errors import ToolError
+
+    client = _client()  # records of user 1, the caller
+    client.get_users.side_effect = KimaiAPIError("Access denied", 403)
+
+    with pytest.raises(ToolError, match="not of user 5"):
+        await dispatch_tool(client, "analyze_project_team", {
+            "project_id": 7, "user_scope": "specific", "user": "5", **_PERIOD,
+        })
+
+
+@pytest.mark.asyncio
+async def test_an_ignored_team_filter_is_noted():
+    client = _client()  # Kimai returns user 1's records although users[] asked for 5
+    member = TeamMember(user=User(id=5, username="ana", enabled=True))
+    me = TeamMember(user=User(id=1, username="me", enabled=True))
+    client.get_team.return_value = Team(id=3, name="Web", members=[member, me])
+    rows, _, _ = client.get_timesheets.return_value
+    other = rows[0].model_copy(update={"id": 9, "user": 8})
+    client.get_timesheets.return_value = ([*rows, other], True, 1)
+
+    text = (await dispatch_tool(client, "analyze_project_team", {
+        "project_id": 7, "user_scope": "team", "team": 3, **_PERIOD,
+    }))[0].text
+
+    assert "Kimai ignored the team filter" in text
+
+
+@pytest.mark.asyncio
+async def test_a_failing_own_records_lookup_does_not_lose_the_report():
+    """GET /users/me only feeds a note; its failure must not discard the result."""
+    client = _client()
+    client.get_current_user.side_effect = KimaiAPIError("Service Unavailable", 503)
+
+    text = (await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD}))[0].text
+
+    assert "Project Team Analysis" in text
+
+
+@pytest.mark.asyncio
+async def test_the_all_scope_analysis_notes_own_records():
+    client = _client()  # only the caller's records
+
+    text = (await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD}))[0].text
+
+    assert "every record returned is your own" in text
+
+
+@pytest.mark.asyncio
+async def test_a_project_id_without_view_permission_is_found_in_the_listing():
+    """GET /projects/{id} needs 'view' on the project, which ROLE_USER lacks."""
+    client = _client()
+    client.get_project.side_effect = KimaiAPIError("Access Denied.", 403)
+
+    await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD})
+
+    assert client.get_timesheets.await_args.args[0].project == 7
+
+
+@pytest.mark.asyncio
+async def test_a_project_name_with_a_backslash_is_matched_without_a_term():
+    client = _client()
+    client.get_projects.return_value = [Project(id=4, name="Kunde\\Projekt")]
+
+    await dispatch_tool(client, "analyze_project_team", {"project_name": "Kunde\\Projekt", **_PERIOD})
+
+    assert client.get_projects.await_args.args[0].term is None
+
+
+@pytest.mark.asyncio
+async def test_a_401_while_listing_users_is_not_taken_for_a_refusal():
+    """A 401 means the token is gone; the server rebuilds the session on it."""
+    client = _client()
+    client.get_users.side_effect = KimaiAPIError("Unauthorized", 401)
+
+    with pytest.raises(KimaiAPIError):
+        await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD})

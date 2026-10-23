@@ -10,6 +10,7 @@ from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
 from ..models import ActivityFilter, ProjectFilter, TimesheetFilter
 from .dates import parse_local_datetime, parse_local_end, whole_day
 from .errors import ToolError
+from .user_discovery import own_records_note
 
 # Safety limit passed to get_timesheets (fetched in pages of 500, so the
 # client's own cap of 100 pages is not reached first). A fetch that stops
@@ -83,6 +84,20 @@ async def _find_project(client: KimaiClient, name: str):
     return candidates[0]
 
 
+async def _project_by_id(client: KimaiClient, project_id: int):
+    """GET /projects/{id} needs the 'view' permission on the project, which a
+    default ROLE_USER lacks; the listing needs API access only."""
+    try:
+        return await client.get_project(project_id)
+    except KimaiAPIError as e:
+        if e.status_code != 403:
+            raise
+    project = next((p for p in await client.get_projects(ProjectFilter.everything()) if p.id == project_id), None)
+    if project is None:
+        raise ToolError(f"❌ Project ID {project_id} is not visible to this token.")
+    return project
+
+
 async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle comprehensive project team analysis."""
     missing = [f for f in ("begin", "end") if not arguments.get(f)]
@@ -99,13 +114,15 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
     try:
         # 1. Find the project (server-side term search, any visibility and period)
         if arguments.get('project_id'):
-            project = await client.get_project(arguments['project_id'])
+            project = await _project_by_id(client, arguments['project_id'])
         else:
             project = await _find_project(client, project_name)
 
         # 2. Handle user scope selection
         user_scope = arguments.get('user_scope', 'all')
         user_filter = 'all'  # Default to all users
+        team_user_ids: list[int] = []
+        team_users: list = []
         
         if user_scope == 'self':
             # Current user only - don't set user filter (uses current user by default)
@@ -125,6 +142,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             try:
                 team = await client.get_team(arguments['team'])
                 team_user_ids = [member.user.id for member in team.members]
+                team_users = [member.user for member in team.members]
                 if not team_user_ids:
                     raise ToolError(f"❌ Team ID {arguments['team']} has no members.")
                 # Kimai filters by several users itself (users[]), so the cap
@@ -171,11 +189,12 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
 
         async def names(fetch):
             # Names are cosmetic: GET /users needs view_user, which default Kimai
-            # grants to super admins only, so a refusal must not stop the analysis.
+            # grants to super admins only, so a refusal must not stop the
+            # analysis. A 401 (token gone) is not a refusal and propagates.
             try:
                 return await fetch
             except KimaiAPIError as e:
-                if e.status_code not in (401, 403):
+                if e.status_code != 403:
                     raise
                 return None
 
@@ -190,13 +209,17 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                 names(client.get_activities(ActivityFilter(visible=3))),
             )
             timesheets, fetched_all, _last_page = timesheets
-            if users is None:
+            if users is None and not team_users:
                 scope_notes.append("> User names are not shown: this token may not list users (view_user).")
-            users, activities = users or [], activities or []
+            users, activities = users or team_users, activities or []
         except KimaiAPIError as e:
-            if e.status_code in (401, 403):
+            if e.status_code == 401:
+                raise  # the token is gone; the server rebuilds the session
+            if e.status_code == 403:
                 raise ToolError(
-                    f"❌ Insufficient permissions to access project '{project.name}' data.\n\n**Required permission:**\n• `view_other_timesheet` - to see other users' records\n\n**Tip:** Try asking your Kimai admin to grant it or use `user_scope: 'self'` to see only your own data."
+                    f"❌ Kimai refused data for project '{project.name}': {e.message} (Status: 403).\n\n"
+                    "Other users' records need `view_other_timesheet` (and access to those users); "
+                    "`user_scope: 'self'` analyses your own records only."
                 )
             elif e.status_code == 404:
                 raise ToolError(
@@ -215,9 +238,22 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                 f"⚠️ Dataset too large: at least {len(timesheets)} entries found for project '{project.name}' (fetch stopped there).\n\nPlease narrow down the date range (currently {begin.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}) or filter by specific users to ensure optimal performance."
             )
         
+        # Kimai ignores user/users[] for a token without view_other_timesheet
+        # and returns the caller's own records. For 'specific' that would be a
+        # report about the wrong person, so it is refused.
+        fetched_users = {ts.user for ts in timesheets}
+        if user_scope == 'specific' and str(user_filter).isdigit() and fetched_users - {int(user_filter)}:
+            raise ToolError(
+                f"❌ Kimai returned records of user(s) {', '.join(map(str, sorted(fetched_users)))}, not of user "
+                f"{user_filter}: without view_other_timesheet (or access to that user) it ignores the user filter "
+                "and returns the caller's own records."
+            )
         if user_scope == 'team':
-            # Also when Kimai ignored users[] (no view_other_timesheet) and
-            # returned the caller's own records instead.
+            if not scope_notes and fetched_users - set(team_user_ids):
+                scope_notes.append(
+                    "> ⚠️ Kimai ignored the team filter (this token cannot see other users' records), so only "
+                    "team members among the returned records are counted."
+                )
             timesheets = [ts for ts in timesheets if ts.user in team_user_ids]
 
         if not timesheets:
@@ -230,14 +266,9 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             )]
 
         if user_scope == 'all' and len({ts.user for ts in timesheets}) == 1:
-            # user=all is honoured only with view_other_timesheet; without it
-            # Kimai returns the caller's records, which would read as the team.
-            me = await client.get_current_user()
-            if timesheets[0].user == me.id:
-                scope_notes.append(
-                    "> ⚠️ Every record is your own. Without the view_other_timesheet permission Kimai "
-                    "returns only the caller's records, so other members may be missing."
-                )
+            note = await own_records_note(client, timesheets[0].user)
+            if note:
+                scope_notes.append(f"> {note}")
 
         # Create lookup dictionaries
         user_lookup = {}

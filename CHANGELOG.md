@@ -98,8 +98,11 @@ Each of these was data Kimai sent (or a filter it offered) that a tool silently 
   to everyone's records (with a warning in the report) when Kimai refuses a member (403), and keeps the
   team's records in either case.
 - **`analyze_project_team` failed for every token except a super admin's**: it lists users only to
-  print their names, and `GET /users` needs `view_user`. A refused name lookup now degrades to user IDs
-  with a note. The analysis fetches in pages of 500 (was 50, 100 requests for 5000 records).
+  print their names, and `GET /users` needs `view_user`. A refused name lookup now degrades to team
+  member names or user IDs, with a note. `project_id` works for tokens that may not open a single
+  project (the listing is searched instead). The analysis fetches in pages of 500 (was 50, 100 requests
+  for 5000 records). With `user_scope=specific`, records of anyone else than the requested user (what
+  Kimai returns when it ignores the filter) are refused instead of being reported as that user's.
 
 Other fixes:
 
@@ -110,16 +113,19 @@ Other fixes:
   records in the period: the client stopped at 100 pages and the size guard compared against 10000. The
   analysis now refuses a truncated fetch and asks for a shorter period.
 - **Filters Kimai ignored were not reported.** Without `view_other_timesheet`, or for user IDs that do not
-  exist, Kimai returns the caller's own records for `user`/`users`/`user_scope=all`; unknown project and
+  exist, Kimai returns the caller's own records for `user`/`users`, and it answers `user_scope=all` with
+  the records the token may see (without `view_all_data`: its own and its teams'). Unknown project and
   activity IDs make it drop that filter entirely. When the returned records show this (records of users,
   projects or activities that were not requested, or only the caller's records for `all`), the listing
-  now says so instead of presenting them as the requested ones. Where the records cannot show it (the
-  caller has none in the period), nothing can be detected without permissions the token lacks.
+  now says so instead of presenting them as the requested ones. Unknown customer IDs, and cases where
+  the caller has no records in the period, cannot be told from the records and are not reported.
 - **A date-only `end` dropped the whole last day** in `timesheet action=list` and
   `analyze_project_team`: Kimai keeps records started at or before `end`, and `2025-06-30` meant
   midnight. A date alone now means the end of that day, as does the same midnight given as begin and end
   (the listing used the next midnight, which took that day's first records too).
 - `page` and `size` must be at least 1; a negative value used to be sliced from the end of the result.
+- An integer argument given as `1.0` (JSON Schema's "integer" accepts it) is passed on as `1`; it used
+  to reach Kimai as `/timesheets/1.0` (404) or `size=10.0` (400).
 - **A repeated ID in a batch action** ran twice: deletes reported a false failure, exports undid
   themselves. Every batch action processes an ID once.
 - **`entity type=user action=update` needed email, language, locale and timezone on every call**, and

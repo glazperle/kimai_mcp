@@ -408,3 +408,28 @@ async def test_rate_errors_name_the_key_the_rate_schema_declares():
             "entity": "project", "entity_id": 1, "action": "add",
             "data": {"rate": 1, "internal_rate": 10 ** 400},
         })
+
+
+
+@pytest.mark.asyncio
+async def test_integral_floats_reach_handlers_as_ints():
+    """JSON Schema's "integer" accepts 1.0, which Kimai answers with 404 (/timesheets/1.0)."""
+    from datetime import datetime, timezone
+
+    from kimai_mcp.models import TimesheetEntity
+
+    client = AsyncMock(spec=KimaiClient)
+    client.get_timesheet.return_value = TimesheetEntity(
+        id=1, project=1, activity=1, begin=datetime(2026, 1, 1, 9, tzinfo=timezone.utc),
+    )
+    await dispatch_tool(client, "timesheet", {"action": "get", "id": 1.0})
+    sent = client.get_timesheet.await_args.args[0]
+    assert type(sent) is int
+
+
+def test_entity_page_and_size_have_a_minimum():
+    from kimai_mcp.tools.registry import all_tools, validate_arguments
+
+    tool = next(t for t in all_tools() if t.name == "entity")
+    with pytest.raises(ToolError, match="minimum"):
+        validate_arguments(tool, {"type": "invoice", "action": "list", "filters": {"size": 0}})

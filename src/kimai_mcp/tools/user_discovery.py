@@ -1,7 +1,7 @@
 """Shared helper for discovering users accessible to the current API token."""
 
 
-from ..client import KimaiClient
+from ..client import KimaiAPIError, KimaiClient
 from .batch_utils import execute_batch
 
 
@@ -48,3 +48,25 @@ async def resolve_accessible_users(client: KimaiClient) -> list:
         accessible_users = list(await client.get_users())
 
     return accessible_users
+
+
+async def own_records_note(client: KimaiClient, user_id: int | None) -> str | None:
+    """A note for a user=all result whose records all belong to ``user_id``.
+
+    Kimai answers user=all with the records the token may see: its own
+    without view_other_timesheet, its own and its teams' without
+    view_all_data. When every record is the caller's, other users' records
+    may be hidden rather than absent. The lookup only feeds this note, so a
+    failure skips the note instead of failing the result.
+    """
+    try:
+        me = await client.get_current_user()
+    except KimaiAPIError:
+        return None
+    if user_id != me.id:
+        return None
+    return (
+        "Note: every record returned is your own. Kimai returns only the records this token may see "
+        "(its own without view_other_timesheet; its own and its teams' without view_all_data), so other "
+        "users' records may be missing rather than absent."
+    )

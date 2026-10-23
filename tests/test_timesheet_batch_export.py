@@ -65,4 +65,6 @@ async def test_a_float_twin_does_not_replace_the_real_id():
 
     await dispatch_tool(client, "timesheet", {"action": "batch_delete", "ids": [1.0, 1]})
 
-    assert [call.args[0] for call in client.delete_timesheet.await_args_list] == [1]
+    sent = [call.args[0] for call in client.delete_timesheet.await_args_list]
+    assert sent == [1]
+    assert type(sent[0]) is int  # 1.0 == 1, so the equality alone cannot fail

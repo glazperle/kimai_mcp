@@ -331,7 +331,7 @@ class KimaiClient:
             * The last page fetched
         """
         params = {}
-        should_paginate_all = False
+        should_paginate_all = fetch_all
         
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)

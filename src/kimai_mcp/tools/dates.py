@@ -6,7 +6,6 @@ parsing keeps the strict ``YYYY-MM-DD`` contract (and the single
 ``DTZ007`` suppression that goes with it) in one place.
 """
 
-import re
 from datetime import date, datetime, time, timezone
 
 from .errors import ToolError
@@ -62,9 +61,6 @@ def parse_local_datetime(value: str, field: str) -> datetime:
     return parsed
 
 
-_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-
 def parse_local_end(value: str, field: str) -> datetime:
     """Like :func:`parse_local_datetime`, but a date alone means the end of that day.
 
@@ -72,9 +68,13 @@ def parse_local_end(value: str, field: str) -> datetime:
     end parsed as midnight silently dropped the whole last day of a period.
     """
     parsed = parse_local_datetime(value, field)
-    if _DATE_ONLY.fullmatch(str(value).strip()):
-        parsed = parsed.replace(hour=23, minute=59, second=59)
-    return parsed
+    try:
+        # Whatever date.fromisoformat takes is a date without a time, on every
+        # Python version: YYYY-MM-DD, and on 3.11+ also 20250630 or 2025-W27-1.
+        date.fromisoformat(str(value).strip())
+    except ValueError:
+        return parsed
+    return parsed.replace(hour=23, minute=59, second=59)
 
 
 def whole_day(begin: datetime | None, end: datetime | None) -> datetime | None:
