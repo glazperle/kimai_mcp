@@ -8,7 +8,7 @@ from ..client import KimaiAPIError, KimaiClient
 from ..models import AbsenceFilter, AbsenceForm
 from ..text import quoted
 from .absence_analytics import AbsenceAnalytics
-from .batch_utils import execute_batch, format_batch_result
+from .batch_utils import execute_batch, format_batch_result, read_batch
 from .dates import day_end, day_start, parse_iso_date, today
 from .errors import ToolError
 from .user_discovery import resolve_accessible_users
@@ -193,11 +193,12 @@ async def _fetch_absences_for_users(
     begin_date: str | None,
     end_date: str | None,
     status: str
-) -> list:
+) -> tuple[list, str]:
     """Fetch absences for multiple users in parallel (max 10 concurrent).
 
-    Users we don't have permission to view are skipped silently
-    (same behavior as the previous sequential implementation).
+    Returns the absences and a note naming the users whose absences this
+    token may not read (403/404, skipped), or "". Any other failure is
+    raised (``read_batch``): a missing user's absences are no answer.
     """
     async def fetch_one(user_id):
         return await client.get_absences(AbsenceFilter(
@@ -207,8 +208,18 @@ async def _fetch_absences_for_users(
             status=status
         ))
 
-    success, _failed = await execute_batch(list(user_ids), fetch_one)
-    return [absence for user_absences in success for absence in user_absences]
+    success, skipped = await read_batch(sorted(user_ids), fetch_one)
+    absences = [absence for user_absences in success for absence in user_absences]
+    return absences, _skipped_note(skipped)
+
+
+def _skipped_note(user_ids: list) -> str:
+    if not user_ids:
+        return ""
+    return (
+        f"\n\nNote: the absences of {len(user_ids)} user(s) could not be read (403/404) and are "
+        f"not included: user ID(s) {', '.join(str(user_id) for user_id in user_ids)}."
+    )
 
 
 async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextContent]:
@@ -234,6 +245,7 @@ async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextC
 
     # Handle different user scopes
     absences = []
+    note = ""
     
     if user_scope == "self":
         # Get absences for current user
@@ -279,7 +291,7 @@ async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextC
 
         # Now fetch absences for each accessible user (in parallel)
         accessible_user_ids = {user.id for user in accessible_users}
-        absences = await _fetch_absences_for_users(
+        absences, note = await _fetch_absences_for_users(
             client,
             accessible_user_ids,
             begin_date,
@@ -297,7 +309,7 @@ async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextC
         result = f"Found {len(absences)} absence(s) for current user\n\n"
     
     if not absences:
-        result += "No absences found for the specified criteria."
+        result += "No absences found for the specified criteria." + note
         return [TextContent(type="text", text=result)]
     
     for absence in absences:
@@ -321,7 +333,7 @@ async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextC
         
         result += "\n"
     
-    return [TextContent(type="text", text=result)]
+    return [TextContent(type="text", text=result.rstrip("\n") + note if note else result)]
 
 
 async def _handle_absence_statistics(
@@ -393,7 +405,7 @@ async def _handle_absence_statistics(
 
         # Fetch absences for each accessible user (in parallel)
         accessible_user_ids = {user.id for user in accessible_users}
-        absences = await _fetch_absences_for_users(
+        absences, note = await _fetch_absences_for_users(
             client,
             accessible_user_ids,
             begin_date,
@@ -420,7 +432,7 @@ async def _handle_absence_statistics(
     # Format and return report
     report = AbsenceAnalytics.format_statistics_report(stats, title)
 
-    return [TextContent(type="text", text=report)]
+    return [TextContent(type="text", text=report + note)]
 
 
 async def _handle_absence_types(client: KimaiClient, language: str) -> list[TextContent]:
@@ -685,9 +697,10 @@ async def _handle_attendance(
         ))
         return user, absences
 
-    # Check all users in parallel (max 10 concurrent);
-    # users we can't check are skipped silently
-    success, _failed = await execute_batch(all_users, check_user)
+    # Check all users in parallel (max 10 concurrent). A user whose absences
+    # this token may not read is listed as not checked: counted present, a
+    # colleague on holiday was reported in the office.
+    success, unchecked = await read_batch(all_users, check_user)
 
     for user, absences in success:
         if absences:
@@ -695,8 +708,11 @@ async def _handle_attendance(
             absence_type = absences[0].type if absences else "Abwesend"
             absent_users_with_reason[user.id] = (user, absence_type)
 
-    # 4. Present = All - Absent
-    present_users = [u for u in all_users if u.id not in absent_users_with_reason]
+    # 4. Present = All - Absent - Not checked
+    unchecked_ids = {u.id for u in unchecked}
+    present_users = [
+        u for u in all_users if u.id not in absent_users_with_reason and u.id not in unchecked_ids
+    ]
 
     # 5. Build report
     # Format date with weekday
@@ -720,6 +736,11 @@ async def _handle_attendance(
             display_name = user.alias if hasattr(user, 'alias') and user.alias else user.username
             type_label = type_labels.get(absence_type, absence_type)
             result += f"- ✗ {display_name} ({type_label})\n"
+
+    if unchecked:
+        result += f"\n## Not checked ({len(unchecked)}): their absences could not be read (403/404)\n"
+        for user in sorted(unchecked, key=lambda u: u.username.lower()):
+            result += f"- ? {getattr(user, 'alias', None) or user.username}\n"
 
     return [TextContent(type="text", text=result)]
 

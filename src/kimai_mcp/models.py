@@ -5,7 +5,7 @@ import re
 from datetime import date, datetime
 from typing import Annotated, Any, ClassVar, Literal, get_args
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from .text import one_line
 
@@ -30,15 +30,39 @@ class KimaiModel(BaseModel):
     # number or a project name cannot pose as a record of its own in a listing
     # (see text.py). Request models (*Form, *Filter) keep what the caller sent.
     multiline_fields: ClassVar[frozenset[str]] = frozenset()
+    # The input keys (name and alias) of the other fields, computed once per
+    # class: a field validator for "*" ran Python code for every field of every
+    # row, which made a 500-row page parse ten times slower.
+    _one_line_keys: ClassVar[frozenset[str]] = frozenset()
 
-    @field_validator("*", mode="before")
     @classmethod
-    def _text_on_one_line(cls, value: Any, info: ValidationInfo) -> Any:
-        if cls.__name__.endswith(("Form", "Filter")) or info.field_name in cls.multiline_fields:
-            return value
-        if _holds_model(cls.model_fields[info.field_name].annotation):
-            return value  # a nested model applies its own rule
-        return _one_line_deep(value)
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
+        super().__pydantic_init_subclass__(**kwargs)
+        if cls.__name__.endswith(("Form", "Filter")):
+            cls._one_line_keys = frozenset()
+            return
+        cls._one_line_keys = frozenset(
+            key
+            for name, field in cls.model_fields.items()
+            # A nested model applies its own rule.
+            if name not in cls.multiline_fields and not _holds_model(field.annotation)
+            for key in (name, field.alias)
+            if key
+        )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _text_on_one_line(cls, data: Any) -> Any:
+        keys = cls._one_line_keys
+        if not keys or not isinstance(data, dict):
+            return data
+        fixed = {}
+        for key, value in data.items():
+            if key in keys and isinstance(value, (str, list, dict)):
+                single = _one_line_deep(value)
+                if single is not value:
+                    fixed[key] = single
+        return {**data, **fixed} if fixed else data
 
 
 @functools.cache
@@ -50,12 +74,15 @@ def _holds_model(annotation: Any) -> bool:
 
 
 def _one_line_deep(value: Any) -> Any:
+    """``value`` with every string in it on one line; the same object if none changed."""
     if isinstance(value, str):
         return one_line(value)
     if isinstance(value, list):
-        return [_one_line_deep(item) for item in value]
+        items = [_one_line_deep(item) for item in value]
+        return value if all(new is old for new, old in zip(items, value)) else items
     if isinstance(value, dict):
-        return {key: _one_line_deep(item) for key, item in value.items()}
+        items = {key: _one_line_deep(item) for key, item in value.items()}
+        return value if all(items[key] is item for key, item in value.items()) else items
     return value
 
 
@@ -252,7 +279,7 @@ class Customer(KimaiModel):
       and the budget fields.
     """
 
-    multiline_fields = frozenset({"comment", "address", "meta_fields"})
+    multiline_fields = frozenset({"comment", "address"})
 
     id: int
     name: str
@@ -307,7 +334,7 @@ class Project(KimaiModel):
     ``time`` permission for that project (``BudgetExclusionStrategy``, 2.66).
     """
 
-    multiline_fields = frozenset({"comment", "meta_fields"})
+    multiline_fields = frozenset({"comment"})
 
     id: int
     name: str
@@ -340,7 +367,7 @@ class Project(KimaiModel):
 class Activity(KimaiModel):
     """Activity model."""
 
-    multiline_fields = frozenset({"comment", "meta_fields"})
+    multiline_fields = frozenset({"comment"})
     id: int
     name: str
     project: int | None = None
@@ -375,7 +402,7 @@ class TimesheetEntity(KimaiModel):
     visible" stays distinguishable from a genuine zero rate.
     """
 
-    multiline_fields = frozenset({"description", "meta_fields"})
+    multiline_fields = frozenset({"description"})
 
     id: int | None = None
     activity: int
@@ -392,7 +419,7 @@ class TimesheetEntity(KimaiModel):
     hourly_rate: float | None = Field(None, alias="hourlyRate")
     exported: bool = False
     billable: bool = True
-    meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
+    meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
     break_duration: int | None = Field(None, alias="break")
 
 
@@ -650,7 +677,7 @@ PaymentDate = Annotated[date | None, BeforeValidator(_date_part)]
 class Invoice(KimaiModel):
     """Invoice model."""
 
-    multiline_fields = frozenset({"comment", "meta_fields"})
+    multiline_fields = frozenset({"comment"})
     id: int | None = None
     invoice_number: str = Field(alias="invoiceNumber")
     comment: str | None = None
@@ -664,7 +691,7 @@ class Invoice(KimaiModel):
     vat: float = 0.0
     status: str = "new"
     payment_date: PaymentDate = Field(None, alias="paymentDate")
-    meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
+    meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
     overdue: bool | None = None  # Whether the invoice is overdue
     invoice_filename: str | None = Field(None, alias="invoiceFilename")
 

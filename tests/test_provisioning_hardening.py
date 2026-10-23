@@ -466,7 +466,7 @@ async def test_a_rejected_token_forgets_a_provisioned_user(monkeypatch, tmp_path
     ProvisionedUserStore(store_path).load_into(users)
     server = _server(users, monkeypatch, store_path=str(store_path))
 
-    await server._handle_auth_failure("autoSlug12345678")
+    await server._forget_credentials("autoSlug12345678")
 
     assert "autoSlug12345678" not in users.users
     assert json.loads(store_path.read_text(encoding="utf-8")) == {}
@@ -478,7 +478,7 @@ async def test_a_rejected_token_never_deletes_a_declared_user(monkeypatch):
     users = UsersConfig(users={"declaredUserSlug16": _config()})
     server = _server(users, monkeypatch)
 
-    await server._handle_auth_failure("declaredUserSlug16")
+    await server._forget_credentials("declaredUserSlug16")
 
     assert "declaredUserSlug16" in users.users
 
@@ -524,40 +524,265 @@ async def test_a_recently_used_provisioned_session_is_kept(monkeypatch):
     assert "autoSlug12345678" in server.user_sessions
 
 
+class _Kimai:
+    """A fake KimaiClient whose GET /version yields, so concurrent requests interleave."""
+
+    inits: list  # set per test (_serving_server)
+    answer: object = None  # an exception to raise, or None for success
+
+    def __init__(self, base_url, api_token, **kwargs):
+        self.token = api_token
+
+    async def get_version(self):
+        import asyncio
+
+        type(self).inits.append(self.token)
+        await asyncio.sleep(0)
+        if type(self).answer is not None:
+            raise type(self).answer
+
+        class Version:
+            version = "2.70.2"
+
+        return Version()
+
+    async def close(self):
+        pass
+
+
+def _serving_server(users, monkeypatch, *, answer=None, store_path=None):
+    """A server whose on-demand inits run, with a manager start that yields."""
+    import asyncio
+
+    from kimai_mcp.streamable_http_server import StreamableHTTPMCPServer
+
+    kimai = type("Kimai", (_Kimai,), {"inits": [], "answer": answer})
+    monkeypatch.setattr("kimai_mcp.streamable_http_server.KimaiClient", kimai)
+    provisioning_config = ProvisioningConfig(kimai_url=KIMAI_URL, admin_token="t", store_path=store_path)
+    server = StreamableHTTPMCPServer(
+        users_config=users, public_url="http://localhost:8000", provisioning_config=provisioning_config
+    )
+    server._serving = True
+
+    async def start(session):
+        await asyncio.sleep(0)
+        server._session_manager_tasks[session.user_slug] = asyncio.create_task(asyncio.Event().wait())
+
+    server._start_session_manager = start
+    return server, kimai
+
+
+def _rejected_session(server, slug):
+    from kimai_mcp.streamable_http_server import UserMCPSession
+
+    old = UserMCPSession(slug, server.users_config.users[slug])
+    old.session_manager = object()
+    old.token_rejected = True
+    server.user_sessions[slug] = old
+    return old
+
+
 @pytest.mark.asyncio
 async def test_a_rejected_session_is_rebuilt_once_on_the_next_request(monkeypatch):
     """The call that saw the 401 only marks the session; tearing it down inside
-    that call cancelled the call itself. Concurrent requests rebuild it once."""
+    that call cancelled the call itself. Concurrent requests rebuild it once
+    (every step yields here, so without the lock each would rebuild)."""
     import asyncio
-    from unittest.mock import AsyncMock
-
-    from kimai_mcp.streamable_http_server import UserMCPSession
 
     users = UsersConfig(users={"declaredUserSlug16": _config()})
-    server = _server(users, monkeypatch)
-    server._serving = True
-    server._start_session_manager = AsyncMock()
-    old = UserMCPSession("declaredUserSlug16", users.users["declaredUserSlug16"])
-    old.session_manager = object()
-    old.token_rejected = True
-    server.user_sessions["declaredUserSlug16"] = old
-    teardowns = []
-    teardown = server._handle_auth_failure
+    server, kimai = _serving_server(users, monkeypatch)
+    old = _rejected_session(server, "declaredUserSlug16")
 
-    async def counting(slug):
-        teardowns.append(slug)
-        await teardown(slug)
+    first, second, third = await asyncio.gather(*(server._ensure_session("declaredUserSlug16") for _ in range(3)))
 
-    server._handle_auth_failure = counting
-
-    first, second = await asyncio.gather(
-        server._ensure_session("declaredUserSlug16"), server._ensure_session("declaredUserSlug16")
-    )
-
-    assert first is second
+    assert first is second is third
     assert first is not old
     assert first.token_rejected is False
-    assert teardowns == ["declaredUserSlug16"]
+    assert kimai.inits == ["tok"]
+    await server._stop_session_managers()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_rebuild_is_not_repeated_by_the_requests_that_waited(monkeypatch):
+    """Each queued request re-ran the init behind the failed one, one after another."""
+    import asyncio
+
+    from kimai_mcp.client import KimaiAPIError
+
+    users = UsersConfig(users={"declaredUserSlug16": _config()})
+    server, kimai = _serving_server(users, monkeypatch, answer=KimaiAPIError("Unauthorized", 401))
+    _rejected_session(server, "declaredUserSlug16")
+
+    results = await asyncio.gather(*(server._ensure_session("declaredUserSlug16") for _ in range(3)))
+
+    assert results == [None, None, None]
+    assert kimai.inits == ["tok"]
+    assert "declaredUserSlug16" in users.users  # a declared user is never forgotten
+    # A later request tries again: Kimai may accept the token by now.
+    assert await server._ensure_session("declaredUserSlug16") is None
+    assert kimai.inits == ["tok", "tok"]
+    await server._stop_session_managers()
+
+
+@pytest.mark.asyncio
+async def test_one_users_slow_init_does_not_hold_up_another(monkeypatch):
+    import asyncio
+
+    users = UsersConfig(users={"slowUserSlug12345": _config("slow"), "fastUserSlug12345": _config("fast")})
+    gate = asyncio.Event()
+    server, kimai = _serving_server(users, monkeypatch)
+
+    async def get_version(self):
+        if self.token == "slow":
+            await gate.wait()
+
+        class Version:
+            version = "2.70.2"
+
+        return Version()
+
+    monkeypatch.setattr(kimai, "get_version", get_version)
+    slow = asyncio.create_task(server._ensure_session("slowUserSlug12345"))
+    await asyncio.sleep(0)
+
+    fast = await asyncio.wait_for(server._ensure_session("fastUserSlug12345"), 1)
+
+    assert fast is not None
+    gate.set()
+    assert await slow is not None
+    await server._stop_session_managers()
+
+
+@pytest.mark.asyncio
+async def test_a_request_waiting_while_the_user_is_forgotten_gets_no_session(monkeypatch):
+    """It read users_config[slug] after the slug was removed: KeyError, HTTP 500."""
+    import asyncio
+
+    from kimai_mcp.client import KimaiAPIError
+
+    users = UsersConfig()
+    users.add_user("autoSlug12345678", _config())
+    server, kimai = _serving_server(users, monkeypatch, answer=KimaiAPIError("Unauthorized", 401))
+
+    results = await asyncio.gather(*(server._ensure_session("autoSlug12345678") for _ in range(2)))
+
+    assert results == [None, None]
+    assert "autoSlug12345678" not in users.users
+    assert kimai.inits == ["tok"]
+
+
+@pytest.mark.asyncio
+async def test_a_401_in_a_call_forgets_a_provisioned_user_at_once(monkeypatch, tmp_path):
+    """Forgotten only on the next request, a sign-in made right after the 401
+    matched the dead entry, and the idle sweep or a restart lost the mark."""
+    from types import SimpleNamespace
+
+    from mcp.types import TextContent
+
+    store_path = tmp_path / "provisioned.json"
+    ProvisionedUserStore(store_path).add("anna@example.com", "autoSlug12345678", _config())
+    users = UsersConfig()
+    ProvisionedUserStore(store_path).load_into(users)
+    server, _ = _serving_server(users, monkeypatch, store_path=str(store_path))
+    session = server._new_session("autoSlug12345678", users.users["autoSlug12345678"])
+    session.kimai_client = SimpleNamespace(unauthorized=False)
+
+    async def dispatch(client, name, arguments):
+        client.unauthorized = True
+        return [TextContent(type="text", text="Deleted: 0, Failed: 1")]
+
+    monkeypatch.setattr("kimai_mcp.streamable_http_server.dispatch_tool", dispatch)
+
+    result = await session._call_tool(None, SimpleNamespace(name="timesheet", arguments={}))
+
+    assert result.is_error is not True
+    assert session.token_rejected is True
+    assert "autoSlug12345678" not in users.users
+    assert json.loads(store_path.read_text(encoding="utf-8")) == {}
+    assert users.get_user_by_oidc_identity("anna@example.com") is None
+
+
+@pytest.mark.asyncio
+async def test_an_init_answered_with_401_forgets_a_provisioned_user(monkeypatch):
+    """After a restart (or the idle sweep) no session carries the mark any more."""
+    from kimai_mcp.client import KimaiAPIError
+
+    users = UsersConfig()
+    users.add_user("autoSlug12345678", _config())
+    server, _ = _serving_server(users, monkeypatch, answer=KimaiAPIError("Unauthorized", 401))
+
+    await server.initialize_users()
+
+    assert "autoSlug12345678" not in users.users
+
+
+@pytest.mark.asyncio
+async def test_an_outage_at_init_forgets_nobody(monkeypatch):
+    from kimai_mcp.client import KimaiAPIError
+
+    users = UsersConfig()
+    users.add_user("autoSlug12345678", _config())
+    server, _ = _serving_server(users, monkeypatch, answer=KimaiAPIError("Gateway Timeout", 504))
+
+    assert await server._ensure_session("autoSlug12345678") is None
+    assert "autoSlug12345678" in users.users
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_releases_a_rejected_session_of_a_forgotten_user(monkeypatch):
+    """Its user signs in under a new slug, so no request ever replaced it."""
+    import time
+
+    users = UsersConfig()
+    users.add_user("autoSlug12345678", _config())
+    server, _ = _serving_server(users, monkeypatch)
+    _rejected_session(server, "autoSlug12345678")
+    await server._forget_credentials("autoSlug12345678")
+    server._session_last_used["autoSlug12345678"] = time.time()  # recently used
+
+    await server._sweep_idle_sessions()
+
+    assert "autoSlug12345678" not in server.user_sessions
+    await server._stop_session_managers()
+
+
+@pytest.mark.asyncio
+async def test_a_replaced_session_lets_its_running_calls_finish(monkeypatch):
+    """One manager serves all MCP sessions of a user; stopping it at once
+    cancelled the user's other calls in flight."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from mcp.types import TextContent
+
+    users = UsersConfig(users={"declaredUserSlug16": _config()})
+    server, _ = _serving_server(users, monkeypatch)
+    old = _rejected_session(server, "declaredUserSlug16")
+    old.token_rejected = False
+    old.kimai_client = SimpleNamespace(unauthorized=False)
+    manager = asyncio.create_task(asyncio.Event().wait())
+    server._session_manager_tasks["declaredUserSlug16"] = manager
+    release = asyncio.Event()
+
+    async def dispatch(client, name, arguments):
+        await release.wait()
+        return [TextContent(type="text", text="done")]
+
+    monkeypatch.setattr("kimai_mcp.streamable_http_server.dispatch_tool", dispatch)
+    call = asyncio.create_task(old._call_tool(None, SimpleNamespace(name="timesheet", arguments={})))
+    await asyncio.sleep(0)
+    old.token_rejected = True  # another call saw a 401
+
+    rebuilt = await server._ensure_session("declaredUserSlug16")
+    await asyncio.sleep(0)
+
+    assert rebuilt is not old
+    assert not manager.done()  # the old manager waits for the running call
+    release.set()
+    assert (await call).content[0].text == "done"
+    await asyncio.wait_for(asyncio.gather(*server._retiring), 1)
+    assert manager.cancelled()
+    await server._stop_session_managers()
 
 
 @pytest.mark.asyncio
@@ -578,3 +803,44 @@ async def test_the_legacy_route_rebuilds_a_rejected_session():
 
     ensure.assert_awaited_once_with("legacySlug")
     rebuilt.session_manager.handle_request.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_the_legacy_route_answers_a_configured_slug_without_counting_it():
+    """After one failed rebuild the slug was missing from the session table and
+    took the unknown-slug branch: counted 404s, and the client IP was blocked."""
+    from unittest.mock import AsyncMock
+
+    from kimai_mcp.streamable_http_server import MCPRoutingMiddleware
+
+    ensure = AsyncMock(return_value=None)
+    middleware = MCPRoutingMiddleware(
+        AsyncMock(), {}, ensure_session=ensure, is_configured=lambda slug: slug == "legacySlug"
+    )
+
+    for _ in range(12):
+        await middleware._handle_mcp_request(
+            {"type": "http", "client": ("10.0.0.1", 1)}, AsyncMock(), AsyncMock(), "legacySlug"
+        )
+
+    assert ensure.await_count == 12
+    assert not await middleware.enumeration_protection.is_blocked("10.0.0.1")
+
+
+def test_oauth_tokens_of_a_forgotten_user_stop_verifying():
+    """/mcp answered 503 and a refresh issued new tokens for the dead subject,
+    so the client never got the 401 that starts a new sign-in."""
+    import asyncio
+
+    from kimai_mcp.oauth import KimaiOAuthProvider
+
+    users = UsersConfig()
+    users.add_user("autoSlug12345678", _config())
+    provider = KimaiOAuthProvider(users_config=users, public_url="https://mcp.example.com")
+    pair = provider._issue_token_pair(client_id="c1", scopes=["mcp"], subject="autoSlug12345678", resource=None)
+    assert asyncio.run(provider.load_access_token(pair.access_token)) is not None
+
+    users.remove_provisioned_user("autoSlug12345678")
+
+    assert asyncio.run(provider.load_access_token(pair.access_token)) is None
+    assert asyncio.run(provider.load_refresh_token(None, pair.refresh_token)) is None

@@ -523,7 +523,7 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         token = self._refresh_tokens.get(refresh_token)
         if token is None:
             return None
-        if token.expires_at is not None and token.expires_at < time.time():
+        if (token.expires_at is not None and token.expires_at < time.time()) or self._subject_gone(token):
             self._remove_refresh_token(refresh_token)
             return None
         return token
@@ -559,10 +559,20 @@ class KimaiOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Ref
         access = self._access_tokens.get(token)
         if access is None:
             return None
-        if access.expires_at is not None and access.expires_at < int(time.time()):
+        if (access.expires_at is not None and access.expires_at < int(time.time())) or self._subject_gone(access):
             self._remove_access_token(token)
             return None
         return access
+
+    def _subject_gone(self, token: AccessToken | RefreshToken) -> bool:
+        """Whether the token's user is no longer configured.
+
+        A provisioned user is forgotten when Kimai rejects their token. Their
+        OAuth tokens kept verifying, so /mcp answered 503 and a refresh issued
+        new ones for the dead subject, while the client needed a 401 to start
+        the sign-in that provisions a new token.
+        """
+        return token.subject is not None and token.subject not in self.users_config.users
 
     # ------------------------------------------------------------------
     # Revocation

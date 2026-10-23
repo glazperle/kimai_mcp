@@ -13,13 +13,14 @@ from mcp.types import TextContent, Tool
 
 from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
 from ..models import (
+    MetaField,
     MetaFieldForm,
     SortOrder,
     TimesheetEditForm,
     TimesheetFilter,
     TimesheetOrderBy,
 )
-from ..text import one_line, quoted, value_text
+from ..text import label_text, one_line, quoted, value_text
 from .batch_utils import execute_batch, format_batch_result
 from .dates import parse_local_datetime, parse_local_end, parse_utc_datetime, whole_day
 from .errors import ToolError
@@ -296,23 +297,24 @@ async def handle_timer(client: KimaiClient, **params) -> list[TextContent]:
         )
 
 
-def _format_meta_fields(meta_fields: list[dict] | None) -> str | None:
+def _format_meta_fields(meta_fields: list[MetaField] | None) -> str | None:
     """Render the non-empty meta fields as ``name=value, ...`` (None if there are none).
 
     Kimai serializes the stored, visible meta rows; a stored row without a
-    value arrives as ``{"name": ..., "value": null}`` and is skipped. A value
-    with a separator, a quote, a line break or outer whitespace is JSON-quoted
-    (``text.value_text``): unambiguous in a listing and lossless in ``get``.
+    value arrives as ``{"name": ..., "value": null}`` and is skipped. A name or
+    value with a separator, a quote, a line break or outer whitespace is
+    JSON-quoted (``text.value_text``): unambiguous in a listing and lossless
+    in ``get``.
     """
     parts = [
-        f"{one_line(field.get('name'))}={value_text(field.get('value'))}"
+        f"{value_text(field.name)}={value_text(field.value)}"
         for field in meta_fields or []
-        if field.get("value") not in (None, "")
+        if field.value not in (None, "")
     ]
     return ", ".join(parts) if parts else None
 
 
-def _meta_value(meta_fields: list[dict] | None, name: str) -> str | None:
+def _meta_value(meta_fields: list[MetaField] | None, name: str) -> str | None:
     """The record's value of meta field ``name`` ('' for null), None without a row.
 
     Kimai serializes the *stored* meta rows that are visible. A record saved
@@ -321,8 +323,8 @@ def _meta_value(meta_fields: list[dict] | None, name: str) -> str | None:
     are compared case-insensitively, like Kimai's own search does.
     """
     for field in meta_fields or []:
-        if str(field.get("name", "")).casefold() == name.casefold():
-            return "" if field.get("value") is None else str(field["value"])
+        if field.name.casefold() == name.casefold():
+            return "" if field.value is None else field.value
     return None
 
 
@@ -1056,26 +1058,26 @@ def _work_label(ts, names: RecordNames) -> str:
         known = names.projects.get(ts.project)
         project = f"project #{ts.project}"
         if known:
-            project = f"{known.name} (#{known.id})"
+            project = f"{label_text(known.name)} (#{known.id})"
             if known.parent_title:  # the customer's name
-                project = f"{known.parent_title} / {project}"
+                project = f"{label_text(known.parent_title)} / {project}"
     else:
-        project = f"{ts.project.name} (#{ts.project.id})"
+        project = f"{label_text(ts.project.name)} (#{ts.project.id})"
         if ts.project.customer:
-            project = f"{ts.project.customer.name} / {project}"
+            project = f"{label_text(ts.project.customer.name)} / {project}"
     if isinstance(ts.activity, int):
         name = names.activities.get(ts.activity)
-        activity = f"{name} (#{ts.activity})" if name else f"activity #{ts.activity}"
+        activity = f"{label_text(name)} (#{ts.activity})" if name else f"activity #{ts.activity}"
     else:
-        activity = f"{ts.activity.name} (#{ts.activity.id})"
+        activity = f"{label_text(ts.activity.name)} (#{ts.activity.id})"
     return f"{project} / {activity}"
 
 
 def _user_label(user, names: RecordNames) -> str:
     if isinstance(user, int):
         name = names.users.get(user)
-        return f"{name} (#{user})" if name else f"user #{user}"
-    return f"{user.alias or user.username} (#{user.id})"
+        return f"{label_text(name)} (#{user})" if name else f"user #{user}"
+    return f"{label_text(user.alias or user.username)} (#{user.id})"
 
 
 _NO_NAMES = RecordNames()  # Expanded rows name themselves
@@ -1131,10 +1133,16 @@ def _describe_timesheet(ts, names: RecordNames = _NO_NAMES, show_user: bool = Tr
         extras.append(f"meta: {meta}")
     if extras:
         lines.append("  " + "; ".join(extras))
-    # Backstop: the models hand over single-line names and the values above are
-    # quoted, so no part brings a line break. A field added later without that
-    # care is still kept from splitting the record (the indent stays).
-    return "\n".join(line[: len(line) - len(line.lstrip())] + one_line(line.lstrip()) for line in lines) + "\n"
+    return _record_lines(lines)
+
+
+def _record_lines(lines: list[str]) -> str:
+    """Backstop: the models hand over single-line names and the values in a
+    record are quoted, so no part brings a line break. A field added later
+    without that care is still kept from splitting the record. The indent
+    stays; only spaces count as indent (lstrip() took a leading line break
+    for one, and the break survived)."""
+    return "".join(line[: len(line) - len(line.lstrip(" "))] + one_line(line.lstrip(" ")) + "\n" for line in lines)
 
 
 async def _handle_timer_active(client: KimaiClient) -> list[TextContent]:

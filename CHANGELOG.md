@@ -11,26 +11,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Text a Kimai user writes could forge records in a listing.** Timesheet rows are one line each since
   2.20.0, but a line break in an alias, an account number, a preference, a project or tag name, a meta
-  value or a comment started a line of its own, and one shaped like `#6 2026-09-01 11:00-12:00, 8.00 h,
-  ... bob (#4)`, `User: admin (ID: 1)` or `Exported: No` read as another record or field. A plain user can
-  edit their own profile and preferences, so this needed no special rights. Now every text field of a
-  read model is joined to one line when it is parsed, except the few that may span lines (descriptions,
-  comments, meta values, the legacy customer address). Those are JSON-quoted where they are shown, with
-  the Unicode line separators (U+2028, U+2029, U+0085) escaped too. The quoting is lossless, so a value
-  read with `get` can be written back, and a meta value such as `CA-1, approved=yes` can no longer pose as
-  two fields.
-- **A 401 is never lost.** The client flags every 401. A tool call that saw one, also where the tool
-  reported the failure as text (a batch result, `config type=all`, a name lookup, `timesheet user_guide`),
-  marks its session, and the streamable server drops and rebuilds it on the next request, once, under its
-  init lock; the legacy `/mcp/{slug}` route rebuilds it too.
+  field or a comment started a line of its own, and one shaped like `#6 2026-09-01 11:00-12:00, 8.00 h,
+  ... bob (#4)`, `User: admin (ID: 1)` or `Exported: No` read as another record or field. Inside a row an
+  alias such as `Bob (#4) - approved by Ana (#5)` did the same without any line break. A plain user can
+  edit their own profile and preferences, so this needed no special rights. Now:
+  - every text field of a read model is joined to one line when it is parsed, except the few that may
+    span lines (descriptions, comments, meta values, the legacy customer address);
+  - those are shown JSON-quoted wherever they would be ambiguous (a line break, an invisible character
+    such as a zero-width space or a bidi override, outer whitespace, a leading quote), and joined with
+    ` | ` in a one-line row. The quoting is lossless, so a value read with `get` can be written back;
+  - a meta value or tag is quoted when it holds a separator or a look-alike of one (`CA-1, approved=yes`,
+    also with fullwidth `，` or `＝`), and a name in a row when it holds `#` or ` / `.
+- **A 401 is never lost, and a revoked token recovers.** The client flags every 401. A tool call that saw
+  one, also where the tool reported the failure as text (a batch result, `config type=all`, a name
+  lookup), marks its session; the streamable server replaces it on the next request, once, and the
+  legacy `/mcp/{slug}` route does too. A provisioned user's token is forgotten at that moment, and at
+  session start after a restart, and their OAuth tokens stop verifying, so the client is asked to sign in
+  again, which provisions a new token (it used to get 503 until someone reconnected twice).
 
 ### Fixed
 
+- **An outage no longer shrinks an answer about everyone.** User discovery (`user_scope=all` for
+  absences and `lock_month`/`unlock_month`, `include_user_list`, `user_guide`) skips a team the token
+  may not open, but reports any other failure of `GET /teams` or a team's details (a timeout, a 5xx, a
+  401) instead of answering from the other teams: `lock_month user_scope=all` locked one team, left the
+  other open and reported success. `GET /users` is asked only when the teams name nobody.
+- `absence list` and `statistics` for all users fail on an outage instead of answering "Found 0
+  absence(s)", and name the users whose absences the token may not read. `absence attendance` lists those
+  as not checked; it counted them present, and reports an outage as such instead of "you may need a
+  permission".
+- Streamable server: a replaced session lets its user's running calls finish (it cancelled them);
+  sessions are built under a lock per user, so one user's slow Kimai no longer holds up another's first
+  request, and requests that waited on a failed build answer at once instead of each trying again; two
+  concurrent requests for a forgotten user no longer end in an HTTP 500; the legacy route builds a
+  configured user's missing session on demand and does not count its 404s toward blocking the client's
+  IP.
 - Without Kimai's pagination headers (a proxy may drop them) a full page says "There may be more
   records" instead of promising a next page; with only `X-Total-Count`, the count decides.
-- User discovery (`include_user_list`, `user_guide`, absences for everyone) asks `GET /users` only when
-  `GET /teams` answered 403. A timeout or a 5xx, from `/teams` or from the team details, is reported as
-  such, and `absence attendance` no longer turns one into "you may need a permission".
 - The "only your own records" probe asks for one plain row, not an Expanded one; the page request no
   longer modifies the caller's filter.
 - A direct client caller's `size=0` is left to Kimai's default and a page below 1 is page 1.
@@ -38,8 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
-- `kimai_mcp/text.py` (`one_line`, `quoted`, `value_text`), `KimaiModel.multiline_fields`,
-  `client.unauthorized`, `UserMCPSession.token_rejected`.
+- `kimai_mcp/text.py` (`one_line`, `quoted`, `value_text`, `label_text`), `KimaiModel.multiline_fields`
+  (applied by one model validator per class; a validator per field made a 500-row page parse several
+  times slower), `client.unauthorized`, `UserMCPSession.token_rejected`, `batch_utils.read_batch`.
+- Invoice and timesheet `meta_fields` are `MetaField` models like those of customers, projects and
+  activities.
 - `scripts/audit_api_models.py`: `EXPECTED_SHAPES` is keyed by client method and route, so excusing
   `TimesheetExpanded` for `get_timesheet_page` no longer excuses it for `get_timesheets`.
 

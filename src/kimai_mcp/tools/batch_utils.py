@@ -4,6 +4,8 @@ import asyncio
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from ..client import KimaiAPIError
+
 # Rate limiting: max parallel requests to avoid overloading Kimai API
 MAX_CONCURRENT = 10
 
@@ -59,6 +61,40 @@ async def execute_batch(
             success.append(result)
 
     return success, failed
+
+
+async def read_batch(
+    items: list[Any],
+    operation: Callable[[Any], Any],
+    max_concurrent: int = MAX_CONCURRENT,
+) -> tuple[list[Any], list[Any]]:
+    """Run one read per item for an answer built from all of them.
+
+    An item the token may not read (403) or that is gone (404) is skipped and
+    returned, so the caller can say so. Any other failure (a 401, a timeout, a
+    5xx) is raised: skipping it made "everyone's absences" or "all users" a
+    confident answer that silently left people out.
+
+    Returns:
+        Tuple of (results, skipped items)
+    """
+    errors: list[Exception] = []
+
+    async def read(item: Any) -> Any:
+        try:
+            return await operation(item)
+        except KimaiAPIError as e:
+            if e.status_code not in (403, 404):
+                errors.append(e)
+            raise
+        except Exception as e:
+            errors.append(e)
+            raise
+
+    success, failed = await execute_batch(items, read, max_concurrent)
+    if errors:
+        raise errors[0]
+    return success, [item for item, _ in failed]
 
 
 def format_batch_result(
