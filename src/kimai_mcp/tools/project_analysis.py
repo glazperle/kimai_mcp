@@ -85,18 +85,22 @@ async def _find_project(client: KimaiClient, name: str):
 
 async def _project_by_id(client: KimaiClient, project_id: int):
     """GET /projects/{id} needs the 'view' permission on the project, which a
-    default ROLE_USER lacks; the listing needs API access only. After one 403
-    the client remembers it and the listing is asked directly."""
+    default ROLE_USER lacks; the listing needs API access only. Once a 403
+    came for a project the listing has, the client remembers it and asks the
+    listing directly."""
     if not getattr(client, "project_view_denied", False):
         try:
             return await client.get_project(project_id)
         except KimaiAPIError as e:
             if e.status_code != 403:
                 raise
-            client.project_view_denied = True
     project = next((p for p in await client.get_projects(ProjectFilter.everything()) if p.id == project_id), None)
     if project is None:
         raise ToolError(f"❌ Project ID {project_id} is not visible to this token.")
+    # Listed but not viewable: view_project is missing for the role (a default
+    # ROLE_USER), not for this one project, so later IDs skip the 403. A team
+    # lead refused a project outside its teams does not list it either.
+    client.project_view_denied = True
     return project
 
 
@@ -173,7 +177,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
 
         async def fetch_timesheets():
             try:
-                return await client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS, fetch_all=True)
+                return await client.get_timesheets(filters, max_results=MAX_ANALYSIS_RESULTS)
             except KimaiAPIError as e:
                 # users[] runs access_user for every member, which is a 403 for
                 # a disabled member unless the token sees everyone. Fetch all
@@ -186,7 +190,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                     "missing from the figures."
                 )
                 everyone = filters.model_copy(update={"user": "all", "users": None})
-                return await client.get_timesheets(everyone, max_results=MAX_ANALYSIS_RESULTS, fetch_all=True)
+                return await client.get_timesheets(everyone, max_results=MAX_ANALYSIS_RESULTS)
 
         try:
             # 4. Fetch data in parallel for better performance.
@@ -200,7 +204,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                 best_effort(client.get_users(UserFilter(visible=3))),
                 best_effort(client.get_activities(ActivityFilter(visible=3))),
             )
-            timesheets, fetched_all, _last_page = timesheets
+            timesheets, fetched_all = timesheets
             if users is None and not team_users:
                 scope_notes.append("> User names are not shown: the user list could not be loaded (it needs view_user).")
             users, activities = users or team_users, activities or []

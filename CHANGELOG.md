@@ -19,42 +19,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Compact timesheet rows** in `timesheet action=list` and `timer action=active|recent|favorites`: one
   line with date, times, hours, break, `Customer / Project (#id) / Activity (#id)`, user and description,
   plus a line for `not billable` / `exported` / rates and one for tags and meta only when they apply. Fifty
-  entries are about a third shorter than before (measured in characters), names included. The `timer` actions no longer
-  repeat the user: those endpoints return the token's own records only.
+  entries are about a third shorter than before (measured in characters), names included. The user is
+  printed only where other users' records were asked for; `timer` actions never print it, since those
+  endpoints return the token's own records only.
 - **Shorter tool schemas.** All tool schemas together went from about 41,000 to 30,500 characters
   (roughly 10k to 7.6k tokens per request). The customer, project and activity `data` schemas are now
   derived from their forms like the other types, the budget explanation is stated once per field instead
   of at length, and descriptions that only repeated the field name are gone. Schema defaults that invited
   a client to send `visible: true` / `billable: true` are gone too. A test caps the total.
 
+- Kimai's 4xx answers are logged as warnings instead of errors: they are answers to the request, which
+  the tool reports, and the name lookups draw a 403 from `GET /users` routinely. 5xx answers and
+  connection failures stay errors.
+
 ### Added
 
-- **Retries for reads.** A GET that gets 429, 502, 503 or 504, or loses its connection, is retried twice
-  (0.5 s, 1.5 s; a `Retry-After` header wins, up to 10 s). A read timeout is not: a server too slow to
-  answer would only get the same load again. Writes are never retried: a POST or PATCH that
-  timed out may have reached Kimai, and repeating it could create a record twice or toggle a flag back.
+- **Retries for reads.** A GET that gets 429, 502 or 503, or whose established connection breaks (a
+  reset, or a keep-alive connection the server had closed), is retried twice (0.5 s, 1.5 s; a
+  `Retry-After` of up to 10 s wins). Not retried, because each would fail the same way again and cost up
+  to the full timeout: a refused connection, an unknown host, a timeout, a 504 (the gateway gave up on a
+  slow Kimai) and a `Retry-After` above 10 s. Writes are never retried: a POST or PATCH that timed out
+  may have reached Kimai, and repeating it could create a record twice or toggle a flag back.
 - **More notes when Kimai ignored a filter.** Records of a customer that was not requested are flagged like
   those of other projects and activities (Kimai drops unknown customer IDs and then does not filter by
-  customer). An empty result for users that do not include the caller says that Kimai may have ignored the
-  user filter (without `view_other_timesheet` it returns the caller's records, and the caller may have
-  none).
+  customer). An empty result for `user_scope=all`, or for users other than the caller alone, says that
+  Kimai may have ignored the user filter: without `view_other_timesheet` it searches the caller's records
+  only, and the caller may have none.
+- With one page listed, the "every record returned is your own" note asks Kimai for one record of the
+  same filter for the caller alone and compares the totals, instead of reading every page.
 
 ### Fixed
 
-- `analyze_project_team` with `project_id` asked `GET /projects/{id}` on every call although a default user
-  gets a 403 there for every project; the client now remembers the 403 and uses the listing directly.
-- The "every record returned is your own" note was based on one page; it now needs the whole result,
-  since the next page may hold someone else's records.
+- `analyze_project_team` with `project_id` asked `GET /projects/{id}` on every call although a default
+  user gets a 403 there for every project. When the listing has the project (so the 403 is role-wide),
+  the client remembers it and uses the listing directly; a team lead refused another team's project
+  keeps the direct request for its own.
 
 ### Internal
 
-- `client.get_timesheets` pages only with `fetch_all=True`; the heuristic that decided by itself whether to
-  page through everything is gone, and so is the handler's second page loop. `get_users` takes a
-  `UserFilter`. Shared helpers: `tools/lookups.py` (`best_effort`, `record_names`) and
-  `tools/search_term.py` (what Kimai's search term takes literally).
+- `client.get_timesheets` always reads every page and returns `(records, fetched_all)`; one page with
+  Kimai's totals is `get_timesheet_page`. The heuristic that decided by itself whether to page through
+  everything is gone, and so is the handler's second page loop. `get_users` takes a `UserFilter`. Shared
+  helpers: `tools/lookups.py` (`best_effort`, `record_names`, which looks up only what is printed) and
+  `tools/search_term.py` (what Kimai's search term takes literally; a colon in a meta value is literal
+  since Kimai 2.35, which splits `name:value` at the first colon).
 - `scripts/audit_api_models.py` follows `_request_with_headers` and knows that `GET /timesheets?full=true`
   returns `TimesheetExpanded` (`EXPECTED_SHAPES`); `scripts/verify_against_kimai.py` checks the pagination
-  headers and the Expanded listing on a live instance.
+  headers and the Expanded listing on a live instance. `tests/test_read_coverage.py` maps the
+  `TimesheetPage` container to its rows, so a getter returning it cannot escape the surface check.
 
 ## [2.19.0] - 2026-10-23
 

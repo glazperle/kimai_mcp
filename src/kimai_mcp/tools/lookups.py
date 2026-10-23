@@ -38,27 +38,28 @@ class RecordNames:
     users: dict[int, str] = field(default_factory=dict)
 
 
-async def record_names(client: KimaiClient, projects_only: bool = False) -> RecordNames:
-    """Every project, activity and user name the token may list.
+async def record_names(client: KimaiClient, activities: bool = True, users: bool = True) -> RecordNames:
+    """Every project, and optionally activity and user, name the token may list.
 
     Hidden and finished projects and activities too (a record keeps its
     project after that one is hidden). Users need view_user; without it only
-    the caller is named. ``projects_only`` skips the activities and users.
+    the caller is named.
     """
-    # By default Kimai lists only visible projects running today.
-    projects = best_effort(client.get_projects(ProjectFilter.everything()))
-    if projects_only:
-        return RecordNames(projects={p.id: p for p in await projects or []})
-    projects, activities, users = await asyncio.gather(
-        projects,
-        best_effort(client.get_activities(ActivityFilter(visible=3))),
-        best_effort(client.get_users(UserFilter(visible=3))),
+    async def nothing() -> list:
+        return []
+
+    projects, activity_list, user_list = await asyncio.gather(
+        # By default Kimai lists only visible projects running today.
+        best_effort(client.get_projects(ProjectFilter.everything())),
+        best_effort(client.get_activities(ActivityFilter(visible=3))) if activities else nothing(),
+        best_effort(client.get_users(UserFilter(visible=3))) if users else nothing(),
     )
-    if users is None:
+    if user_list is None:
         me = await best_effort(client.get_current_user())
-        users = [me] if me is not None else []
+        user_list = [me] if me is not None else []
+    activities_, users_ = activity_list or [], user_list
     return RecordNames(
         projects={p.id: p for p in projects or []},
-        activities={a.id: a.name for a in activities or []},
-        users={u.id: u.alias or u.username for u in users},
+        activities={a.id: a.name for a in activities_},
+        users={u.id: u.alias or u.username for u in users_},
     )

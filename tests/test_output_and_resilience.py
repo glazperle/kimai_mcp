@@ -74,13 +74,41 @@ async def test_a_read_is_retried_on_a_gateway_error(slept):
 
 
 @pytest.mark.asyncio
-async def test_retry_after_is_honoured_and_capped(slept):
-    handler, _calls = _answers(429, 429, 200, headers={"Retry-After": "120"})
+async def test_retry_after_is_honoured(slept):
+    handler, _calls = _answers(429, 429, 200, headers={"Retry-After": "1"})
     client = _transport_client(handler)
 
     await client._request("GET", "/version")
 
-    assert slept == [KimaiClient.MAX_RETRY_AFTER] * 2
+    assert slept == [1.0, 1.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seconds", ["60", "3600", "nan", "inf"])
+async def test_a_long_retry_after_fails_at_once(slept, seconds):
+    """Waiting 10 s twice for a server that said 60 s only repeats the refusal,
+    and runs past the MCP client's own timeout."""
+    handler, calls = _answers(429, 200, headers={"Retry-After": seconds})
+    client = _transport_client(handler)
+
+    with pytest.raises(KimaiAPIError) as raised:
+        await client._request("GET", "/version")
+
+    assert raised.value.status_code == 429
+    assert (len(calls), slept) == (1, [])
+
+
+@pytest.mark.asyncio
+async def test_a_gateway_timeout_is_not_retried(slept):
+    """504: the gateway gave up waiting for a slow Kimai, which would get the
+    same request again."""
+    handler, calls = _answers(504, 200)
+    client = _transport_client(handler)
+
+    with pytest.raises(KimaiAPIError):
+        await client._request("GET", "/version")
+
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
@@ -111,19 +139,40 @@ async def test_a_write_is_never_retried(method, slept):
 
 
 @pytest.mark.asyncio
-async def test_a_dropped_connection_is_retried_for_reads(slept):
+@pytest.mark.parametrize("error", [httpx.ReadError, httpx.RemoteProtocolError])
+async def test_a_dropped_connection_is_retried_for_reads(slept, error):
+    """A reset, or a keep-alive connection the server had already closed."""
     calls = []
 
     def handler(request):
         calls.append(1)
         if len(calls) == 1:
-            raise httpx.ConnectError("connection reset")
+            raise error("connection reset")
         return httpx.Response(200, json=[])
 
     client = _transport_client(handler)
 
     assert await client._request("GET", "/timesheets") == []
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [httpx.ConnectError, httpx.ConnectTimeout])
+async def test_an_unreachable_server_is_not_retried(slept, error):
+    """A refused connection, an unknown host or a connect timeout fails the same
+    way again; each retry cost up to the full timeout (92 s instead of 30 s)."""
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        raise error("unreachable")
+
+    client = _transport_client(handler)
+
+    with pytest.raises(KimaiAPIError):
+        await client._request("GET", "/timesheets")
+
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
@@ -188,18 +237,20 @@ def test_without_headers_a_full_page_may_have_more():
 
 
 @pytest.mark.asyncio
-async def test_a_single_page_read_does_not_page_on():
+async def test_a_page_read_does_not_page_on():
+    """A full page with more to come: one request, the rest is the caller's 'page'."""
     calls = []
 
     def handler(request):
         calls.append(request.url.params["page"])
-        return httpx.Response(200, json=[])
+        return httpx.Response(200, json=[_EXPANDED_ROW], headers={"X-Total-Count": "9", "X-Total-Pages": "9"})
 
     client = _transport_client(handler)
 
-    await client.get_timesheets(TimesheetFilter(user="all", size=1))
+    page = await client.get_timesheet_page(TimesheetFilter(user="all", size=1, full="true"))
 
     assert calls == ["1"]
+    assert page.has_more
 
 
 # --- rows ------------------------------------------------------------------------
@@ -251,7 +302,7 @@ def _listing_client(rows: list) -> AsyncMock:
     client = AsyncMock(spec=KimaiClient)
     client.get_current_user.return_value = UserEntity(id=1, username="me", enabled=True)
     client.get_timesheet_page.return_value = TimesheetPage(rows=rows, page=1, size=50, total=len(rows))
-    client.get_timesheets.return_value = (rows, True, 1)
+    client.get_timesheets.return_value = (rows, True)
     client.get_projects.return_value = []
     client.get_activities.return_value = []
     client.get_users.return_value = []
@@ -320,7 +371,7 @@ async def test_project_view_403_is_remembered():
     record = TimesheetEntity(id=1, project=7, activity=2, user=1, duration=3600,
                              begin=datetime(2024, 5, 1, 9, tzinfo=timezone.utc),
                              end=datetime(2024, 5, 1, 10, tzinfo=timezone.utc))
-    client.get_timesheets.return_value = ([record], True, 1)
+    client.get_timesheets.return_value = ([record], True)
     arguments = {"project_id": 7, "begin": "2024-01-01T00:00:00", "end": "2024-12-31T23:59:59"}
 
     await dispatch_tool(client, "analyze_project_team", arguments)
@@ -331,12 +382,99 @@ async def test_project_view_403_is_remembered():
 
 
 @pytest.mark.asyncio
-async def test_only_own_records_on_one_page_of_many_is_not_noted():
-    """The next page may hold other users' records; the note needs the whole result."""
+async def test_a_project_outside_the_teams_does_not_stop_later_views():
+    """A team lead may open its teams' projects; a 403 for another team's
+    project, which it cannot list either, must not route later IDs to the
+    full listing."""
+    from kimai_mcp.tools.errors import ToolError
+
+    client = AsyncMock(spec=KimaiClient)
+    client.get_project.side_effect = KimaiAPIError("Forbidden", 403)
+    client.get_projects.return_value = [Project(id=7, name="Relaunch")]
+
+    with pytest.raises(ToolError, match="not visible"):
+        await dispatch_tool(client, "analyze_project_team", {
+            "project_id": 99, "begin": "2024-01-01T00:00:00", "end": "2024-12-31T23:59:59",
+        })
+
+    assert getattr(client, "project_view_denied", False) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("own_total", "noted"), [(40, True), (39, False)])
+async def test_only_own_records_on_one_page_of_many_asks_kimai_for_the_rest(own_total, noted):
+    """The next page may hold other users' records. One record of the same
+    filter for the caller alone tells: the same total means nobody else has
+    any. Without it a ROLE_USER's 120 own records read as everyone's."""
     row = TimesheetExpanded(**{**_EXPANDED_ROW, "user": {"id": 1, "username": "me"}})
     client = _listing_client([row])
-    client.get_timesheet_page.return_value = TimesheetPage(rows=[row], page=1, size=1, total=40, total_pages=40)
+    client.get_timesheet_page.side_effect = [
+        TimesheetPage(rows=[row], page=1, size=1, total=40, total_pages=40),
+        TimesheetPage(rows=[row], page=1, size=1, total=own_total, total_pages=own_total),
+    ]
 
-    text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {"user_scope": "all", "size": 1}}))[0].text
+    text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {
+        "user_scope": "all", "size": 1, "project": 2,
+    }}))[0].text
 
-    assert "every record returned is your own" not in text
+    probe = client.get_timesheet_page.await_args.args[0]
+    assert (probe.user, probe.users, probe.size, probe.project) == ("1", None, 1, 2)
+    assert ("every record returned is your own" in text) is noted
+
+
+@pytest.mark.asyncio
+async def test_an_empty_result_for_all_users_says_the_filter_may_be_ignored():
+    """Without view_other_timesheet user=all searches the caller's records only;
+    a bare 'Found 0' reads as "nobody worked on it"."""
+    client = _listing_client([])
+
+    text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {
+        "user_scope": "all", "project": 12,
+    }}))[0].text
+
+    assert "Without view_other_timesheet Kimai ignores the user filter" in text
+
+
+@pytest.mark.asyncio
+async def test_an_empty_result_for_users_including_the_caller_says_so_too():
+    client = _listing_client([])
+
+    text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {"users": [1, 5]}}))[0].text
+
+    assert "Without view_other_timesheet Kimai ignores the user filter" in text
+
+
+@pytest.mark.asyncio
+async def test_no_lookups_when_no_row_is_left_to_name():
+    """A meta search whose pre-filter returned only near-misses: no project,
+    activity or user listing for an empty answer."""
+    row = TimesheetEntity(id=1, project=2, activity=1, user=1, begin="2026-09-01T09:00:00+0200",
+                          end="2026-09-01T10:00:00+0200", duration=3600,
+                          metaFields=[{"name": "ticket", "value": "CA-3760"}])
+    client = _listing_client([row])
+
+    text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {
+        "meta": {"name": "ticket", "value": "CA-376"},
+    }}))[0].text
+
+    assert text.startswith("Found 0 timesheets")
+    client.get_projects.assert_not_awaited()
+    client.get_activities.assert_not_awaited()
+    client.get_users.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_own_rows_are_named_without_the_user_listing():
+    """user_scope=self prints no user, so GET /users (a 403 for most tokens) is not asked."""
+    row = TimesheetEntity(id=1, project=2, activity=1, user=1, begin="2026-09-01T09:00:00+0200",
+                          end="2026-09-01T10:00:00+0200", duration=3600,
+                          metaFields=[{"name": "ticket", "value": "CA-1"}])
+    client = _listing_client([row])
+    client.get_projects.return_value = [Project(id=2, name="Relaunch", customer=9, parentTitle="Acme")]
+
+    text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {
+        "meta": {"name": "ticket", "value": "CA-1"},
+    }}))[0].text
+
+    assert "Acme / Relaunch (#2)" in text
+    client.get_users.assert_not_awaited()

@@ -27,7 +27,7 @@ def _client() -> AsyncMock:
         id=1, project=7, activity=2, user=1, duration=3600,
         begin=datetime(2024, 5, 1, 9, tzinfo=timezone.utc), end=datetime(2024, 5, 1, 10, tzinfo=timezone.utc),
     )
-    client.get_timesheets.return_value = ([record], True, 1)
+    client.get_timesheets.return_value = ([record], True)
     return client
 
 
@@ -118,8 +118,8 @@ async def test_project_analysis_refuses_a_truncated_dataset():
     from kimai_mcp.tools.errors import ToolError
 
     client = _client()
-    rows, _, _ = client.get_timesheets.return_value
-    client.get_timesheets.return_value = (rows, False, 100)
+    rows, _ = client.get_timesheets.return_value
+    client.get_timesheets.return_value = (rows, False)
 
     with pytest.raises(ToolError, match="Dataset too large"):
         await dispatch_tool(client, "analyze_project_team", {"project_name": "Relaunch", **_PERIOD})
@@ -139,7 +139,7 @@ async def test_project_analysis_team_falls_back_when_users_filter_is_refused():
         begin=datetime(2024, 5, 1, 9, tzinfo=timezone.utc), end=datetime(2024, 5, 1, 10, tzinfo=timezone.utc),
     )
     other = mine.model_copy(update={"id": 3, "user": 8})
-    client.get_timesheets.side_effect = [KimaiAPIError("Cannot access user: 5", 403), ([mine, other], True, 1)]
+    client.get_timesheets.side_effect = [KimaiAPIError("Cannot access user: 5", 403), ([mine, other], True)]
 
     text = (await dispatch_tool(client, "analyze_project_team", {
         "project_name": "Relaunch", "user_scope": "team", "team": 3, **_PERIOD,
@@ -175,8 +175,8 @@ async def test_a_truncated_team_fallback_is_refused_not_reported_empty():
 
     client = _client()
     client.get_team.return_value = Team(id=3, name="Web", members=[TeamMember(user=User(id=5, username="a", enabled=True))])
-    rows, _, _ = client.get_timesheets.return_value  # user 1 only, not in the team
-    client.get_timesheets.side_effect = [KimaiAPIError("Cannot access user: 5", 403), (rows * 3, False, 100)]
+    rows, _ = client.get_timesheets.return_value  # user 1 only, not in the team
+    client.get_timesheets.side_effect = [KimaiAPIError("Cannot access user: 5", 403), (rows * 3, False)]
 
     with pytest.raises(ToolError, match="at least 3 entries"):
         await dispatch_tool(client, "analyze_project_team", {
@@ -240,7 +240,6 @@ async def test_the_analysis_fetches_in_pages_of_500():
 
     call = client.get_timesheets.await_args
     assert call.args[0].size == 500
-    assert call.kwargs["fetch_all"] is True
 
 
 @pytest.mark.asyncio
@@ -286,9 +285,9 @@ async def test_an_ignored_team_filter_is_noted():
     member = TeamMember(user=User(id=5, username="ana", enabled=True))
     me = TeamMember(user=User(id=1, username="me", enabled=True))
     client.get_team.return_value = Team(id=3, name="Web", members=[member, me])
-    rows, _, _ = client.get_timesheets.return_value
+    rows, _ = client.get_timesheets.return_value
     other = rows[0].model_copy(update={"id": 9, "user": 8})
-    client.get_timesheets.return_value = ([*rows, other], True, 1)
+    client.get_timesheets.return_value = ([*rows, other], True)
 
     text = (await dispatch_tool(client, "analyze_project_team", {
         "project_id": 7, "user_scope": "team", "team": 3, **_PERIOD,

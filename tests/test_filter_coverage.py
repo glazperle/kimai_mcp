@@ -193,8 +193,6 @@ def _cases():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("surface", "client_field"), list(_cases()))
 async def test_every_client_filter_is_reachable(surface, client_field):
-    if surface.client_method == "get_timesheets" and client_field in ("max_results", "fetch_all"):
-        pytest.skip("client-side pagination control, not a Kimai parameter")
     excused = NOT_EXPOSED.get(surface.name, {})
     schema = surface.schema()
 
@@ -342,7 +340,7 @@ async def test_statistics_send_the_same_filter_as_the_listing():
     }
     client = AsyncMock(spec=KimaiClient)
     client.get_timesheet_page.return_value = TimesheetPage(rows=[], page=1, size=50)
-    client.get_timesheets.return_value = ([], True, 1)
+    client.get_timesheets.return_value = ([], True)
     client.get_projects.return_value = []
 
     await registry.dispatch_tool(client, "timesheet", {"action": "list", "filters": filters})

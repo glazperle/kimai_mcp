@@ -57,7 +57,7 @@ async def test_exact_multiple_of_the_page_size_is_not_a_404_failure():
     # Kimai answers the page after a full last page with 404, not an empty list.
     client = _client({1: [_row(i) for i in range(50)], 2: KimaiAPIError("Not Found", 404)})
 
-    rows, fetched_all, _page = await client.get_timesheets(TimesheetFilter(user="1", size=50), fetch_all=True)
+    rows, fetched_all = await client.get_timesheets(TimesheetFilter(user="1", size=50))
 
     assert len(rows) == 50
     assert fetched_all is True
@@ -67,7 +67,7 @@ async def test_exact_multiple_of_the_page_size_is_not_a_404_failure():
 async def test_a_404_on_the_first_page_still_raises():
     client = _client({1: KimaiAPIError("Not Found", 404)})
     with pytest.raises(KimaiAPIError):
-        await client.get_timesheets(TimesheetFilter(user="1"), fetch_all=True)
+        await client.get_timesheets(TimesheetFilter(user="1"))
 
 
 @pytest.mark.asyncio
@@ -75,10 +75,34 @@ async def test_size_above_kimais_cap_is_not_mistaken_for_the_last_page():
     # Kimai caps size at 500; 500 < 1000 used to mean "that was everything".
     client = _client({1: [_row(i) for i in range(500)]})
 
-    _rows, fetched_all, _page = await client.get_timesheets(TimesheetFilter(user="1", size=1000))
+    rows, fetched_all = await client.get_timesheets(TimesheetFilter(user="1", size=1000))
 
-    assert fetched_all is False
+    # A full page of 500 is not the end: the next page is asked for.
+    assert [c.kwargs["params"]["page"] for c in client._request.await_args_list] == [1, 2]
     assert client._request.await_args.kwargs["params"]["size"] == 500
+    assert (len(rows), fetched_all) == (500, True)
+
+
+@pytest.mark.asyncio
+async def test_records_of_every_page_are_collected():
+    """Statistics, the meta filter and the analysis rely on this loop; a loop that
+    stopped after page 1 reported 500 of 1200 records as complete."""
+    client = _client({1: [_row(i) for i in range(50)], 2: [_row(50 + i) for i in range(50)],
+                      3: [_row(100 + i) for i in range(7)]})
+
+    rows, fetched_all = await client.get_timesheets(TimesheetFilter(user="1"))
+
+    assert (len(rows), fetched_all) == (107, True)
+    assert [r.id for r in rows] == list(range(107))
+
+
+@pytest.mark.asyncio
+async def test_max_results_stops_the_loop_and_says_so():
+    client = _client({page: [_row(i) for i in range(50)] for page in (1, 2, 3)})
+
+    rows, fetched_all = await client.get_timesheets(TimesheetFilter(user="1"), max_results=100)
+
+    assert (len(rows), fetched_all) == (100, False)
 
 
 def _stats_client(rows: list) -> AsyncMock:
@@ -87,7 +111,7 @@ def _stats_client(rows: list) -> AsyncMock:
     client.get_projects.return_value = []
     client.get_activities.return_value = []
     client.get_users.return_value = []
-    client.get_timesheets.return_value = (rows, True, 1)
+    client.get_timesheets.return_value = (rows, True)
     return client
 
 
@@ -103,9 +127,8 @@ async def test_stats_with_an_explicit_page_cover_the_whole_filter():
 
     assert '"total_entries": 5' in text
     # Every page from the first, in the largest pages Kimai serves.
-    sent = client.get_timesheets.await_args
-    assert sent.kwargs["fetch_all"] is True
-    assert (sent.args[0].page, sent.args[0].size) == (None, 500)
+    sent = client.get_timesheets.await_args.args[0]
+    assert (sent.page, sent.size) == (None, 500)
 
 
 @pytest.mark.asyncio
@@ -123,7 +146,7 @@ async def test_listing_after_the_stats_still_shows_only_the_requested_page():
 async def test_a_404_on_an_explicit_page_is_an_error_not_an_empty_result():
     client = _client({7: KimaiAPIError("Not Found", 404)})
     with pytest.raises(KimaiAPIError):
-        await client.get_timesheets(TimesheetFilter(user="1", page=7))
+        await client.get_timesheet_page(TimesheetFilter(user="1", page=7))
 
 
 # --- what counts as worked time ------------------------------------------------

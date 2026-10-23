@@ -29,6 +29,7 @@ as ``User`` and silently lost roles, teams and preferences).
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import types
 import typing
@@ -107,12 +108,25 @@ def _payload(model: type[BaseModel], variant: int = 0) -> dict:
     }
 
 
+# Client containers (not models) -> the record model they carry. A getter that
+# returns another dataclass fails test_every_client_getter_has_a_surface.
+_CONTAINERS: dict[type, type[BaseModel]] = {
+    # The listing asks for full=true; without it the rows are TimesheetEntity,
+    # which the "timesheet list meta" surface covers through get_timesheets.
+    TimesheetPage: models.TimesheetExpanded,
+}
+
+
 def _returned_model(method: str) -> type[BaseModel]:
-    """The model a client method returns, unwrapped from list/tuple."""
+    """The model a client method returns, unwrapped from list/tuple/container."""
     annotation = typing.get_type_hints(getattr(KimaiClient, method))["return"]
     while get_origin(annotation) in (list, tuple):
         annotation = get_args(annotation)[0]
-    return _unwrap(annotation)
+    annotation = _unwrap(annotation)
+    if dataclasses.is_dataclass(annotation):
+        assert annotation in _CONTAINERS, f"{method} returns {annotation.__name__}; add it to _CONTAINERS"
+        return _CONTAINERS[annotation]
+    return annotation
 
 
 @dataclass
@@ -123,12 +137,10 @@ class Surface:
     arguments: dict
     client_method: str
     many: bool = True  # the client returns a list of records
-    # timesheet list returns (records, fetched_all, last_page)
+    # get_timesheets returns (records, fetched_all)
     shape: Callable[[list], Any] | None = None
     # rendered text that legitimately changes between two renders
     volatile: str | None = None
-    # the record model, where the client wraps the records (TimesheetPage)
-    record_model: type[BaseModel] | None = None
     # tells two surfaces of the same action apart
     variant: str = ""
 
@@ -142,7 +154,7 @@ class Surface:
 
     @property
     def model(self) -> type[BaseModel]:
-        return self.record_model or _returned_model(self.client_method)
+        return _returned_model(self.client_method)
 
 
 SURFACES = [
@@ -162,11 +174,10 @@ SURFACES = [
     Surface("entity", {"type": "holiday", "action": "list"}, "get_public_holidays"),
     # One page, Expanded (names) ...
     Surface("timesheet", {"action": "list", "filters": {"user_scope": "all"}}, "get_timesheet_page",
-            record_model=models.TimesheetExpanded,
             shape=lambda rows: TimesheetPage(rows=rows, page=1, size=50, total=len(rows), total_pages=1)),
     # ... and everything, by ID, behind the statistics and the meta filter.
     Surface("timesheet", {"action": "list", "filters": {"user_scope": "all", "meta": {"name": "ticket"}}},
-            "get_timesheets", shape=lambda rows: (rows, True, 1), variant="meta"),
+            "get_timesheets", shape=lambda rows: (rows, True), variant="meta"),
     Surface("timesheet", {"action": "get", "id": 1}, "get_timesheet", many=False),
     Surface("timer", {"action": "active"}, "get_active_timesheets", volatile=r"running, [-\d.]+ h so far"),
     Surface("timer", {"action": "favorites"}, "get_favorite_timesheets"),

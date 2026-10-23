@@ -161,7 +161,7 @@ def make_mock_client() -> AsyncMock:
     client.unlock_work_contract_month.return_value = None
 
     # Timesheets / timer
-    client.get_timesheets.return_value = ([completed_ts], True, 1)
+    client.get_timesheets.return_value = ([completed_ts], True)
     client.get_timesheet_page.return_value = TimesheetPage(
         rows=[completed_expanded_ts], page=1, size=50, total=1, total_pages=1
     )

@@ -36,7 +36,7 @@ def _mock_client(timesheets: list[TimesheetEntity]) -> AsyncMock:
     """The listing reads one page; statistics and the meta filter read everything."""
     client = AsyncMock()
     client.get_current_user.return_value = User(id=1, username="tester", enabled=True)
-    client.get_timesheets.return_value = (timesheets, True, 1)
+    client.get_timesheets.return_value = (timesheets, True)
     client.get_timesheet_page.return_value = TimesheetPage(
         rows=timesheets, page=1, size=50, total=len(timesheets), total_pages=1
     )
@@ -179,7 +179,6 @@ async def test_meta_filter_matches_exactly_across_pages():
         client, {"page": 1, "meta": {"name": "issue_tracker_id", "value": "CA-1"}}
     ))[0].text
 
-    assert client.get_timesheets.await_args.kwargs["fetch_all"] is True
     assert text.startswith("Found 2 timesheets")
     assert "#301 " in text
     assert "#302 " in text
@@ -257,7 +256,6 @@ async def test_a_meta_search_fetches_in_pages_of_500():
     await _handle_timesheet_list(client, {"page": 3, "meta": {"name": "issue_tracker_id", "value": "CA-1"}})
 
     assert client.get_timesheets.await_args.args[0].size == 500
-    assert client.get_timesheets.await_args.kwargs["fetch_all"] is True
 
 
 @pytest.mark.asyncio

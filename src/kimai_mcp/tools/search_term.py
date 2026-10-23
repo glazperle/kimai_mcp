@@ -1,4 +1,4 @@
-"""What Kimai's ``term`` parameter takes literally (``src/Repository/Search/SearchTerm.php``)."""
+"""What Kimai's ``term`` parameter takes literally (``src/Utils/SearchTermPart.php``)."""
 
 
 def is_literal(text: str) -> bool:
@@ -13,10 +13,26 @@ def is_literal(text: str) -> bool:
     return ":" not in text and "\\" not in text and not any(word.startswith("!") for word in text.split())
 
 
+def is_meta_name(name: str) -> bool:
+    """Whether ``name:value`` addresses the meta field ``name``.
+
+    One word without ':' (the word is split at its first colon). The name is
+    compared with '=', so nothing else in it is special.
+    """
+    return bool(name) and name.split() == [name] and ":" not in name
+
+
 def is_literal_meta_value(value: str) -> bool:
     """Whether ``name:value`` searches for ``value`` itself.
 
-    One word only (the term is split on whitespace), literal as above, and
-    none of the special values ``*`` (any value), ``~`` and ``""``.
+    One word; not excluded by a leading '!'; no backslash (the LIKE escape);
+    none of the special values ``*`` (any value), ``~`` and ``""``. A colon is
+    literal: Kimai 2.35+ splits the word at its first colon only (2.34 split
+    at every colon, which made the whole word a plain term).
     """
-    return value.split() == [value] and is_literal(value) and value not in ("*", "~", '""')
+    return (
+        value.split() == [value]
+        and not value.startswith("!")
+        and "\\" not in value
+        and value not in ("*", "~", '""')
+    )

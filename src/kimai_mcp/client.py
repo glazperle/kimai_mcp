@@ -187,25 +187,31 @@ class KimaiClient:
         """Close the HTTP client."""
         await self._client.aclose()
     
-    # A read is retried on these: rate limiting and the gateway family, which
-    # a proxy or a restarting Kimai answers for a moment.
-    RETRY_STATUSES = frozenset({429, 502, 503, 504})
-    # Seconds before the 2nd and 3rd attempt; a Retry-After header wins, up to
-    # MAX_RETRY_AFTER.
+    # A read is retried on these: rate limiting, and what a proxy answers
+    # while Kimai restarts. Not 504: a gateway that timed out waiting for a
+    # slow Kimai would only send it the same request again.
+    RETRY_STATUSES = frozenset({429, 502, 503})
+    # Seconds before the 2nd and 3rd attempt; a Retry-After header wins.
     RETRY_DELAYS = (0.5, 1.5)
+    # A Retry-After beyond this is not waited for: the retries would fail the
+    # same way, and the caller's own timeout runs out first.
     MAX_RETRY_AFTER = 10.0
-    # A dropped or refused connection, not a read timeout: a server too slow
-    # to answer within `timeout` would get the same request two more times.
-    RETRY_ERRORS = (httpx.NetworkError, httpx.RemoteProtocolError, httpx.ConnectTimeout)
+    # A connection that broke after it was established (a reset, or a reused
+    # keep-alive connection the server had closed). Not a refused connection,
+    # an unknown host or a timeout: each retry of those costs up to `timeout`
+    # again and fails the same way.
+    RETRY_ERRORS = (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError)
 
-    def _retry_delay(self, response: httpx.Response | None, attempt: int) -> float:
+    def _retry_delay(self, response: httpx.Response | None, attempt: int) -> float | None:
+        """Seconds to wait before the next attempt, or None not to retry."""
         header = response.headers.get("Retry-After") if response is not None else None
-        if header is not None:
-            try:
-                return min(max(float(header), 0.0), self.MAX_RETRY_AFTER)
-            except ValueError:
-                pass  # an HTTP date: fall back to the fixed delay
-        return self.RETRY_DELAYS[attempt]
+        if header is None:
+            return self.RETRY_DELAYS[attempt]
+        try:
+            seconds = max(float(header), 0.0)
+        except ValueError:
+            return self.RETRY_DELAYS[attempt]  # an HTTP date
+        return seconds if seconds <= self.MAX_RETRY_AFTER else None  # NaN and inf too
 
     async def _send(self, method: str, endpoint: str, **kwargs) -> httpx.Response:
         """Send one request; a GET is retried on a transient failure.
@@ -227,9 +233,11 @@ class KimaiClient:
                 await asyncio.sleep(self._retry_delay(None, attempt))
                 continue
             if response.status_code in self.RETRY_STATUSES and not last:
-                logger.warning(f"{method} {endpoint} answered {response.status_code}; retrying")
-                await asyncio.sleep(self._retry_delay(response, attempt))
-                continue
+                delay = self._retry_delay(response, attempt)
+                if delay is not None:
+                    logger.warning(f"{method} {endpoint} answered {response.status_code}; retrying")
+                    await asyncio.sleep(delay)
+                    continue
             return response
         raise AssertionError("unreachable")  # pragma: no cover
 
@@ -304,7 +312,10 @@ class KimaiClient:
                 message = str(e)
                 error_details = None
 
-            logger.error(
+            # A 4xx is Kimai's answer to this request (a missing permission is
+            # routine for the best-effort lookups); the caller reports it.
+            log = logger.warning if e.response.status_code < 500 else logger.error
+            log(
                 f"API error: {message} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
                 + (f" | details: {error_details}" if error_details else "")
             )
@@ -418,30 +429,23 @@ class KimaiClient:
         self,
         filters: TimesheetFilter | None = None,
         max_results: int | None = None,
-        fetch_all: bool = False,
-    ) -> tuple[list[TimesheetEntity], bool, int | None]:
-        """Get timesheets: one page, or with ``fetch_all`` every page.
+    ) -> tuple[list[TimesheetEntity], bool]:
+        """Every page of GET /timesheets for ``filters``.
+
+        One page, with Kimai's totals and the Expanded rows of ``full``, is
+        what :meth:`get_timesheet_page` is for.
 
         Args:
-            filters: Timesheet filters; ``size`` is the page size (up to 500).
-            max_results: With ``fetch_all``, stop once this many records were
-                collected (fetched_all is False then).
-            fetch_all: Page through everything. Without it, one page
-                (``filters.page``, default 1) is fetched.
+            filters: Timesheet filters; ``size`` is the page size (up to 500),
+                ``page`` is ignored.
+            max_results: Stop once this many records were collected.
 
         Returns:
-            * The records (``TimesheetEntity``; the Expanded rows of ``full``
-              are what :meth:`get_timesheet_page` is for)
-            * Whether everything was fetched
-            * The last page fetched
+            The records, and whether that is all of them (False when
+            ``max_results`` or the page cap stopped the loop).
         """
         params = self._timesheet_params(filters)
         page_size = params.get("size", 50)
-
-        if not fetch_all:
-            page = params.setdefault("page", 1)
-            data = await self._request("GET", "/timesheets", params=params)
-            return [TimesheetEntity(**item) for item in data], len(data) < page_size, page
 
         all_timesheets = []
         page = 1
@@ -473,16 +477,14 @@ class KimaiClient:
                 fetched_all = False
                 break
 
-            # Safety cap: stop after the 100th fully-fetched page. Checked BEFORE
-            # incrementing so the returned page number is the last one actually
-            # fetched (callers resume at page+1 and must not skip a page).
+            # Safety cap, for a caller without max_results.
             if page >= 100:
                 fetched_all = False
                 break
 
             page += 1
 
-        return all_timesheets, fetched_all, page
+        return all_timesheets, fetched_all
     
     async def get_active_timesheets(self) -> list[TimesheetExpanded]:
         """Get active timesheets for current user.
