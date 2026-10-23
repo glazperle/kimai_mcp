@@ -79,9 +79,17 @@ class TimesheetPage:
     total_pages: int | None = None
 
     @property
+    def counted(self) -> bool:
+        """Whether Kimai said how many there are (else only this page is known)."""
+        return self.total_pages is not None or self.total is not None
+
+    @property
     def has_more(self) -> bool:
+        """A next page exists; without Kimai's headers, a full page may have one."""
         if self.total_pages is not None:
             return self.page < self.total_pages
+        if self.total is not None:
+            return self.page * self.size < self.total
         return len(self.rows) >= self.size
 
 
@@ -195,6 +203,10 @@ class KimaiClient:
         # Set once GET /users answered 403: view_user is a super-admin
         # permission by default, so the name lookups stop asking.
         self.users_list_denied = False
+        # Set by any 401: the token is gone. Tools report some failures as text
+        # (batch results, lookups, config), so the server checks this after
+        # each call instead of relying on the exception reaching it.
+        self.unauthorized = False
     
     async def __aenter__(self):
         """Async context manager entry."""
@@ -324,6 +336,8 @@ class KimaiClient:
             return data, response.headers
 
         except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                self.unauthorized = True
             # Try to parse error response
             error_details: Any | None = None
             try:
@@ -424,11 +438,10 @@ class KimaiClient:
                 params[key] = value.replace(microsecond=0).isoformat()
         # Kimai caps the page size at 500; a larger one would make a capped
         # page look like the last one.
-        if "size" in params:
-            if params["size"] < 1:
-                del params["size"]  # Kimai serves 0 as its default, 50
-            else:
-                params["size"] = min(params["size"], MAX_PAGE_SIZE)
+        if params.get("size") == 0:
+            del params["size"]  # Kimai serves 0 as its default, 50; a negative size is its 400
+        elif "size" in params:
+            params["size"] = min(params["size"], MAX_PAGE_SIZE)
         for key in ("users", "customers", "projects", "activities", "tags"):
             if key in params:
                 params[f"{key}[]"] = params.pop(key)
@@ -442,7 +455,8 @@ class KimaiClient:
         can be named). Kimai answers a page past the end with 404.
         """
         params = self._timesheet_params(filters)
-        params.setdefault("page", 1)
+        # Kimai serves a page below 1 as page 1; say so, or has_more is off by one.
+        params["page"] = max(params.get("page") or 1, 1)
         data, headers = await self._request_with_headers("GET", "/timesheets", params=params)
         expanded = str(filters.full).lower() in ("1", "true")
 

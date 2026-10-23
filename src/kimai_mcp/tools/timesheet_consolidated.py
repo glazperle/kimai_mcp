@@ -24,6 +24,7 @@ from .dates import parse_local_datetime, parse_local_end, parse_utc_datetime, wh
 from .errors import ToolError
 from .lookups import RecordNames, best_effort, record_names
 from .search_term import is_literal_meta_value, is_meta_name
+from .text import one_line, quoted, value_text
 from .timesheet_analytics import TimesheetAnalytics, worked_hours
 from .user_discovery import own_records_note, resolve_accessible_users
 
@@ -113,7 +114,8 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                             "type": "object",
                             "description": (
                                 "Entries whose meta field 'name' equals 'value' (case-insensitive), e.g. "
-                                "{name: 'issue_tracker_id', value: 'CA-376'}. No value: any; '': none."
+                                "{name: 'issue_tracker_id', value: 'CA-376'}. No value: any; '': none. "
+                                "A value with ':' needs Kimai 2.35+."
                             ),
                             "required": ["name"],
                             "properties": {
@@ -294,25 +296,16 @@ async def handle_timer(client: KimaiClient, **params) -> list[TextContent]:
         )
 
 
-def _one_line(text) -> str:
-    """``text`` on one line, its lines joined with ' | '.
-
-    A record is one line in a listing. A line break in user-written text (a
-    description, a textarea meta field) would start a line of its own, and one
-    shaped like '#6 2026-09-01 ...' could not be told from a real record.
-    """
-    return " | ".join(part.strip() for part in str(text).splitlines() if part.strip())
-
-
 def _format_meta_fields(meta_fields: list[dict] | None) -> str | None:
     """Render the non-empty meta fields as ``name=value, ...`` (None if there are none).
 
     Kimai serializes the stored, visible meta rows; a stored row without a
-    value arrives as ``{"name": ..., "value": null}`` and is skipped. Each
-    value is put on one line (``_one_line``).
+    value arrives as ``{"name": ..., "value": null}`` and is skipped. A value
+    with a separator, a quote, a line break or outer whitespace is JSON-quoted
+    (``text.value_text``): unambiguous in a listing and lossless in ``get``.
     """
     parts = [
-        f"{_one_line(field.get('name'))}={_one_line(field.get('value'))}"
+        f"{one_line(field.get('name'))}={value_text(field.get('value'))}"
         for field in meta_fields or []
         if field.get("value") not in (None, "")
     ]
@@ -484,15 +477,15 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     fetch_everything = calculate_stats or meta_filter is not None
 
     if fetch_everything:
-        timesheet_filter.size = MAX_PAGE_SIZE
-        fetched, fetched_all = await client.get_timesheets(timesheet_filter, max_results=MAX_STATS_RESULTS)
+        fetched, fetched_all = await client.get_timesheets(
+            timesheet_filter.model_copy(update={"size": MAX_PAGE_SIZE}), max_results=MAX_STATS_RESULTS
+        )
         capped = not fetched_all  # the record limit stopped the fetch
     else:
-        timesheet_filter.page = requested_page
-        timesheet_filter.size = page_size
-        timesheet_filter.full = "true"  # Expanded rows: names instead of IDs
+        # Expanded rows: names instead of IDs.
+        page_filter = timesheet_filter.model_copy(update={"page": requested_page, "size": page_size, "full": "true"})
         try:
-            page = await client.get_timesheet_page(timesheet_filter)
+            page = await client.get_timesheet_page(page_filter)
         except KimaiAPIError as e:
             # Kimai answers a page past the end with 404 instead of an empty list.
             if e.status_code != 404 or requested_page == 1:
@@ -518,6 +511,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         shown = matched[first:first + page_size]
         found = len(matched)
         more = first + page_size < found
+        certain = True
         # These rows carry IDs; the names come from the listings, fetched only
         # for what is used: listed rows, the projects of the statistics, the
         # customers of a customer filter (through the projects).
@@ -534,6 +528,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         # Without Kimai's headers (a proxy may drop them) only this page is known.
         found = page.total
         more = page.has_more
+        certain = page.counted
 
     async def all_records_of(user_id: int) -> bool:
         """Whether every record of the filter, not only those read, is ``user_id``'s."""
@@ -544,9 +539,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             return fetch_everything and not capped
         # One record of the same filter for that user alone: the same total
         # means nobody else has any.
-        probe = timesheet_filter.model_copy(
-            update={"user": str(user_id), "users": None, "page": 1, "size": 1, "full": None}
-        )
+        probe = timesheet_filter.model_copy(update={"user": str(user_id), "users": None, "page": 1, "size": 1})
         own = await best_effort(client.get_timesheet_page(probe))
         return own is not None and own.total == found
 
@@ -585,31 +578,11 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         )
     if lists_rows and more:
         # Without Kimai's headers a full page is all that is known.
-        lead = "There may be more records" if found is None else "More records"
+        lead = "More records" if certain else "There may be more records"
         result += f"{lead}: use 'page' {requested_page + 1} for the next ones.\n\n"
 
-    # Include user list if requested
     if filters.get("include_user_list"):
-        try:
-            # Teams-first discovery with get_users fallback
-            users = await resolve_accessible_users(client)
-
-            result += "Available users:\n"
-            for user in users[:10]:  # Limit to 10 users
-                result += f"  - ID: {user.id}, Username: {user.username}, Name: {getattr(user, 'alias', None) or 'N/A'}\n"
-            if len(users) > 10:
-                result += f"  ... and {len(users) - 10} more users\n"
-            result += "\n"
-        # Listing users is supplementary context; any failure is reported inline
-        # instead of failing the timesheet listing itself, except a 401: the
-        # token is gone, and the server rebuilds the session on it.
-        except Exception as e:
-            if isinstance(e, KimaiAPIError) and e.status_code == 401:
-                raise
-            if isinstance(e, KimaiAPIError) and e.status_code == 403:
-                result += "Note: Unable to list users (insufficient permissions). Use user_scope='self' or specify a user ID.\n\n"
-            else:
-                result += f"Note: Unable to list users: {e!s}\n\n"
+        result += "Available users:\n" + await _users_section(client, limit=10) + "\n"
 
     if calculate_stats:
         # Auto-enable year breakdown if time span > 1 year
@@ -756,9 +729,9 @@ async def _handle_timesheet_get(client: KimaiClient, id: int | None) -> list[Tex
     result += f"Exported: {'Yes' if ts.exported else 'No'}\n"
     
     if ts.description:
-        result += f"Description: {ts.description}\n"
+        result += f"Description: {quoted(ts.description)}\n"
     if ts.tags:
-        result += f"Tags: {', '.join(ts.tags)}\n"
+        result += f"Tags: {', '.join(value_text(tag) for tag in ts.tags)}\n"
     if ts.rate is None and ts.internal_rate is None and ts.fixed_rate is None and ts.hourly_rate is None:
         # Kimai 2.66+ strips all four rate fields per record when the token
         # lacks view_rate_own_timesheet / view_rate_other_timesheet.
@@ -977,27 +950,37 @@ When using the timesheet tool with action='list', you can control which users' t
 """
     
     if show_users:
-        guide += "\n## Available Users:\n\n"
-        try:
-            # Teams-first discovery with get_users fallback
-            users = await resolve_accessible_users(client)
-
-            for user in users[:20]:  # Limit to 20 users
-                status = "Active" if getattr(user, 'enabled', True) else "Inactive"
-                guide += f"- ID: {user.id} | Username: {user.username} | "
-                guide += f"Name: {getattr(user, 'alias', None) or 'N/A'} | Status: {status}\n"
-
-            if len(users) > 20:
-                guide += f"\n... and {len(users) - 20} more users\n"
-        # The user guide stays useful even when user discovery fails.
-        except Exception as e:  # noqa: BLE001
-            if isinstance(e, KimaiAPIError) and e.status_code == 403:
-                guide += "Unable to list users (insufficient permissions).\n"
-                guide += "You may still use user_scope='specific' with a user ID if you have permission.\n"
-            else:
-                guide += f"Error fetching users: {e!s}\n"
+        guide += "\n## Available Users:\n\n" + await _users_section(client, limit=20)
 
     return [TextContent(type="text", text=guide)]
+
+
+async def _users_section(client: KimaiClient, limit: int) -> str:
+    """The users the token can see (teams first, then GET /users), one per line.
+
+    Supplementary context for the listing and the guide: a failure is a line
+    of text, except a 401, which propagates so the server rebuilds the
+    session.
+    """
+    try:
+        users = await resolve_accessible_users(client)
+    except Exception as e:  # reported inline
+        if isinstance(e, KimaiAPIError) and e.status_code == 401:
+            raise
+        if isinstance(e, KimaiAPIError) and e.status_code == 403:
+            return (
+                "Unable to list users (insufficient permissions). user_scope='specific' with a user ID still "
+                "works where the token may see that user.\n"
+            )
+        return f"Unable to list users: {e!s}\n"
+    lines = [
+        f"  - ID: {user.id}, Username: {user.username}, Name: {user.alias or 'N/A'}"
+        f"{'' if user.enabled else ' (inactive)'}"
+        for user in users[:limit]
+    ]
+    if len(users) > limit:
+        lines.append(f"  ... and {len(users) - limit} more users")
+    return "\n".join(lines) + "\n"
 
 
 # Timer action handlers
@@ -1123,7 +1106,7 @@ def _describe_timesheet(ts, names: RecordNames = _NO_NAMES, show_user: bool = Tr
     if show_user and ts.user is not None:
         line += f", {_user_label(ts.user, names)}"
     if ts.description:
-        line += " - " + _one_line(ts.description)
+        line += " - " + one_line(ts.description).strip()
     lines = [line]
 
     details = ["not billable"] if not ts.billable else []
@@ -1142,13 +1125,14 @@ def _describe_timesheet(ts, names: RecordNames = _NO_NAMES, show_user: bool = Tr
     if details:
         lines.append("  " + ", ".join(details))
 
-    extras = [f"tags: {', '.join(_one_line(tag) for tag in ts.tags)}"] if ts.tags else []
+    extras = [f"tags: {', '.join(value_text(tag) for tag in ts.tags)}"] if ts.tags else []
     meta = _format_meta_fields(ts.meta_fields)
     if meta:
         extras.append(f"meta: {meta}")
     if extras:
         lines.append("  " + "; ".join(extras))
-    return "\n".join(lines) + "\n"
+    # Every part is single-line already; this keeps it so for anything added later.
+    return "\n".join(one_line(line) for line in lines) + "\n"
 
 
 async def _handle_timer_active(client: KimaiClient) -> list[TextContent]:

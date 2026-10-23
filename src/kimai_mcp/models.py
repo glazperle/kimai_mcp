@@ -7,6 +7,21 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 
+def _one_line(value: Any) -> Any:
+    """A name's lines joined by ' | ' (blank lines dropped); anything else unchanged."""
+    if isinstance(value, str) and len(value.splitlines()) > 1:
+        return " | ".join(part.strip() for part in value.splitlines() if part.strip())
+    return value
+
+
+# A name Kimai stores as free text (a user's own alias, a project or tag name).
+# A line break in it would let one record pose as several in a listing, where
+# each record is one line, so read models take it on one line. Free text that
+# may span lines (descriptions, comments, meta values) is quoted when rendered
+# instead, see tools/text.py.
+OneLine = Annotated[str, BeforeValidator(_one_line)]
+
+
 class KimaiModel(BaseModel):
     """Base for every Kimai model: accepts both the field name and the alias.
 
@@ -144,7 +159,7 @@ class AccessTokenInfo(KimaiModel):
     """
 
     id: int
-    name: str | None = None
+    name: OneLine | None = None
     last_usage: str | None = Field(None, alias="lastUsage")
     expires_at: str | None = Field(None, alias="expiresAt")
 
@@ -164,9 +179,9 @@ class User(KimaiModel):
     """
 
     id: int
-    username: str
-    alias: str | None = None
-    title: str | None = None
+    username: OneLine
+    alias: OneLine | None = None
+    title: OneLine | None = None
     enabled: bool = False
     color: str | None = None
     email: str | None = None
@@ -181,7 +196,7 @@ class User(KimaiModel):
 
 class MetaField(KimaiModel):
     """Meta field model."""
-    name: str
+    name: OneLine
     value: str | None = None
 
 
@@ -194,7 +209,7 @@ class TeamRef(KimaiModel):
     """
 
     id: int | None = None
-    name: str | None = None
+    name: OneLine | None = None
     color: str | None = None
 
 
@@ -215,7 +230,7 @@ class Customer(KimaiModel):
     """
 
     id: int
-    name: str
+    name: OneLine
     country: str | None = None
     currency: str | None = None
     timezone: str | None = None
@@ -268,7 +283,7 @@ class Project(KimaiModel):
     """
 
     id: int
-    name: str
+    name: OneLine
     customer: int | None = None
     comment: str | None = None
     visible: bool = True
@@ -287,7 +302,7 @@ class Project(KimaiModel):
     # without a timezone; group Default, so listings carry it too.
     locked_until: date | None = Field(None, alias="lockedUntil")
     order_number: str | None = Field(None, alias="orderNumber")
-    parent_title: str | None = Field(None, alias="parentTitle")  # customer name
+    parent_title: OneLine | None = Field(None, alias="parentTitle")  # customer name
     teams: list[TeamRef] | None = None
     # Budget_Money / Budget_Time: entity and (since 2.66) listing, per record
     budget: float | None = None
@@ -298,7 +313,7 @@ class Project(KimaiModel):
 class Activity(KimaiModel):
     """Activity model."""
     id: int
-    name: str
+    name: OneLine
     project: int | None = None
     comment: str | None = None
     visible: bool = True
@@ -307,7 +322,7 @@ class Activity(KimaiModel):
     color: str | None = None
     # Serializer group Default, so listings carry them too.
     meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
-    parent_title: str | None = Field(None, alias="parentTitle")  # project name
+    parent_title: OneLine | None = Field(None, alias="parentTitle")  # project name
     teams: list[TeamRef] | None = None
     # Budget_Money / Budget_Time: entity and (since 2.66) listing, per record
     budget: float | None = None
@@ -552,7 +567,7 @@ class TeamEditForm(KimaiModel):
 class Team(KimaiModel):
     """Team model."""
     id: int | None = None
-    name: str
+    name: OneLine
     members: list[TeamMember] = []
     customers: list[Customer] = []
     projects: list[Project] = []
@@ -570,7 +585,7 @@ class TeamFilter(KimaiModel):
 class TagEntity(KimaiModel):
     """Tag entity model."""
     id: int | None = None
-    name: str
+    name: OneLine
     visible: bool = True
     color: str | None = None
 
@@ -661,14 +676,14 @@ class CommentForm(KimaiModel):
 class PublicHolidayGroup(KimaiModel):
     """Public holiday group model."""
     id: int | None = None
-    name: str
+    name: OneLine
 
 
 class PublicHoliday(KimaiModel):
     """Public holiday model."""
     id: int | None = None
     date: datetime
-    name: str
+    name: OneLine
     public_holiday_group: PublicHolidayGroup | None = Field(None, alias="publicHolidayGroup")
     half_day: bool = Field(False, alias="halfDay")
 
@@ -773,7 +788,7 @@ class UserFilter(KimaiModel):
 
 class Plugin(KimaiModel):
     """Plugin model."""
-    name: str
+    name: OneLine
     version: str
 
 
@@ -792,7 +807,7 @@ class TimesheetConfig(KimaiModel):
 
 class CalendarEvent(KimaiModel):
     """Calendar event model."""
-    title: str
+    title: OneLine
     color: str | None = None
     text_color: str | None = Field(None, alias="textColor")
     all_day: bool = Field(False, alias="allDay")

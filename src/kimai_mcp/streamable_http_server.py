@@ -202,32 +202,38 @@ class UserMCPSession:
         name = params.name
         arguments = params.arguments or {}
 
+        auth_failed = False
         try:
-            return tool_result(await dispatch_tool(self.kimai_client, name, arguments))
-
+            result = tool_result(await dispatch_tool(self.kimai_client, name, arguments))
         except ToolError as e:
             # Tool could not fulfill the request (bad input, unsupported op, etc.)
             logger.info(f"Tool error for user '{self.user_slug}' in {name}: {e}")
-            return error_result(str(e))
+            result = error_result(str(e))
         except KimaiAPIError as e:
             logger.error(
                 f"Kimai API Error for user '{self.user_slug}' in tool {name}: "
                 f"{e.message} (Status: {e.status_code}), Details: {e.details}"
             )
-            # A 401 means this session's token is no longer accepted, which a
-            # cached session cannot notice on its own: it was verified once at
-            # initialize() and then trusted forever. An admin deleting the token,
-            # or a second replica re-minting it under the same name, therefore
-            # left the session answering errors until the process restarted.
-            # Telling the owner lets it drop the session and rebuild it.
-            if e.status_code == 401 and self._on_auth_failure is not None:
-                with contextlib.suppress(Exception):
-                    await self._on_auth_failure(self.user_slug)
+            auth_failed = e.status_code == 401
             # Use the shared helpers so stdio and remote transports stay identical
-            return error_result(format_api_error(e))
+            result = error_result(format_api_error(e))
         except Exception as e:
             logger.exception(f"Error for user '{self.user_slug}' calling tool {name}")
-            return error_result(f"Error: {e!s}")
+            result = error_result(f"Error: {e!s}")
+
+        # A 401 means this session's token is no longer accepted, which a
+        # cached session cannot notice on its own: it was verified once at
+        # initialize() and then trusted forever. An admin deleting the token,
+        # or a second replica re-minting it under the same name, therefore
+        # left the session answering errors until the process restarted.
+        # Telling the owner lets it drop the session and rebuild it. The
+        # client's flag also catches a 401 a tool reported as text (a batch
+        # item, a best-effort lookup, config type=all).
+        auth_failed = auth_failed or getattr(self.kimai_client, "unauthorized", False) is True
+        if auth_failed and self._on_auth_failure is not None:
+            with contextlib.suppress(Exception):
+                await self._on_auth_failure(self.user_slug)
+        return result
 
 
 class MCPRoutingMiddleware:

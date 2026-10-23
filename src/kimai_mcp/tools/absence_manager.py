@@ -10,6 +10,7 @@ from .absence_analytics import AbsenceAnalytics
 from .batch_utils import execute_batch, format_batch_result
 from .dates import day_end, day_start, parse_iso_date, today
 from .errors import ToolError
+from .text import quoted
 from .user_discovery import resolve_accessible_users
 
 
@@ -313,7 +314,7 @@ async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextC
             result += "  Half Day: Yes\n"
         
         if hasattr(absence, "comment") and absence.comment:
-            result += f"  Comment: {absence.comment}\n"
+            result += f"  Comment: {quoted(absence.comment)}\n"
         
         if hasattr(absence, "duration") and absence.duration:
             result += f"  Duration: {absence.duration}\n"
@@ -627,8 +628,11 @@ async def _get_accessible_users(client: KimaiClient, user_scope: str) -> list:
     try:
         users = await resolve_accessible_users(client)
     # Both discovery paths failing (no permission, API error) degrades to an
-    # empty report rather than a failed tool call.
-    except Exception:  # noqa: BLE001
+    # empty report rather than a failed tool call; a 401 (token gone)
+    # propagates, so the server rebuilds the session.
+    except Exception as e:
+        if isinstance(e, KimaiAPIError) and e.status_code == 401:
+            raise
         return []
 
     # Only include active users

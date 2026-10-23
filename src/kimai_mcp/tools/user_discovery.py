@@ -27,11 +27,12 @@ async def resolve_accessible_users(client: KimaiClient) -> list:
     # Try to get users from teams (works for team leads and admins)
     try:
         teams = await client.get_teams()
-    # Teams are only the first discovery path; on any failure (403 for plain
-    # users, API error) we fall through to get_users below. A 401 means the
-    # token is gone and propagates, so the server rebuilds the session.
-    except Exception as e:
-        if isinstance(e, KimaiAPIError) and e.status_code == 401:
+    # Teams are only the first discovery path: a token that may not list teams
+    # (403) falls through to get_users below. Anything else, a 401, a timeout or
+    # a 5xx the client already retried, is the real error: asking /users as
+    # well would double the wait and could hide it behind a 403.
+    except KimaiAPIError as e:
+        if e.status_code != 403:
             raise
         teams = []
 

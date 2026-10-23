@@ -9,24 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **A multi-line meta value could forge a record line.** Timesheet rows are one line each since 2.20.0,
-  but meta values and tags were printed raw, so a textarea meta field holding a line break and a line
-  shaped like `#6 2026-09-01 11:00-12:00, 8.00 h, ... bob (#4)` showed up as another user's record.
-  Meta values and tags are put on one line now, like the description.
+- **Text a Kimai user writes could forge records in a listing.** Timesheet rows are one line each since
+  2.20.0, but a line break in an alias, a project or tag name, a meta value or a tag started a line of its
+  own, and one shaped like `#6 2026-09-01 11:00-12:00, 8.00 h, ... bob (#4)` read as another user's
+  record. A plain user can set their own alias, so this needed no special rights. Names are now joined to
+  one line when they are parsed (every tool shows them that way), and free text that may span lines is
+  JSON-quoted where it is shown: meta values and tags in listings, the description, tags and meta values
+  in `timesheet get`, project, activity, customer and invoice comments, absence comments and `comment`
+  messages. The quoting is lossless, so a value read with `get` can be written back; a meta value such as
+  `CA-1, approved=yes` is quoted too and can no longer pose as two fields.
+- **A 401 is never lost.** The client flags every 401, and the streamable server rebuilds the session
+  after any tool call that saw one, also where the tool reported the failure as text (a batch result,
+  `config type=all`, a name lookup, `timesheet user_guide`, `absence attendance`).
 
 ### Fixed
 
 - Without Kimai's pagination headers (a proxy may drop them) a full page says "There may be more
-  records" instead of promising a next page.
-- A 401 while `include_user_list` (or `timesheet user_guide`) discovers users propagates, so the server
-  rebuilds the session, instead of becoming a note.
-- The "only your own records" probe asks for one plain row, not an Expanded one.
-- `TimesheetFilter(size=0)` from a direct client caller is left to Kimai's default instead of being
-  sent.
-- The README states that a meta value with a colon needs Kimai 2.35+.
+  records" instead of promising a next page; with only `X-Total-Count`, the count decides.
+- User discovery (`include_user_list`, `user_guide`, absences for everyone) asks `GET /users` only when
+  `GET /teams` answered 403. A timeout or a 5xx is reported as such; asking `/users` as well doubled the
+  wait and could hide the error behind a 403.
+- The "only your own records" probe asks for one plain row, not an Expanded one; the page request no
+  longer modifies the caller's filter.
+- A direct client caller's `size=0` is left to Kimai's default and a page below 1 is page 1.
+- `filters.meta` states that a value with a colon needs Kimai 2.35+ (the README too).
 
 ### Internal
 
+- `tools/text.py` (`one_line`, `quoted`, `value_text`) and `models.OneLine`; `client.unauthorized`.
 - `scripts/audit_api_models.py`: `EXPECTED_SHAPES` is keyed by client method and route, so excusing
   `TimesheetExpanded` for `get_timesheet_page` no longer excuses it for `get_timesheets`.
 

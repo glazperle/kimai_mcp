@@ -34,6 +34,7 @@ from ..models import (
 from .batch_utils import execute_batch, format_batch_result
 from .dates import parse_local_datetime
 from .errors import ToolError
+from .text import quoted
 from .user_discovery import resolve_accessible_users
 
 logger = logging.getLogger(__name__)
@@ -648,7 +649,7 @@ class ProjectEntityHandler(BaseEntityHandler):
         result += self._serialize_teams(project)
 
         if getattr(project, 'comment', None):
-            result += f"Comment: {project.comment}\n"
+            result += f"Comment: {quoted(project.comment)}\n"
         result += self._serialize_meta_fields(project)
         result += "\n"
         return result
@@ -743,7 +744,7 @@ class ActivityEntityHandler(BaseEntityHandler):
         result += self._serialize_budget(activity)
         result += self._serialize_teams(activity)
         if getattr(activity, 'comment', None):
-            result += f"Comment: {activity.comment}\n"
+            result += f"Comment: {quoted(activity.comment)}\n"
         result += self._serialize_meta_fields(activity)
         result += "\n"
         return result
@@ -853,9 +854,9 @@ class CustomerEntityHandler(BaseEntityHandler):
             result += "Address: " + ", ".join(address_parts) + "\n"
             # Kimai stores the old single-line field separately, so both can be set.
             if legacy_address:
-                result += f"Legacy Address: {legacy_address}\n"
+                result += f"Legacy Address: {quoted(legacy_address)}\n"
         elif legacy_address:
-            result += f"Address: {legacy_address}\n"
+            result += f"Address: {quoted(legacy_address)}\n"
 
         # Invoicing / billing
         if getattr(customer, 'vat_id', None):
@@ -868,7 +869,7 @@ class CustomerEntityHandler(BaseEntityHandler):
         result += self._serialize_teams(customer)
 
         if getattr(customer, 'comment', None):
-            result += f"Comment: {customer.comment}\n"
+            result += f"Comment: {quoted(customer.comment)}\n"
         result += self._serialize_meta_fields(customer)
         result += "\n"
 
@@ -1334,7 +1335,7 @@ class InvoiceEntityHandler(BaseEntityHandler):
         if invoice.payment_date:
             result += f"Payment Date: {invoice.payment_date}\n"
         if invoice.comment:
-            result += f"Comment: {invoice.comment}\n"
+            result += f"Comment: {quoted(invoice.comment)}\n"
         if invoice.invoice_filename:
             result += f"File: {invoice.invoice_filename}\n"
         result += self._serialize_meta_fields(invoice)
