@@ -1,7 +1,7 @@
 """Shared helper for discovering users accessible to the current API token."""
 
 
-from ..client import KimaiClient
+from ..client import KimaiAPIError, KimaiClient
 from .batch_utils import execute_batch
 from .lookups import best_effort
 
@@ -28,8 +28,11 @@ async def resolve_accessible_users(client: KimaiClient) -> list:
     try:
         teams = await client.get_teams()
     # Teams are only the first discovery path; on any failure (403 for plain
-    # users, API error) we fall through to get_users below.
-    except Exception:  # noqa: BLE001
+    # users, API error) we fall through to get_users below. A 401 means the
+    # token is gone and propagates, so the server rebuilds the session.
+    except Exception as e:
+        if isinstance(e, KimaiAPIError) and e.status_code == 401:
+            raise
         teams = []
 
     if teams:

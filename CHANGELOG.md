@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **A multi-line meta value could forge a record line.** Timesheet rows are one line each since 2.20.0,
+  but meta values and tags were printed raw, so a textarea meta field holding a line break and a line
+  shaped like `#6 2026-09-01 11:00-12:00, 8.00 h, ... bob (#4)` showed up as another user's record.
+  Meta values and tags are put on one line now, like the description.
+
+### Fixed
+
+- Without Kimai's pagination headers (a proxy may drop them) a full page says "There may be more
+  records" instead of promising a next page.
+- A 401 while `include_user_list` (or `timesheet user_guide`) discovers users propagates, so the server
+  rebuilds the session, instead of becoming a note.
+- The "only your own records" probe asks for one plain row, not an Expanded one.
+- `TimesheetFilter(size=0)` from a direct client caller is left to Kimai's default instead of being
+  sent.
+- The README states that a meta value with a colon needs Kimai 2.35+.
+
+### Internal
+
+- `scripts/audit_api_models.py`: `EXPECTED_SHAPES` is keyed by client method and route, so excusing
+  `TimesheetExpanded` for `get_timesheet_page` no longer excuses it for `get_timesheets`.
+
 ## [2.20.0] - 2026-10-23
 
 ### Changed

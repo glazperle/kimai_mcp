@@ -425,7 +425,10 @@ class KimaiClient:
         # Kimai caps the page size at 500; a larger one would make a capped
         # page look like the last one.
         if "size" in params:
-            params["size"] = min(params["size"], MAX_PAGE_SIZE)
+            if params["size"] < 1:
+                del params["size"]  # Kimai serves 0 as its default, 50
+            else:
+                params["size"] = min(params["size"], MAX_PAGE_SIZE)
         for key in ("users", "customers", "projects", "activities", "tags"):
             if key in params:
                 params[f"{key}[]"] = params.pop(key)

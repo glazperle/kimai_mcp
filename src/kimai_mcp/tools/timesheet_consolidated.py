@@ -294,14 +294,25 @@ async def handle_timer(client: KimaiClient, **params) -> list[TextContent]:
         )
 
 
+def _one_line(text) -> str:
+    """``text`` on one line, its lines joined with ' | '.
+
+    A record is one line in a listing. A line break in user-written text (a
+    description, a textarea meta field) would start a line of its own, and one
+    shaped like '#6 2026-09-01 ...' could not be told from a real record.
+    """
+    return " | ".join(part.strip() for part in str(text).splitlines() if part.strip())
+
+
 def _format_meta_fields(meta_fields: list[dict] | None) -> str | None:
     """Render the non-empty meta fields as ``name=value, ...`` (None if there are none).
 
     Kimai serializes the stored, visible meta rows; a stored row without a
-    value arrives as ``{"name": ..., "value": null}`` and is skipped.
+    value arrives as ``{"name": ..., "value": null}`` and is skipped. Each
+    value is put on one line (``_one_line``).
     """
     parts = [
-        f"{field.get('name')}={field.get('value')}"
+        f"{_one_line(field.get('name'))}={_one_line(field.get('value'))}"
         for field in meta_fields or []
         if field.get("value") not in (None, "")
     ]
@@ -533,7 +544,9 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             return fetch_everything and not capped
         # One record of the same filter for that user alone: the same total
         # means nobody else has any.
-        probe = timesheet_filter.model_copy(update={"user": str(user_id), "users": None, "page": 1, "size": 1})
+        probe = timesheet_filter.model_copy(
+            update={"user": str(user_id), "users": None, "page": 1, "size": 1, "full": None}
+        )
         own = await best_effort(client.get_timesheet_page(probe))
         return own is not None and own.total == found
 
@@ -571,7 +584,9 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             f"{MAX_STATS_RESULTS}); narrow the filter, e.g. a shorter period.\n\n"
         )
     if lists_rows and more:
-        result += f"More records: use 'page' {requested_page + 1} for the next ones.\n\n"
+        # Without Kimai's headers a full page is all that is known.
+        lead = "There may be more records" if found is None else "More records"
+        result += f"{lead}: use 'page' {requested_page + 1} for the next ones.\n\n"
 
     # Include user list if requested
     if filters.get("include_user_list"):
@@ -586,8 +601,11 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
                 result += f"  ... and {len(users) - 10} more users\n"
             result += "\n"
         # Listing users is supplementary context; any failure is reported inline
-        # instead of failing the timesheet listing itself.
-        except Exception as e:  # noqa: BLE001
+        # instead of failing the timesheet listing itself, except a 401: the
+        # token is gone, and the server rebuilds the session on it.
+        except Exception as e:
+            if isinstance(e, KimaiAPIError) and e.status_code == 401:
+                raise
             if isinstance(e, KimaiAPIError) and e.status_code == 403:
                 result += "Note: Unable to list users (insufficient permissions). Use user_scope='self' or specify a user ID.\n\n"
             else:
@@ -1105,7 +1123,7 @@ def _describe_timesheet(ts, names: RecordNames = _NO_NAMES, show_user: bool = Tr
     if show_user and ts.user is not None:
         line += f", {_user_label(ts.user, names)}"
     if ts.description:
-        line += " - " + " | ".join(part.strip() for part in ts.description.splitlines() if part.strip())
+        line += " - " + _one_line(ts.description)
     lines = [line]
 
     details = ["not billable"] if not ts.billable else []
@@ -1124,7 +1142,7 @@ def _describe_timesheet(ts, names: RecordNames = _NO_NAMES, show_user: bool = Tr
     if details:
         lines.append("  " + ", ".join(details))
 
-    extras = [f"tags: {', '.join(ts.tags)}"] if ts.tags else []
+    extras = [f"tags: {', '.join(_one_line(tag) for tag in ts.tags)}"] if ts.tags else []
     meta = _format_meta_fields(ts.meta_fields)
     if meta:
         extras.append(f"meta: {meta}")

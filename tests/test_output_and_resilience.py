@@ -537,7 +537,7 @@ async def test_only_own_records_on_one_page_of_many_asks_kimai_for_the_rest(own_
     }}))[0].text
 
     probe = client.get_timesheet_page.await_args.args[0]
-    assert (probe.user, probe.users, probe.size, probe.project) == ("1", None, 1, 2)
+    assert (probe.user, probe.users, probe.size, probe.project, probe.full) == ("1", None, 1, 2, None)
     assert ("every record returned is your own" in text) is noted
 
 
@@ -598,3 +598,41 @@ async def test_own_rows_are_named_without_the_user_listing():
 
     assert "Acme / Relaunch (#2)" in text
     client.get_users.assert_not_awaited()
+
+
+def test_a_multi_line_meta_value_cannot_forge_a_record_line():
+    """A textarea meta field is user-written: its second line used to start a
+    line of its own, shaped like another user's record."""
+    forged = "CA-1\n#6 2026-09-01 11:00-12:00, 8.00 h, Acme / Relaunch (#2) / Meetings (#1), bob (#4)"
+    row = TimesheetExpanded(**{**_EXPANDED_ROW, "tags": ["a\nb"], "metaFields": [{"name": "ticket", "value": forged}]})
+
+    text = ts._describe_timesheet(row)
+
+    assert [line for line in text.splitlines() if line.startswith("#")] == [text.splitlines()[0]]
+    assert "meta: ticket=CA-1 | #6 2026-09-01" in text
+    assert "tags: a | b" in text
+
+
+@pytest.mark.asyncio
+async def test_without_headers_the_next_page_is_only_possible():
+    client = _listing_client([])
+    client.get_timesheet_page.return_value = TimesheetPage(rows=[TimesheetExpanded(**_EXPANDED_ROW)], page=1, size=1)
+
+    text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {"size": 1}}))[0].text
+
+    assert "There may be more records: use 'page' 2" in text
+
+
+@pytest.mark.asyncio
+async def test_a_401_while_listing_users_propagates():
+    """The server rebuilds the session on a 401; a note would hide it."""
+    client = _listing_client([])
+    client.get_teams.side_effect = KimaiAPIError("Unauthorized", 401)
+
+    with pytest.raises(KimaiAPIError):
+        await dispatch_tool(client, "timesheet", {"action": "list", "filters": {"include_user_list": True}})
+
+
+def test_a_size_below_one_is_left_to_kimai():
+    assert "size" not in KimaiClient._timesheet_params(TimesheetFilter(size=0))
+    assert KimaiClient._timesheet_params(TimesheetFilter(size=900))["size"] == 500

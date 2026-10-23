@@ -38,10 +38,9 @@ from .user_discovery import resolve_accessible_users
 
 logger = logging.getLogger(__name__)
 
-# Budget block shared by the customer, project and activity data schemas. Those
-# schemas are additionalProperties:false, so a field that is missing here cannot
-# be written at all - it is rejected by validate_arguments before the handler
-# runs, not merely left undocumented.
+# Schema overrides for the budget fields of the customer, project and activity
+# data schemas, which are otherwise derived from their forms: the derived type
+# of timeBudget would be a plain string, and the unit rules need saying.
 #
 # `timeBudget` is one field with two meanings (see models._normalize_duration):
 # Kimai serializes it as seconds but parses a bare number on write as hours.
