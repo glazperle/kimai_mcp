@@ -7,7 +7,7 @@ be told from a real one. Two rules keep that from happening:
 
 * Every text field of a read model is joined to one line when it is parsed
   (``models.KimaiModel``), except the few that may span lines
-  (``multiline_fields``: descriptions, comments, meta values).
+  (``multiline_fields``: descriptions, comments, meta and preference values).
 * Text shown where it could be mistaken for structure goes through a renderer
   here: ``quoted`` for free text, ``value_text`` for a value in a
   ``name=value, ...`` list, ``label_text`` for a name in a ``name (#id)``
@@ -39,13 +39,25 @@ _INVISIBLE = re.compile(
     "\U000e0000-\U000e0fff]"
 )
 # Beyond ASCII, what a value or a label may hold and still be shown as is:
-# letters, digits and currency signs, and the typographic apostrophes and
-# dashes common in names (O'Brien with U+2019). Other punctuation, symbols,
-# spaces and marks are quoted: among them are look-alikes of the separators
-# that NFKC does not fold (U+201A for ',', U+A78A for '=', U+266F for '#',
-# U+2215 for '/'), and quoting is lossless.
-_SHOWN_AS_IS = frozenset({"Lu", "Ll", "Lt", "Lo", "Nd", "Sc"})
+# letters, digits, numbers and currency signs whose compatibility form holds
+# no separator (U+1F102 is '1,'); the modifier letters that are part of words
+# (_WORD_MODIFIERS); combining marks right after a letter (Devanagari vowel
+# signs, a decomposed umlaut), except those a separator can be drawn with
+# (the comma below, the solidus overlays, the marks for symbols U+20D0 to
+# U+20FF); and the typographic apostrophes and dashes common in names
+# (O'Brien with U+2019). Other punctuation, symbols, spaces, modifier letters
+# and marks are quoted: among them are look-alikes of the separators that
+# NFKC does not fold (U+201A for ',', U+A78A and U+A60C for '=', U+266F for
+# '#', U+2215 and U+3033 for '/'), and quoting is lossless.
+_SHOWN_AS_IS = frozenset({"Lu", "Ll", "Lt", "Lo", "Nd", "No", "Sc"})
+_LETTERS = frozenset({"Lu", "Ll", "Lt", "Lo", "Lm"})
 _TYPOGRAPHIC = frozenset("\u2013\u2014\u2018\u2019")
+# The Thai and Lao repetition marks, the Japanese iteration marks and the
+# prolonged sound mark (also halfwidth).
+_WORD_MODIFIERS = frozenset("\u0e46\u0ec6\u3005\u309d\u309e\u30fc\u30fd\u30fe\uff70")
+_OVERLAYS = frozenset("\u0326\u0337\u0338")
+# Letters shaped like '/', which a name may hold but not between spaces.
+_SLASH_LIKE = ("\u30ce", "\u4e3f", "\uff89")
 
 
 def one_line(text) -> str:
@@ -72,27 +84,44 @@ def _json(text: str) -> str:
 
 def _ambiguous(text: str) -> bool:
     """Whether ``text`` shown as is could be misread: an invisible character
-    (line breaks included), outer whitespace, or a leading double quote (so a
-    stored '"Kickoff"' is not mistaken for the quoted form of 'Kickoff';
-    look-alikes such as U+FF02 count)."""
-    return (
-        bool(_INVISIBLE.search(text))
-        or text != text.strip()
-        or unicodedata.normalize("NFKC", text[:1]) == '"'
-    )
+    (line breaks included), outer whitespace, or a first character that could
+    be a double quote (so a stored '"Kickoff"' is not mistaken for the quoted
+    form of 'Kickoff'). Beyond ASCII only a letter, digit, number or currency
+    sign may come first: the look-alikes of '"' include punctuation (U+05F4,
+    U+3003), modifier letters (U+02BA) and a combining mark, which sits on
+    the space before it."""
+    if _INVISIBLE.search(text) or text != text.strip():
+        return True
+    first = text[:1]
+    if first.isascii():
+        return first == '"'
+    return unicodedata.category(first) not in _SHOWN_AS_IS
 
 
 def _shown_as_is(text: str, reserved: str) -> bool:
     """Whether every character of ``text`` is printable ASCII outside
-    ``reserved``, or a visible letter, digit or currency sign beyond ASCII
-    (U+3164 HANGUL FILLER is a letter, and blank), or ``_TYPOGRAPHIC``."""
-    return all(
-        " " <= char <= "~" and char not in reserved
-        if char.isascii()
-        else char in _TYPOGRAPHIC
-        or (unicodedata.category(char) in _SHOWN_AS_IS and not _INVISIBLE.match(char))
-        for char in text
-    )
+    ``reserved`` or one of those listed above ``_SHOWN_AS_IS``, none of them
+    invisible (U+3164 HANGUL FILLER is a letter, and blank)."""
+    after_letter = False
+    for char in text:
+        if char.isascii():
+            if not " " <= char <= "~" or char in reserved:
+                return False
+            after_letter = char.isalpha()
+            continue
+        if _INVISIBLE.match(char):
+            return False
+        category = unicodedata.category(char)
+        if category in ("Mn", "Mc"):
+            if not after_letter or char in _OVERLAYS or "\u20d0" <= char <= "\u20ff":
+                return False
+            continue  # a second mark sits on the same letter
+        if not (category in _SHOWN_AS_IS or char in _TYPOGRAPHIC or char in _WORD_MODIFIERS):
+            return False
+        if any(folded in reserved for folded in unicodedata.normalize("NFKC", char)):
+            return False
+        after_letter = category in _LETTERS
+    return True
 
 
 def quoted(text) -> str:
@@ -106,8 +135,9 @@ def value_text(value) -> str:
 
     ';' separates the segments of a row ("tags: ...; meta: ..."), ',' and '='
     the values inside one. A value is plain only as one or more words of
-    printable ASCII other than those, a quote or a backslash, or of letters,
-    digits and currency signs (``_SHOWN_AS_IS``), single spaces between them.
+    printable ASCII other than those, a quote or a backslash, or of the
+    characters beyond ASCII listed above ``_SHOWN_AS_IS`` (letters, digits and
+    the like), single spaces between them.
     So ``ticket=CA-1, approved=yes`` cannot be one value posing as two fields,
     with ASCII separators or with look-alikes of them, and the stored value
     can be read back.
@@ -123,10 +153,16 @@ def label_text(name) -> str:
     In ``Acme / Relaunch (#2) / Meetings (#1), Bob (#4) - description`` each
     ``(#id)`` ends a label, so a name holding a '#' (an alias such as
     'Bob (#4) - approved by Ana (#5)') or ' / ' could pose as other labels and
-    is quoted, as is one holding a character beyond ASCII other than a letter,
-    digit or currency sign (a look-alike such as U+FF03 or U+266F, see
-    ``_SHOWN_AS_IS``) and an ambiguous one (see ``quoted``).
+    is quoted, as is one holding a character beyond ASCII not listed above
+    ``_SHOWN_AS_IS`` (a look-alike such as U+FF03 or U+266F), a letter shaped
+    like '/' between spaces (``_SLASH_LIKE``), and an ambiguous one (see
+    ``quoted``).
     """
     text = str(name)
-    plain = not _ambiguous(text) and " / " not in text and _shown_as_is(text, "#")
+    plain = (
+        not _ambiguous(text)
+        and " / " not in text
+        and not any(f" {char} " in text for char in _SLASH_LIKE)
+        and _shown_as_is(text, "#")
+    )
     return text if plain else _json(text)

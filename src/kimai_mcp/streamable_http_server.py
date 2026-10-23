@@ -341,7 +341,6 @@ class MCPRoutingMiddleware:
         legacy_slugs_enabled: bool = True,
         trusted_proxies: list[str] | None = None,
         ensure_session: Callable[[str], Awaitable[UserMCPSession | None]] | None = None,
-        is_configured: Callable[[str], bool] | None = None,
     ):
         """Initialize middleware.
 
@@ -353,13 +352,10 @@ class MCPRoutingMiddleware:
             trusted_proxies: IPs of reverse proxies whose forwarding headers may be trusted
             ensure_session: Builds a configured user's missing session, or
                 rebuilds one whose token Kimai rejected
-            is_configured: Whether a slug belongs to a configured user, so a
-                404 for it does not count as enumeration
         """
         self.app = app
         self.user_sessions = user_sessions
         self.ensure_session = ensure_session
-        self.is_configured = is_configured or (lambda slug: slug in self.user_sessions)
         self.oauth_mcp_app = oauth_mcp_app
         self.legacy_slugs_enabled = legacy_slugs_enabled
         self.trusted_proxies = trusted_proxies or []
@@ -428,11 +424,11 @@ class MCPRoutingMiddleware:
             # Add random delay to prevent timing-based enumeration
             await random_delay(0.1, 0.3)
 
-            # Record 404 and potentially block client. Not for a configured
-            # slug whose session cannot be built right now (Kimai down, token
-            # revoked): that is no guess, and counting it blocked the IP.
-            if not self.is_configured(user_slug):
-                await self.enumeration_protection.record_404(client_ip)
+            # Record 404 and potentially block client. A configured slug whose
+            # session cannot be built right now (Kimai down, token revoked)
+            # counts too: answering it differently told a guesser that the
+            # slug, a credential on this route, was right.
+            await self.enumeration_protection.record_404(client_ip)
 
             # Generic error message (don't reveal whether slug format is valid)
             response = JSONResponse(
@@ -599,8 +595,11 @@ class StreamableHTTPMCPServer:
         # though: keying the guard on the provisioner alone meant a deployment
         # with 50 users in users.json and an unreachable Kimai logged 50 errors,
         # started anyway, and served /health 200 with user_count 0, so no
-        # orchestrator restart and no alert ever fired.
-        if not self.user_sessions and (self.provisioner is None or self.users_config.users):
+        # orchestrator restart and no alert ever fired. Users reloaded from the
+        # provisioning store are not declared: a failed start is tried again on
+        # their next request, so an outage at boot need not stop the server.
+        declared = self.users_config.users.keys() - self.users_config.provisioned_slugs
+        if not self.user_sessions and (self.provisioner is None or declared):
             raise RuntimeError("No user sessions could be initialized")
 
     async def cleanup_users(self) -> None:
@@ -1027,7 +1026,6 @@ class StreamableHTTPMCPServer:
             legacy_slugs_enabled=self.legacy_slugs_enabled,
             trusted_proxies=self.trusted_proxies,
             ensure_session=self._ensure_session,
-            is_configured=lambda slug: slug in self.users_config.users,
         )
 
         # Security middlewares (order matters: rate limit -> security headers -> app)

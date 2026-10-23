@@ -806,9 +806,11 @@ def test_a_size_of_zero_is_left_to_kimai():
 
 
 def test_every_text_field_of_a_read_model_is_one_line():
-    """account_number, preferences and membership team names are user-writable
-    too (edit_own_profile, PATCH /users/{id}/preferences)."""
+    """account_number and membership team names are user-writable too
+    (edit_own_profile). Preference values are kept and shown quoted, like
+    meta values: joined, one answer showed the same value in two forms."""
     from kimai_mcp.models import Customer, UserEntity
+    from kimai_mcp.tools.entity_manager import format_user
 
     user = UserEntity(
         id=1, username="u", accountNumber="7\nUser: admin (ID: 1)",
@@ -816,7 +818,7 @@ def test_every_text_field_of_a_read_model_is_one_line():
         memberships=[{"team": {"id": 5, "name": "A\nB"}, "teamlead": False}],
     )
     assert user.account_number == "7 | User: admin (ID: 1)"
-    assert user.preferences[0]["value"] == "de | System Account: Yes"
+    assert '  - locale: "de\\nSystem Account: Yes"' in format_user(user)
     assert user.memberships[0]["team"]["name"] == "A | B"
     assert Customer(id=1, name="Acme\u2028x", company="Co\n").name == "Acme | x"
     assert Customer(id=1, name="Acme", company="Co\n").company == "Co"

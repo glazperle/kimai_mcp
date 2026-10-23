@@ -25,7 +25,7 @@ class KimaiModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     # Read models: the fields whose text may span lines (a description, a
-    # comment, meta values). Every other text field is joined to one line when
+    # comment, meta and preference values). Every other text field is joined to one line when
     # it is parsed, so a line break a Kimai user put into an alias, an account
     # number or a project name cannot pose as a record of its own in a listing
     # (see text.py). Request models (*Form, *Filter) keep what the caller sent.
@@ -256,11 +256,22 @@ class User(KimaiModel):
     timezone: str | None = None
 
 
+def _meta_value_text(value: Any) -> Any:
+    """A meta value as text. Kimai up to 2.5 answered a meta update with the
+    value it had cast (``(int) $value`` for a checkbox field), so a number or
+    a boolean must not fail the response after a write that succeeded."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return value
+
+
 class MetaField(KimaiModel):
     """Meta field model."""
     multiline_fields = frozenset({"value"})
     name: str
-    value: str | None = None
+    value: Annotated[str | None, BeforeValidator(_meta_value_text)] = None
 
 
 class TeamRef(KimaiModel):
@@ -783,6 +794,10 @@ class UserEntity(User):
     ``/users/me`` used to be parsed as plain ``User``, which silently dropped
     roles, teams, the supervisor and the preferences (work contract included).
     """
+    # Preference values are user text (plugins keep user custom fields there):
+    # kept as they are and shown quoted, like meta values, so they stay
+    # lossless and read the same in every answer.
+    multiline_fields = frozenset({"preferences"})
     roles: list[str] = []
     supervisor: User | None = None
     teams: list[Team] = []

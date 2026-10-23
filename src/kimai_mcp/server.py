@@ -93,14 +93,16 @@ def format_api_error(e: KimaiAPIError) -> str:
             "endpoints need 2.66+, comments need 2.57+, invoice meta fields 2.56+. Check 'config' for the version "
             "and upgrade Kimai, or use the Kimai UI."
         )
-    if e.status_code == 404 and method == "GET" and endpoint in (
-        "/absences", "/absences/types", "/absences/calendar", "/public-holidays"
+    if e.status_code == 404 and (
+        (method == "GET" and endpoint.startswith(("/absences", "/public-holidays")))
+        or (method == "POST" and endpoint == "/absences")
     ):
-        # A listing has no ID that could be gone, and a production Kimai
-        # answers a missing route with a bare "Not Found", not "No route found".
+        # A production Kimai answers a missing route with a bare "Not Found",
+        # not "No route found", and so does the plugin for its own refusals.
         text += (
-            "\nThis Kimai has no such endpoint: absences and public holidays come from Kimai's WorkContract "
-            "plugin, which is not part of core Kimai and apparently not installed here."
+            "\nAbsences and public holidays come from Kimai's WorkContract plugin, which is not part of core "
+            "Kimai: without it these endpoints do not exist. With it, a 404 here means an unknown user ID or "
+            "holiday group, a begin date after the end date, or an unknown language."
         )
     if "should not contain extra fields" in details:
         # Kimai builds its API forms from the enabled features, so a field can

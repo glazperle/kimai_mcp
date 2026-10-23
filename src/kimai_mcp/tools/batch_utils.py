@@ -63,10 +63,16 @@ async def execute_batch(
     return success, failed
 
 
+class _NotSentError(Exception):
+    """A read left out because an earlier one failed (read_batch)."""
+
+
 async def read_batch(
     items: list[Any],
     operation: Callable[[Any], Any],
     max_concurrent: int = MAX_CONCURRENT,
+    *,
+    route_may_be_missing: bool = False,
 ) -> tuple[list[Any], list[Any]]:
     """Run one read per item for an answer built from all of them.
 
@@ -76,8 +82,9 @@ async def read_batch(
     confident answer that silently left people out. The reads not started yet
     are not sent then; each would fail the same way, with its retries.
 
-    A 404 for every item is raised too: that is the route missing (a Kimai
-    without the plugin that serves it), not every item gone at once.
+    With ``route_may_be_missing`` (a plugin's route, such as /absences) a 404
+    for every item is raised too: that is the route missing on this Kimai,
+    not every item gone at once.
 
     Returns:
         Tuple of (results, skipped items)
@@ -87,7 +94,7 @@ async def read_batch(
 
     async def read(item: Any) -> Any:
         if errors:
-            raise errors[0]
+            raise _NotSentError  # a fresh one: re-raising errors[0] grew its traceback per item
         try:
             return await operation(item)
         except KimaiAPIError as e:
@@ -103,7 +110,7 @@ async def read_batch(
     success, failed = await execute_batch(items, read, max_concurrent)
     if errors:
         raise errors[0]
-    if missing and len(missing) == len(failed) and not success:
+    if route_may_be_missing and missing and len(missing) == len(failed) and not success:
         raise missing[0]
     return success, [item for item, _ in failed]
 

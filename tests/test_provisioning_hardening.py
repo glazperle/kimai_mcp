@@ -708,8 +708,24 @@ async def test_a_401_in_a_call_forgets_a_provisioned_user_at_once(monkeypatch, t
 
 
 @pytest.mark.asyncio
+async def test_a_session_start_answered_with_401_forgets_a_provisioned_user(monkeypatch):
+    """After a restart (or the idle sweep) no session carries the mark any more:
+    the user's next request starts one, and Kimai's 401 there forgets them."""
+    from kimai_mcp.client import KimaiAPIError
+
+    users = UsersConfig()
+    users.add_user("autoSlug12345678", _config())
+    server, _ = _serving_server(users, monkeypatch, answer=KimaiAPIError("Unauthorized", 401))
+
+    assert await server._ensure_session("autoSlug12345678") is None
+
+    assert "autoSlug12345678" not in users.users
+
+
+@pytest.mark.asyncio
 async def test_an_init_answered_with_401_forgets_a_provisioned_user(monkeypatch):
-    """After a restart (or the idle sweep) no session carries the mark any more."""
+    """A token revoked while the server was down: kept, the user's first
+    sign-in matched the dead entry and only a second one provisioned."""
     from kimai_mcp.client import KimaiAPIError
 
     users = UsersConfig()
@@ -719,6 +735,21 @@ async def test_an_init_answered_with_401_forgets_a_provisioned_user(monkeypatch)
     await server.initialize_users()
 
     assert "autoSlug12345678" not in users.users
+
+
+@pytest.mark.asyncio
+async def test_an_outage_at_boot_does_not_stop_a_store_only_deployment(monkeypatch):
+    """Users reloaded from the store counted as declared: the server refused to
+    start until Kimai was back, although their sessions are built on demand."""
+    from kimai_mcp.client import KimaiAPIError
+
+    users = UsersConfig()
+    users.add_user("autoSlug12345678", _config())
+    server, _ = _serving_server(users, monkeypatch, answer=KimaiAPIError("Service Unavailable", 503))
+
+    await server.initialize_users()
+
+    assert "autoSlug12345678" in users.users
 
 
 @pytest.mark.asyncio
@@ -926,27 +957,26 @@ async def test_the_legacy_route_rebuilds_a_rejected_session():
 
 
 @pytest.mark.asyncio
-async def test_the_legacy_route_answers_a_configured_slug_without_counting_it(monkeypatch):
-    """After one failed rebuild the slug was missing from the session table and
-    took the unknown-slug branch: counted 404s, and the client IP was blocked."""
+async def test_the_legacy_route_counts_a_configured_slug_like_any_other(monkeypatch):
+    """Not counting a configured slug whose session cannot be built told a
+    guesser which slug, a credential on this route, was right."""
     from unittest.mock import AsyncMock
 
-    from kimai_mcp.streamable_http_server import MCPRoutingMiddleware
+    from kimai_mcp.client import KimaiAPIError
 
     monkeypatch.setattr("kimai_mcp.streamable_http_server.random_delay", AsyncMock())
+    users = UsersConfig(users={"declaredUserSlug16": _config()})
+    server, _ = _serving_server(users, monkeypatch, answer=KimaiAPIError("Service Unavailable", 503))
+    server.create_app()
+    middleware = server._routing_middleware
 
-    ensure = AsyncMock(return_value=None)
-    middleware = MCPRoutingMiddleware(
-        AsyncMock(), {}, ensure_session=ensure, is_configured=lambda slug: slug == "legacySlug"
-    )
-
-    for _ in range(12):
+    for slug in ["guessedSlug12345"] * 10 + ["declaredUserSlug16"]:
         await middleware._handle_mcp_request(
-            {"type": "http", "client": ("10.0.0.1", 1)}, AsyncMock(), AsyncMock(), "legacySlug"
+            {"type": "http", "method": "POST", "client": ("10.0.0.1", 1)}, AsyncMock(), AsyncMock(), slug
         )
 
-    assert ensure.await_count == 12
-    assert not await middleware.enumeration_protection.is_blocked("10.0.0.1")
+    assert await middleware.enumeration_protection.is_blocked("10.0.0.1")
+    await server._stop_session_managers()
 
 
 def test_oauth_tokens_of_a_forgotten_user_stop_verifying():

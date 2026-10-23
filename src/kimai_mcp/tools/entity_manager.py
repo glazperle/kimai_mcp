@@ -228,8 +228,11 @@ def _team_tag_invoice_branches() -> list[dict]:
 
 def _shown(value) -> str:
     """A meta field or preference value as printed: '(empty)' for null and '',
-    JSON-quoted where it spans lines or could be misread (``text.quoted``)."""
-    return "(empty)" if value is None or value == "" else quoted(value)
+    JSON-quoted where it spans lines or could be misread (``text.quoted``),
+    and where it is the text '(empty)' itself."""
+    if value is None or value == "":
+        return "(empty)"
+    return '"(empty)"' if value == "(empty)" else quoted(value)
 
 
 # Preference aliases for more intuitive names
@@ -974,8 +977,7 @@ def format_user(user) -> str:
     if preferences:
         result += "Preferences:\n"
         for pref in preferences:
-            value = pref.get('value')
-            result += f"  - {pref.get('name')}: {_shown(value)}\n"
+            result += f"  - {quoted(pref.get('name'))}: {_shown(pref.get('value'))}\n"
     return result
 
 
@@ -1189,7 +1191,7 @@ class UserEntityHandler(BaseEntityHandler):
         if user.preferences:
             result += "\nAll current preferences:\n"
             for pref in user.preferences:
-                result += f"  - {pref.get('name')}: {_shown(pref.get('value'))}\n"
+                result += f"  - {quoted(pref.get('name'))}: {_shown(pref.get('value'))}\n"
 
         return [TextContent(type="text", text=result)]
 

@@ -296,12 +296,17 @@ def _with(payload: Any, path: tuple, text: str) -> Any:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("surface", SURFACES, ids=lambda s: s.name)
-async def test_no_text_field_starts_a_line_of_its_own(surface):
+async def test_no_text_field_starts_a_line_of_its_own(surface, monkeypatch):
     """A line break in any text a Kimai user writes cannot start a line that
     reads as a record: each field is joined to one line when it is parsed, or
     quoted where it is shown (text.py). Every string of the payload is tried in
-    turn, so a render site that drops ``quoted`` fails here."""
+    turn, so a render site that drops ``quoted`` fails here. Without the row
+    backstop, which would hide such a site in a timesheet row."""
     from pydantic import ValidationError
+
+    from kimai_mcp.tools import timesheet_consolidated
+
+    monkeypatch.setattr(timesheet_consolidated, "_record_lines", lambda lines: "".join(f"{line}\n" for line in lines))
 
     base = _payload(surface.model)
     forged = []

@@ -16,17 +16,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alias such as `Bob (#4) - approved by Ana (#5)` did the same without any line break. A plain user can
   edit their own profile and preferences, so this needed no special rights. Now:
   - every text field of a read model is joined to one line when it is parsed, except the few that may
-    span lines (descriptions, comments, meta values, the legacy customer address);
+    span lines (descriptions, comments, meta and preference values, the legacy customer address);
   - those are shown JSON-quoted wherever they would be ambiguous (a line break, an invisible character
     such as a zero-width space, a bidi override, a variation selector or a Hangul filler, outer
-    whitespace, a leading quote), and joined with ` | ` in a one-line row. The quoting is lossless, so a
-    value read with `get` can be written back;
+    whitespace, a first character that could be a quote, such as `"` or U+05F4 `״`), and joined with
+    ` | ` in a one-line row. The quoting is lossless, so a value read with `get` can be written back;
   - a meta value or tag is quoted when it holds a separator (`CA-1, approved=yes`), and a name in a row
-    when it holds `#` or ` / `. Beyond ASCII only letters, digits, currency signs and typographic
+    when it holds `#` or ` / `. Beyond ASCII only letters, digits, numbers and currency signs, the
+    modifier letters that are part of words, combining marks right after a letter, and typographic
     apostrophes and dashes stay unquoted, so look-alikes count too (fullwidth `，` `＝` `＃`, U+201A `‚`,
-    U+266F `♯`), including those Unicode normalization does not fold.
+    U+266F `♯`), including those Unicode normalization does not fold; names in Japanese, Devanagari or
+    with a decomposed umlaut stay as they are.
 - The user list of `include_user_list` and `user_guide` shows each account's status before its alias:
-  an alias `Ana (inactive)` made an active account read as a disabled one.
+  an alias `Ana (inactive)` made an active account read as a disabled one. A comment in `comment
+  action=list` is labelled `Message:`; unlabelled, a one-line message `By: admin` read as its author.
 - **A 401 is never lost, and a revoked token recovers.** The client flags every 401. A tool call that saw
   one, also where the tool reported the failure as text (a batch result, `config type=all`, a name
   lookup), marks its session; the streamable server replaces it on the next request, once, and the
@@ -48,15 +51,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as not checked; it counted them present, and reports an outage as such instead of "you may need a
   permission". A Kimai without the absence endpoints (core Kimai has none; they come with the
   WorkContract plugin) gets an error naming the plugin instead of zero absences. After the first failure
-  that is not a 403/404, the per-user requests not started yet are no longer sent.
+  that is not a 403/404, the per-user requests not started yet are no longer sent. A begin date after the
+  end date is refused with a message; the plugin answered it with a bare 404.
 - Streamable server: a replaced session answers its user's running requests before it stops (it
   cancelled them, or dropped the answer of a call that had just finished); sessions are built under a
   lock per user, so one user's slow Kimai no longer holds up another's first request; after a failed
   session start the user's requests are answered at once for 10 seconds instead of each trying again
   (with retries, under that lock); two concurrent requests for a forgotten user no longer end in an
-  HTTP 500; the legacy route builds a configured user's missing session on demand, does not count its
-  404s toward blocking the client's IP, and keeps a provisioned session it is using (the idle sweep
-  released it every hour).
+  HTTP 500; the legacy route builds a configured user's missing session on demand and keeps a
+  provisioned session it is using (the idle sweep released it every hour).
+- With `--provision-store`: a deployment whose users all come from the store starts during a Kimai outage
+  instead of restarting until Kimai is back, and concurrent writes to the store no longer lose entries or
+  leave a file that does not decode.
 - `analyze_project_team` finds a project whose name holds a line break by the name as tools show it
   (`Support | 2023`) or as stored.
 - Without Kimai's pagination headers (a proxy may drop them) a full page says "There may be more

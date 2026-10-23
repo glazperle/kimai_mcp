@@ -32,6 +32,7 @@ import json
 import logging
 import re
 import secrets
+import threading
 import time
 import unicodedata
 from collections.abc import AsyncIterator, Mapping
@@ -502,6 +503,11 @@ class ProvisionedUserStore:
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
+        # add() and remove() read, modify and rewrite the file through one
+        # fixed temp file, from worker threads too (_forget_credentials):
+        # concurrent writers lost entries or left a file that no longer
+        # decoded, which no restart repairs.
+        self._write_lock = threading.Lock()
 
     def load_into(self, users: UsersConfig) -> int:
         """Insert persisted users into ``users``, skipping anything already there.
@@ -568,6 +574,10 @@ class ProvisionedUserStore:
 
     def add(self, identity: str, slug: str, config: UserConfig) -> None:
         """Append one provisioned user and rewrite the file atomically."""
+        with self._write_lock:
+            self._add(identity, slug, config)
+
+    def _add(self, identity: str, slug: str, config: UserConfig) -> None:
         try:
             data: dict[str, Any] = {}
             if self.path.exists():
@@ -603,6 +613,10 @@ class ProvisionedUserStore:
         the file forever: the user's every request answered 503 and signing in
         again did not help, because the stale entry still matched.
         """
+        with self._write_lock:
+            self._remove(identity)
+
+    def _remove(self, identity: str) -> None:
         if not self.path.exists():
             return
         try:
