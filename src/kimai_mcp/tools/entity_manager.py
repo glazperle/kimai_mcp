@@ -48,34 +48,20 @@ logger = logging.getLogger(__name__)
 #
 def _budget_schema() -> dict:
     return {
-        "budget": {
-            "type": "number",
-            "description": "Money budget, in the customer's currency. 0 removes it.",
-        },
+        "budget": {"type": "number", "description": "Money budget in the customer's currency; 0 removes it."},
         "timeBudget": {
             "type": ["integer", "string"],
             "description": (
-                "Time budget. An integer is SECONDS, the same unit action=get "
-                "returns, so a value read from Kimai can be written straight back "
-                "(7200 = 2 hours). A string is a Kimai duration string, where a "
-                'bare number is HOURS: "2.0", "2h" and "2:00" all mean two hours, '
-                'while "90m" and "1:30" mean 90 minutes. A bare-digit string such '
-                'as "7200" is rejected as ambiguous. 0 removes the budget. Kimai '
-                "only accepts these fields when the token holds the 'budget' resp. "
-                "'time' permission for the entity. "
-                "https://www.kimai.org/documentation/duration-format.html"
+                "An integer is SECONDS, as action=get returns it (7200 = 2 hours). A string is a Kimai "
+                "duration where a bare number means HOURS ('2h', '1:30', '2.5'); a digits-only string is "
+                "rejected as ambiguous. 0 removes it."
             ),
         },
         "budgetType": {
             "type": "string",
             "enum": ["month"],
-            "description": (
-                "Set to 'month' to make 'budget' and 'timeBudget' a recurring "
-                "monthly allowance. Omit to leave the stored type unchanged (a new "
-                "entity then gets one total budget over its whole lifetime). "
-                "Reverting 'month' to a lifetime budget is not possible through "
-                "this tool; use the Kimai UI for that."
-            ),
+            "description": "'month' makes the budgets a monthly allowance. Omit to keep the stored type; "
+                           "reverting needs the Kimai UI.",
         },
     }
 
@@ -141,6 +127,72 @@ def _data_branch(entity: str, actions: list[str], data: dict) -> dict:
     }
 
 
+def _customer_project_activity_branches() -> list[dict]:
+    """The three hand-documented write schemas, derived from their forms.
+
+    Only what the field name does not say is described: every word here is
+    sent with each request (issue: 10k tokens of tool schemas).
+    """
+    meta_fields = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "value": {"type": "string"}},
+            "required": ["name", "value"],
+        },
+    }
+    override = {**_budget_schema(), "metaFields": meta_fields}
+    shared = {
+        "color": "Hex, e.g. #dd1d00",
+        "teams": "Team IDs that get access; create only, afterwards use team_access",
+    }
+    budget = " Budget fields need the token's budget resp. time permission on the entity."
+    customer = _form_data_schema(
+        CustomerEditForm, "Create needs name, country, currency and timezone." + budget,
+        notes={
+            **shared,
+            "country": "ISO code, e.g. DE",
+            "currency": "ISO code, e.g. EUR",
+            "timezone": "e.g. Europe/Berlin",
+            "address": "Legacy single line, refused unless the customer already has one; use addressLine1-3, "
+                       "postCode, city",
+            "buyerReference": "Leitweg-ID for e-invoices",
+            "language": "e.g. de; Kimai 2.63+",
+            "invoiceEmail": "if invoices go elsewhere than 'email'; Kimai 2.63+",
+            "invoiceTemplate": "invoice template ID",
+        },
+        override={
+            **override,
+            "country": {"type": "string", "pattern": "^[A-Z]{2}$"},
+            "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+        },
+    )
+    project = _form_data_schema(
+        ProjectEditForm,
+        "Create needs name and customer. start, end, orderDate and lockedUntil take YYYY-MM-DD to create "
+        "but YYYY-MM-DDTHH:MM:SS to update (Kimai binds the two forms differently)." + budget,
+        notes={
+            **shared,
+            "start": "no timesheets before it",
+            "end": "no timesheets after it",
+            "lockedUntil": "Kimai 2.66+: timesheets beginning on or before this day cannot be changed by anyone; "
+                           "'' clears it",
+            "globalActivities": "allows global activities",
+        },
+        override=override,
+    )
+    activity = _form_data_schema(
+        ActivityEditForm, "Create needs name." + budget,
+        notes={**shared, "project": "omit for a global activity; on update only for one that is not global"},
+        override=override,
+    )
+    return [
+        _data_branch("customer", ["create", "update"], customer),
+        _data_branch("project", ["create", "update"], project),
+        _data_branch("activity", ["create", "update"], activity),
+    ]
+
+
 def _user_branches() -> list[dict]:
     # One line instead of a note per field: every word here is sent with each request.
     gated = (
@@ -177,21 +229,6 @@ def _team_tag_invoice_branches() -> list[dict]:
 def _shown(value) -> str:
     """A meta field or preference value as printed: '(empty)' for null and ''."""
     return "(empty)" if value is None or value == "" else str(value)
-
-
-def _meta_fields_schema(entity: str) -> dict:
-    return {
-        "type": "array",
-        "description": f"Custom meta fields for this {entity}",
-        "items": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "value": {"type": "string"}
-            },
-            "required": ["name", "value"]
-        }
-    }
 
 
 # Preference aliases for more intuitive names
@@ -239,440 +276,93 @@ USER PREFERENCES (action=set_preferences, type=user only):
                 "action": {
                     "type": "string",
                     "enum": ["list", "get", "create", "update", "delete", "lock_month", "unlock_month", "batch_delete", "set_preferences"],
-                    "description": """The action to perform:
-                    - list: List entities matching the given filters
-                    - create: Create a new entity
-                    - get: Get a single entity by ID
-                    - update: Update an existing entity by ID
-                    - delete: Delete an existing entity by ID
-                    - lock_month: Lock working time months for a user (type=user only)
-                    - unlock_month: Unlock working time months for a user (type=user only)
-                    - batch_delete: Delete multiple entities by IDs (requires 'ids' parameter)
-                    - set_preferences: Set user preferences for work contracts (type=user only)
-                    """
+                    "description": "lock_month, unlock_month, set_preferences: type=user only. batch_delete takes 'ids'."
                 },
                 "id": {
                     "type": "integer",
-                    "description": "Entity ID (required for get, update, delete actions)"
+                    "description": "Required for get, update, delete"
                 },
                 "filters": {
                     "type": "object",
-                    "description": "Filters for list action (e.g., visible, term, customer, project). A filter that does not apply to the type is ignored, and the result says so.",
+                    "description": "For list. A filter that does not apply to the type is ignored, and the result says so.",
                     "properties": {
                         "visible": {"type": "integer", "enum": [1, 2, 3], "description": "1=visible, 2=hidden, 3=both"},
-                        "term": {"type": "string",
-                                 "description": "Search exact term. For entity types other then invoice and holiday you can just list all if you don't find it on first try."},
-                        "customer": {"type": "integer", "description": "Customer ID filter (for projects)"},
-                        "project": {"type": "integer", "description": "Project ID filter (for activities)"},
-                        "projects": {"type": "array", "items": {"type": "integer"},
-                                     "description": "Several project IDs (for activities)"},
-                        "globals": {"type": "string", "enum": ["0", "1"], "description": "Global activities filter"},
+                        "term": {"type": "string", "description": "Search term; if nothing matches, list without it"},
+                        "customer": {"type": "integer", "description": "type=project"},
+                        "project": {"type": "integer", "description": "type=activity"},
+                        "projects": {"type": "array", "items": {"type": "integer"}, "description": "type=activity"},
+                        "globals": {"type": "string", "enum": ["0", "1"], "description": "type=activity: global ones only"},
                         "global_activities": {"type": "string", "enum": ["0", "1"],
-                                              "description": "type=project: only projects that do (1) or do not (0) allow global activities"},
+                                              "description": "type=project: allows global activities"},
                         "ignore_dates": {
                             "type": "boolean",
-                            "description": "type=project: include finished and future projects (Kimai's default: running today only)."
+                            "description": "type=project: also finished and future ones (Kimai's default: running today)"
                         },
-                        "name": {"type": "string", "description": "type=tag: tag name filter (term works too)"},
-                        "group": {"type": "integer", "description": "type=holiday: public holiday group ID"},
-                        "page": {"type": "integer", "minimum": 1, "description": "Page number"},
-                        "size": {"type": "integer", "minimum": 1, "description": "Page size"},
+                        "name": {"type": "string", "description": "type=tag"},
+                        "group": {"type": "integer", "description": "type=holiday: holiday group ID"},
+                        "page": {"type": "integer", "minimum": 1},
+                        "size": {"type": "integer", "minimum": 1},
                         "order_by": {"type": "string", "description": _order_by_description()},
-                        "order": {"type": "string", "enum": list(get_args(SortOrder)), "description": "Sort order"},
+                        "order": {"type": "string", "enum": list(get_args(SortOrder))},
                         "begin": {
                             "type": "string",
                             "format": "date-time",
-                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00) Only records after this date will be included. type=project: projects running at any time between begin and end."
+                            "description": "YYYY-MM-DDThh:mm:ss. type=project: running at any time between begin and end"
                         },
-                        "end": {
-                            "type": "string",
-                            "format": "date-time",
-                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00). Only records before this date will be included. type=project: see begin."
-                        },
-                        "customers": {"type": "array", "items": {"type": "integer"},
-                                      "description": "Customer IDs (for projects and invoices)"},
+                        "end": {"type": "string", "format": "date-time", "description": "YYYY-MM-DDThh:mm:ss"},
+                        "customers": {"type": "array", "items": {"type": "integer"}, "description": "type=project, invoice"},
                         "status": {"type": "array", "items": {"type": "string", "enum": list(get_args(InvoiceStatus))},
-                                   "description": "Status filter (for invoices)"},
+                                   "description": "type=invoice"},
                         "full": {
                             "type": "boolean",
-                            "description": "For type=customer: return the detailed customer records, which adds vatId and the structured address (addressLine1-3, postCode, city). Requires Kimai 2.62+ and the 'details_customer' permission; without the permission Kimai silently returns the short form instead of failing. Fields like email, contact, invoiceEmail and buyerReference are never part of a listing, use action=get for those. Since Kimai 2.66 budget/timeBudget/budgetType ARE part of listings, but only for records the token holds the 'budget' resp. 'time' permission for; before 2.66 they were get-only."
+                            "description": (
+                                "type=customer: adds vatId and the structured address (Kimai 2.62+, needs "
+                                "details_customer, else the short form comes back silently). email, contact, "
+                                "invoiceEmail, buyerReference: action=get only"
+                            )
                         }
                     }
                 },
                 "data": {
                     "type": "object",
-                    "description": "Data for create/update actions (entity-specific fields)",
+                    "description": "For create/update; the fields depend on the type",
                     "additionalProperties": True
                 },
                 "month": {
                     "type": "string",
-                    "description": "Month for lock_month/unlock_month actions (YYYY-MM-DD format). For lock: all months before and including this one will be locked. For unlock: all months from this one to end of year will be unlocked.",
+                    "description": "YYYY-MM-DD. lock_month locks this and all earlier months; unlock_month unlocks this one to the end of the year.",
                     "pattern": "[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])"
                 },
                 "ids": {
                     "type": "array",
                     "items": {"type": "integer"},
-                    "description": "List of entity IDs for batch operations (batch_delete, bulk lock_month/unlock_month)."
+                    "description": "batch_delete, lock_month, unlock_month"
                 },
                 "user_scope": {
                     "type": "string",
                     "enum": ["all"],
-                    "description": "Set to 'all' to apply lock_month/unlock_month to all active users. Use instead of 'id' or 'ids'."
+                    "description": "'all': lock_month/unlock_month for every active user, instead of id/ids"
                 },
                 "preferences": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "name": {"type": "string", "description": "Preference name"},
-                            "value": {"type": "string", "description": "Preference value"}
+                            "name": {"type": "string"},
+                            "value": {"type": "string"}
                         },
                         "required": ["name"]
                     },
-                    "description": """List of preferences for set_preferences action (type=user only).
-
-VACATION:
-- holidays: Vacation days per year (e.g., "25", "30"). Aliases: vacation_days, annual_leave
-
-WORK CONTRACT:
-- work_contract_type: "week" (weekly hours) or "day" (daily hours)
-- hours_per_week: Weekly hours in seconds (144000 = 40h, 126000 = 35h). Alias: weekly_hours
-- work_monday..work_sunday: Daily hours in seconds (28800 = 8h, 0 = no work)
-- work_days_week: Work days as "1,2,3,4,5" (1=Monday)
-
-CONTRACT PERIOD:
-- work_start_day: Contract start date (YYYY-MM-DD)
-- work_last_day: Contract end date (YYYY-MM-DD)
-
-OTHER:
-- public_holiday_group: Holiday region ID (e.g., "1")
-- hourly_rate/internal_rate: User rates"""
+                    "description": (
+                        "For set_preferences: holidays (days per year); work_contract_type (week|day); "
+                        "hours_per_week, work_monday..work_sunday (SECONDS: 144000 = 40h); work_days_week "
+                        "('1,2,3,4,5', 1 = Monday); work_start_day, work_last_day (YYYY-MM-DD); "
+                        "public_holiday_group (ID); hourly_rate, internal_rate"
+                    )
                 }
             },
             "allOf": [
-                {
-                    "if": {
-                        "properties": {
-                            "type": {"const": "customer"},
-                            "action": {"enum": ["create", "update"]}
-                        }
-                    },
-                    "then": {
-                        "properties": {
-                            "data": {
-                                "type": "object",
-                                "description": "Schema for creating/editing customer entities.",
-                                "properties": {
-                                    "name": {
-                                        "type": "string",
-                                        "minLength": 2,
-                                        "maxLength": 150,
-                                        "description": "Customer name, required for create action."
-                                    },
-                                    "number": {
-                                        "type": "string",
-                                        "maxLength": 50,
-                                        "description": "Customer number (internal identifier)"
-                                    },
-                                    "comment": {
-                                        "type": "string",
-                                        "description": "Any additional comments for the customer"
-                                    },
-                                    "visible": {
-                                        "type": "boolean",
-                                        "default": True,
-                                        "description": "Whether the customer is visible"
-                                    },
-                                    "billable": {
-                                        "type": "boolean",
-                                        "default": True,
-                                        "description": "Whether the customer is billable"
-                                    },
-                                    "company": {
-                                        "type": "string",
-                                        "maxLength": 100,
-                                        "description": "Customer's company name"
-                                    },
-                                    "vatId": {
-                                        "type": "string",
-                                        "maxLength": 50,
-                                        "description": "VAT ID of the customer"
-                                    },
-                                    "contact": {
-                                        "type": "string",
-                                        "maxLength": 100,
-                                        "description": "Contact person's name"
-                                    },
-                                    "address": {
-                                        "type": "string",
-                                        "description": (
-                                            "Deprecated single-line address. Kimai only puts this field on "
-                                            "the form when the customer ALREADY has a non-empty legacy "
-                                            "address, which is never the case on create, so sending it "
-                                            "usually fails the whole request with 'This form should not "
-                                            "contain extra fields.' Use addressLine1-3 / postCode / city."
-                                        )
-                                    },
-                                    "addressLine1": {
-                                        "type": "string",
-                                        "description": "Street and number"
-                                    },
-                                    "addressLine2": {
-                                        "type": "string",
-                                        "description": "Additional address line"
-                                    },
-                                    "addressLine3": {
-                                        "type": "string",
-                                        "description": "Additional address line"
-                                    },
-                                    "postCode": {
-                                        "type": "string",
-                                        "description": "Postal code"
-                                    },
-                                    "city": {
-                                        "type": "string",
-                                        "description": "City"
-                                    },
-                                    "buyerReference": {
-                                        "type": "string",
-                                        "description": "Buyer reference (Leitweg-ID), used on e-invoices"
-                                    },
-                                    "country": {
-                                        "type": "string",
-                                        "maxLength": 2,
-                                        "description": "Two-letter ISO country code (e.g., 'US', 'DE'), required for create action.",
-                                        "pattern": "^[A-Z]{2}$"
-                                    },
-                                    "currency": {
-                                        "type": "string",
-                                        "maxLength": 3,
-                                        "default": "EUR",
-                                        "description": "Three-letter ISO currency code (e.g., 'EUR', 'USD'), required for create action. Default: 'EUR'.",
-                                        "pattern": "^[A-Z]{3}$"
-                                    },
-                                    "phone": {
-                                        "type": "string",
-                                        "maxLength": 30,
-                                        "description": "Customer's phone number"
-                                    },
-                                    "fax": {
-                                        "type": "string",
-                                        "maxLength": 30,
-                                        "description": "Customer's fax number"
-                                    },
-                                    "mobile": {
-                                        "type": "string",
-                                        "maxLength": 30,
-                                        "description": "Customer's mobile number"
-                                    },
-                                    "email": {
-                                        "type": "string",
-                                        "maxLength": 75,
-                                        "format": "email",
-                                        "description": "Customer's email address"
-                                    },
-                                    "homepage": {
-                                        "type": "string",
-                                        "maxLength": 100,
-                                        "format": "uri",
-                                        "description": "Customer's website URL"
-                                    },
-                                    "color": {
-                                        "type": "string",
-                                        "description": "The assigned display color for the customer in HTML hex format (e.g., #dd1d00). If left empty, a color might be auto-calculated."
-                                    },
-                                    "timezone": {
-                                        "type": "string",
-                                        "maxLength": 64,
-                                        "description": "Timezone identifier (e.g., 'Europe/Berlin', 'America/New_York'), required for create action."
-                                    },
-                                    "language": {
-                                        "type": "string",
-                                        "maxLength": 35,
-                                        "description": "Customer language for invoices and exports (e.g., 'de', 'en'). Requires Kimai 2.63+."
-                                    },
-                                    "invoiceEmail": {
-                                        "type": "string",
-                                        "format": "email",
-                                        "description": "Email address invoices are sent to, if it differs from 'email'. Requires Kimai 2.63+."
-                                    },
-                                    "invoiceText": {
-                                        "type": "string",
-                                        "description": "Custom text to appear on invoices for this customer"
-                                    },
-                                    "invoiceTemplate": {
-                                        "type": "string",
-                                        "format": "App\\Entity\\InvoiceTemplate id",
-                                        "description": "ID of the invoice template to use for this customer"
-                                    },
-                                    "teams": {
-                                        "type": "array",
-                                        "items": {"type": "integer"},
-                                        "description": "IDs of the teams that get access to the customer. Kimai binds this field on create only; on update it is rejected as an extra field, use the team_access tool instead."
-                                    },
-                                    **_budget_schema(),
-                                    "metaFields": _meta_fields_schema("customer")
-                                },
-                                "additionalProperties": False
-                            }
-                        },
-                        "required": ["data"]
-                    }
-                },
-                {
-                    "if": {
-                        "properties": {
-                            "type": {"const": "project"},
-                            "action": {"enum": ["create", "update"]}
-                        }
-                    },
-                    "then": {
-                        "properties": {
-                            "data": {
-                                "type": "object",
-                                "description": "Data structure required for creating or updating a 'project' entity.",
-                                "properties": {
-                                    "name": {
-                                        "type": "string",
-                                        "description": "The official or internal name of the project, required for create action.",
-                                        "minLength": 2,
-                                        "maxLength": 150
-                                    },
-                                    "number": {
-                                        "type": "string",
-                                        "maxLength": 10,
-                                        "description": "An internal tracking number or code for the project."
-                                    },
-                                    "comment": {
-                                        "type": "string",
-                                        "description": "Any additional notes or descriptive comments regarding the project."
-                                    },
-                                    "invoiceText": {
-                                        "type": "string",
-                                        "description": "Custom text that should appear on invoices generated for this project."
-                                    },
-                                    "orderNumber": {
-                                        "type": "string",
-                                        "maxLength": 50,
-                                        "description": "The client's purchase order number or internal order reference for the project."
-                                    },
-                                    "orderDate": {
-                                        "type": "string",
-                                        "description": "The date when the project was ordered. Use YYYY-MM-DD for action=create and YYYY-MM-DDTHH:MM:SS for action=update (see 'start'). Times are not stored."
-                                    },
-                                    "start": {
-                                        "type": "string",
-                                        "description": "The official start date of the project. Timesheets cannot be recorded before this date. NOTE: the accepted format differs per action - action=create takes YYYY-MM-DD, action=update requires the full YYYY-MM-DDTHH:MM:SS form and answers 'Please enter a valid date.' to a date-only value. Kimai binds the two forms with different date formats (ProjectController: DATE_ONLY_FORMAT on POST, HTML5 DATE_FORMAT on PATCH); this asymmetry exists on projects only."
-                                    },
-                                    "end": {
-                                        "type": "string",
-                                        "description": "The projected or actual end date of the project. Timesheets cannot be recorded after this date. Same per-action format split as 'start': YYYY-MM-DD to create, YYYY-MM-DDTHH:MM:SS to update."
-                                    },
-                                    "lockedUntil": {
-                                        "type": "string",
-                                        "description": "Lock date (Kimai 2.66+). Timesheets beginning on or before this calendar day cannot be created, edited, stopped, restarted, duplicated or deleted in this project - admins included; Kimai answers 403 or 'The project is locked until ...'. Compared by day, independent of timezones. Same per-action format split as 'start': YYYY-MM-DD to create, YYYY-MM-DDTHH:MM:SS to update. Send an empty string to clear the lock. Rejected by Kimai < 2.66 ('This form should not contain extra fields.')."
-                                    },
-                                    "customer": {
-                                        "description": "The unique ID of the customer to whom this project belongs, required for create action.",
-                                        "type": "integer"
-                                    },
-                                    "color": {
-                                        "description": "The assigned display color for the project in HTML hex format (e.g., #dd1d00). If left empty, a color might be auto-calculated.",
-                                        "type": "string"
-                                    },
-                                    "globalActivities": {
-                                        "type": "boolean",
-                                        "description": "Indicates whether this project allows the booking of globally defined activities.",
-                                        "default": True
-                                    },
-                                    "visible": {
-                                        "type": "boolean",
-                                        "description": "Controls the visibility of the project. If False, timesheets usually cannot be recorded against it.",
-                                        "default": True
-                                    },
-                                    "billable": {
-                                        "type": "boolean",
-                                        "default": True,
-                                        "description": "Determines if time and expenses recorded against this project are considered billable to the customer."
-                                    },
-                                    "teams": {
-                                        "type": "array",
-                                        "items": {"type": "integer"},
-                                        "description": "IDs of the teams that get access to the project. Kimai binds this field on create only; on update it is rejected as an extra field, use the team_access tool instead."
-                                    },
-                                    **_budget_schema(),
-                                    "metaFields": _meta_fields_schema("project")
-                                },
-                                "additionalProperties": False
-                            }
-                        },
-                        "required": ["data"]
-                    },
-                },
-                {
-                    "if": {
-                        "properties": {
-                            "type": {"const": "activity"},
-                            "action": {"enum": ["create", "update"]}
-                        }
-                    },
-                    "then": {
-                        "properties": {
-                            "data": {
-                                "type": "object",
-                                "description": "Data structure required for creating or updating an 'activity' entity.",
-                                "properties": {
-                                    "name": {
-                                        "type": "string",
-                                        "description": "The name of the activity, required for create action.",
-                                        "minLength": 2,
-                                        "maxLength": 150
-                                    },
-                                    "number": {
-                                        "type": "string",
-                                        "maxLength": 10,
-                                        "description": "An internal tracking number or code for the activity."
-                                    },
-                                    "comment": {
-                                        "type": "string",
-                                        "description": "Any additional notes or descriptive comments regarding the activity."
-                                    },
-                                    "invoiceText": {
-                                        "type": "string",
-                                        "description": "Custom text that should appear on invoices generated for this activity."
-                                    },
-                                    "project": {
-                                        "type": "integer",
-                                        "description": "ID of the project this activity belongs to. Omit for a global activity. Kimai binds this field on create, and on update only for activities that are not global."
-                                    },
-                                    "teams": {
-                                        "type": "array",
-                                        "items": {"type": "integer"},
-                                        "description": "IDs of the teams that get access to the activity. Kimai binds this field on create only; on update it is rejected as an extra field, use the team_access tool instead."
-                                    },
-                                    "color": {
-                                        "type": "string",
-                                        "description": "The assigned display color for the activity in HTML hex format (e.g., #dd1d00). If left empty, a color might be auto-calculated."
-                                    },
-                                    "visible": {
-                                        "type": "boolean",
-                                        "description": "Controls the visibility of the activity. If False, timesheets usually cannot be recorded against it.",
-                                        "default": True
-                                    },
-                                    "billable": {
-                                        "type": "boolean",
-                                        "default": True,
-                                        "description": "Determines if time recorded against this activity is considered billable."
-                                    },
-                                    **_budget_schema(),
-                                    "metaFields": _meta_fields_schema("activity")
-                                },
-                                "additionalProperties": False
-                            }
-                        },
-                        "required": ["data"]
-                    },
-                },
+                *_customer_project_activity_branches(),
                 *_user_branches(),
                 *_team_tag_invoice_branches(),
                 {
@@ -1300,18 +990,12 @@ class UserEntityHandler(BaseEntityHandler):
 
     async def list(self, filters: dict) -> list[TextContent]:
         # Validated like the other types' filters, before Kimai answers 400.
-        user_filter = UserFilter(
+        users = await self.client.get_users(UserFilter(
             visible=filters.get("visible", 1),
-            term=filters.get("term"),
+            term=filters.get("term") or None,
             order_by=filters.get("order_by"),
             order=filters.get("order"),
-        )
-        users = await self.client.get_users(
-            visible=user_filter.visible,
-            term=user_filter.term,
-            order_by=user_filter.order_by,
-            order=user_filter.order,
-        )
+        ))
 
         result = f"Found {len(users)} users\n\n"
         for user in users:

@@ -37,13 +37,11 @@ from kimai_mcp.tools.entity_manager import (
 )
 from tests.schema_helpers import entity_data_schema
 
-CUSTOMER_SCHEMA_TITLE = "Schema for creating/editing customer entities."
-
 
 def _customer_data_schema() -> dict:
     """The create/update data schema for type=customer out of the tool schema."""
     schema = entity_data_schema("customer")
-    assert schema["description"] == CUSTOMER_SCHEMA_TITLE
+    assert "vatId" in schema["properties"]  # the customer branch, not another type's
     return schema
 
 

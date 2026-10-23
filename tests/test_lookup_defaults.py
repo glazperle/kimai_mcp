@@ -41,7 +41,7 @@ async def test_project_analysis_finds_finished_and_hidden_projects():
     project_filter = client.get_projects.await_args.args[0]
     assert project_filter.visible == 3
     assert project_filter.ignore_dates == "1"
-    assert client.get_users.await_args.kwargs["visible"] == 3
+    assert client.get_users.await_args.args[0].visible == 3
     assert client.get_activities.await_args.args[0].visible == 3
 
 

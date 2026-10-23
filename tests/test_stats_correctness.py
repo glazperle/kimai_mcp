@@ -6,6 +6,7 @@ used to report, mostly silently.
 
 # Filter bounds are naive on purpose: Kimai interprets them in the user's local time.
 
+import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
@@ -56,7 +57,7 @@ async def test_exact_multiple_of_the_page_size_is_not_a_404_failure():
     # Kimai answers the page after a full last page with 404, not an empty list.
     client = _client({1: [_row(i) for i in range(50)], 2: KimaiAPIError("Not Found", 404)})
 
-    rows, fetched_all, _page = await client.get_timesheets(TimesheetFilter(user="1", size=50))
+    rows, fetched_all, _page = await client.get_timesheets(TimesheetFilter(user="1", size=50), fetch_all=True)
 
     assert len(rows) == 50
     assert fetched_all is True
@@ -66,7 +67,7 @@ async def test_exact_multiple_of_the_page_size_is_not_a_404_failure():
 async def test_a_404_on_the_first_page_still_raises():
     client = _client({1: KimaiAPIError("Not Found", 404)})
     with pytest.raises(KimaiAPIError):
-        await client.get_timesheets(TimesheetFilter(user="1"))
+        await client.get_timesheets(TimesheetFilter(user="1"), fetch_all=True)
 
 
 @pytest.mark.asyncio
@@ -80,48 +81,42 @@ async def test_size_above_kimais_cap_is_not_mistaken_for_the_last_page():
     assert client._request.await_args.kwargs["params"]["size"] == 500
 
 
-def _stats_client(pages: dict[int, list]) -> tuple[AsyncMock, list[int]]:
+def _stats_client(rows: list) -> AsyncMock:
     client = AsyncMock(spec=KimaiClient)
     client.get_current_user.return_value = User(id=1, username="alice", enabled=True)
     client.get_projects.return_value = []
-    requested: list[int] = []
-
-    async def get_timesheets(f):
-        page = f.page or 1
-        requested.append(page)
-        rows = pages.get(page, [])
-        return rows, len(rows) < 2, page
-
-    client.get_timesheets.side_effect = get_timesheets
-    return client, requested
+    client.get_activities.return_value = []
+    client.get_users.return_value = []
+    client.get_timesheets.return_value = (rows, True, 1)
+    return client
 
 
-_FIVE = {1: [_entity(datetime(2026, 9, d, 8, tzinfo=UTC), id=d) for d in (1, 2)],
-         2: [_entity(datetime(2026, 9, d, 8, tzinfo=UTC), id=d) for d in (3, 4)],
-         3: [_entity(datetime(2026, 9, 5, 8, tzinfo=UTC), id=5)]}
+_FIVE = [_entity(datetime(2026, 9, d, 8, tzinfo=UTC), id=d) for d in range(1, 6)]
 
 
 @pytest.mark.asyncio
 async def test_stats_with_an_explicit_page_cover_the_whole_filter():
-    client, requested = _stats_client(_FIVE)
+    client = _stats_client(_FIVE)
 
     text = (await ts.handle_timesheet(client, action="list", filters={
         "page": 3, "size": 2, "calculate_stats": True, "stats_format": "json"}))[0].text
 
     assert '"total_entries": 5' in text
-    # Starts at page 1 instead of fetching page 3 first and discarding it.
-    assert requested == [1, 2, 3]
+    # Every page from the first, in the largest pages Kimai serves.
+    sent = client.get_timesheets.await_args
+    assert sent.kwargs["fetch_all"] is True
+    assert (sent.args[0].page, sent.args[0].size) == (None, 500)
 
 
 @pytest.mark.asyncio
 async def test_listing_after_the_stats_still_shows_only_the_requested_page():
-    client, _requested = _stats_client(_FIVE)
+    client = _stats_client(_FIVE)
 
     text = (await ts.handle_timesheet(client, action="list", filters={
         "page": 2, "size": 2, "calculate_stats": True, "stats_format": "detailed"}))[0].text
 
-    listed = {line.split(" ")[1] for line in text.splitlines() if line.startswith("ID: ")}
-    assert listed == {"3", "4"}
+    listed = {line.split(" ")[0] for line in text.splitlines() if re.match(r"#\d+ ", line)}
+    assert listed == {"#3", "#4"}
 
 
 @pytest.mark.asyncio

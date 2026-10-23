@@ -42,7 +42,7 @@ import pytest
 from pydantic import BaseModel
 
 from kimai_mcp import models
-from kimai_mcp.client import KimaiClient
+from kimai_mcp.client import KimaiClient, TimesheetPage
 from kimai_mcp.tools import registry
 
 _TZ = timezone(timedelta(hours=2))
@@ -127,6 +127,10 @@ class Surface:
     shape: Callable[[list], Any] | None = None
     # rendered text that legitimately changes between two renders
     volatile: str | None = None
+    # the record model, where the client wraps the records (TimesheetPage)
+    record_model: type[BaseModel] | None = None
+    # tells two surfaces of the same action apart
+    variant: str = ""
 
     @property
     def name(self) -> str:
@@ -134,11 +138,11 @@ class Surface:
         for key in ("type", "entity"):
             if key in self.arguments:
                 parts.append(self.arguments[key])
-        return " ".join(p for p in parts if p)
+        return " ".join(p for p in [*parts, self.variant] if p)
 
     @property
     def model(self) -> type[BaseModel]:
-        return _returned_model(self.client_method)
+        return self.record_model or _returned_model(self.client_method)
 
 
 SURFACES = [
@@ -156,10 +160,15 @@ SURFACES = [
     Surface("entity", {"type": "invoice", "action": "list"}, "get_invoices"),
     Surface("entity", {"type": "invoice", "action": "get", "id": 1}, "get_invoice", many=False),
     Surface("entity", {"type": "holiday", "action": "list"}, "get_public_holidays"),
-    Surface("timesheet", {"action": "list", "filters": {"user_scope": "all"}}, "get_timesheets",
-            shape=lambda rows: (rows, True, 1)),
+    # One page, Expanded (names) ...
+    Surface("timesheet", {"action": "list", "filters": {"user_scope": "all"}}, "get_timesheet_page",
+            record_model=models.TimesheetExpanded,
+            shape=lambda rows: TimesheetPage(rows=rows, page=1, size=50, total=len(rows), total_pages=1)),
+    # ... and everything, by ID, behind the statistics and the meta filter.
+    Surface("timesheet", {"action": "list", "filters": {"user_scope": "all", "meta": {"name": "ticket"}}},
+            "get_timesheets", shape=lambda rows: (rows, True, 1), variant="meta"),
     Surface("timesheet", {"action": "get", "id": 1}, "get_timesheet", many=False),
-    Surface("timer", {"action": "active"}, "get_active_timesheets", volatile=r"Elapsed: .*"),
+    Surface("timer", {"action": "active"}, "get_active_timesheets", volatile=r"running, [-\d.]+ h so far"),
     Surface("timer", {"action": "favorites"}, "get_favorite_timesheets"),
     Surface("timer", {"action": "recent"}, "get_recent_timesheets"),
     Surface("user_current", {}, "get_current_user", many=False),
@@ -222,7 +231,11 @@ async def _compute_invisible_fields(surface: Surface) -> set[str]:
 _INITIALS = "derived by Kimai from the display name (User::getInitials), which is shown"
 _TEAMS = "the same teams as `memberships`, which are shown because they also carry the team-lead flag"
 _TEXT_COLOR = "a contrast colour Kimai derives from `color`, which is shown; display only"
+_OWN = "these endpoints return the token's own records only, so every record has the caller as user"
 NOT_RENDERED: dict[str, dict[str, str]] = {
+    "timer active": {"user": _OWN},
+    "timer favorites": {"user": _OWN},
+    "timer recent": {"user": _OWN},
     "entity list user": {"initials": _INITIALS},
     "entity get user": {"initials": _INITIALS, "teams": _TEAMS},
     "user_current": {"initials": _INITIALS, "teams": _TEAMS},

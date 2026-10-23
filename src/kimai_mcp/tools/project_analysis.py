@@ -7,9 +7,11 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
-from ..models import ActivityFilter, ProjectFilter, TimesheetFilter
+from ..models import ActivityFilter, ProjectFilter, TimesheetFilter, UserFilter
 from .dates import parse_local_datetime, parse_local_end, whole_day
 from .errors import ToolError
+from .lookups import best_effort
+from .search_term import is_literal
 from .user_discovery import own_records_note
 
 # Safety limit passed to get_timesheets (fetched in pages of 500, so the
@@ -55,13 +57,10 @@ async def _find_project(client: KimaiClient, name: str):
     still be found next to a finished 'Support 2023'. Partial matches with
     different names stay ambiguous.
 
-    Kimai splits its search term on whitespace, reads 'a:b' as a meta-field
-    search and a word starting with '!' as an exclusion, and does not escape
-    MySQL's LIKE escape character; such a name is matched here without a
-    server term.
+    A name Kimai's search term would not take literally (see
+    ``search_term.is_literal``) is matched here without a server term.
     """
-    unsafe = ":" in name or "\\" in name or any(word.startswith("!") for word in name.split())
-    term = None if unsafe else name
+    term = name if is_literal(name) else None
     projects = await client.get_projects(ProjectFilter.everything(term=term))
     wanted = name.casefold()
     matching = [p for p in projects if wanted in p.name.casefold()]
@@ -86,12 +85,15 @@ async def _find_project(client: KimaiClient, name: str):
 
 async def _project_by_id(client: KimaiClient, project_id: int):
     """GET /projects/{id} needs the 'view' permission on the project, which a
-    default ROLE_USER lacks; the listing needs API access only."""
-    try:
-        return await client.get_project(project_id)
-    except KimaiAPIError as e:
-        if e.status_code != 403:
-            raise
+    default ROLE_USER lacks; the listing needs API access only. After one 403
+    the client remembers it and the listing is asked directly."""
+    if not getattr(client, "project_view_denied", False):
+        try:
+            return await client.get_project(project_id)
+        except KimaiAPIError as e:
+            if e.status_code != 403:
+                raise
+            client.project_view_denied = True
     project = next((p for p in await client.get_projects(ProjectFilter.everything()) if p.id == project_id), None)
     if project is None:
         raise ToolError(f"❌ Project ID {project_id} is not visible to this token.")
@@ -186,29 +188,17 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                 everyone = filters.model_copy(update={"user": "all", "users": None})
                 return await client.get_timesheets(everyone, max_results=MAX_ANALYSIS_RESULTS, fetch_all=True)
 
-        async def names(fetch):
-            # Names are cosmetic: GET /users needs view_user, which default Kimai
-            # grants to super admins only, so no failure of these lookups may
-            # stop the analysis. A 401 (token gone) propagates: the server
-            # rebuilds the session on it.
-            try:
-                return await fetch
-            except KimaiAPIError as e:
-                if e.status_code == 401:
-                    raise
-                return None
-            except Exception:  # noqa: BLE001 - names only; IDs are shown instead
-                return None
-
         try:
             # 4. Fetch data in parallel for better performance.
             # The fetch is capped at MAX_ANALYSIS_RESULTS so huge datasets
             # don't get downloaded completely before the safety check.
             timesheets, users, activities = await asyncio.gather(
                 fetch_timesheets(),
-                # Names for every record, also of disabled users and hidden activities.
-                names(client.get_users(visible=3, full=False)),
-                names(client.get_activities(ActivityFilter(visible=3))),
+                # Names for every record, also of disabled users and hidden
+                # activities. Cosmetic: GET /users needs view_user (super
+                # admins by default), so a failure only drops the names.
+                best_effort(client.get_users(UserFilter(visible=3))),
+                best_effort(client.get_activities(ActivityFilter(visible=3))),
             )
             timesheets, fetched_all, _last_page = timesheets
             if users is None and not team_users:

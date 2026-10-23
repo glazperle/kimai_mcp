@@ -104,6 +104,16 @@ EXPECTED_UNSENT = {
     ),
 }
 
+# Models a route returns besides its declared schema: (METHOD, route) -> {model: reason}.
+EXPECTED_SHAPES = {
+    ("GET", "/timesheets"): {
+        "TimesheetExpanded": (
+            "full=true serializes the Expanded groups (TimesheetController::cgetAction), which the route "
+            "declares only as TimesheetCollection; get_timesheet_page parses each shape for its 'full'"
+        ),
+    },
+}
+
 # Core routes no client method calls: (METHOD, route) -> reason.
 EXPECTED_UNUSED = {
     ("GET", "/invoices/{}/download"): "returns the invoice file (PDF etc.), not JSON",
@@ -383,7 +393,7 @@ def _render_path(node: ast.AST) -> str | None:
 
 
 def parse_client() -> list[ClientCall]:
-    """Every _request() call in KimaiClient with the models and query keys around it."""
+    """Every _request() / _request_with_headers() call in KimaiClient with the models and query keys around it."""
     import typing
 
     from kimai_mcp import models
@@ -423,7 +433,7 @@ def parse_client() -> list[ClientCall]:
                 query |= {k.value for k in node.value.keys if isinstance(k, ast.Constant)}
         for node in ast.walk(fn):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                    and node.func.attr == "_request" and len(node.args) >= 2:
+                    and node.func.attr in ("_request", "_request_with_headers") and len(node.args) >= 2:
                 path = _render_path(node.args[1])
                 if path is None:
                     continue
@@ -530,6 +540,7 @@ def check_endpoints(ref: str) -> list:
     calls = parse_client()
     gaps = []
     used: set = set()
+    shapes_used: set = set()
 
     for call in calls:
         matched = [r for r in routes if _matches(call, r)]
@@ -552,9 +563,12 @@ def check_endpoints(ref: str) -> list:
                       "is not in SCHEMA_TO_MODEL, so the parsed model is unchecked")
                 gaps.append({"client": call.name, "route": f"{route.method} {route.path}",
                              "problem": f"unmapped schema {route.schemas}"})
+            also = EXPECTED_SHAPES.get((route.method, route.path), {})
+            shapes_used.update((route.method, route.path, b) for b in built if b in also)
             wrong = {
                 b for b in built
-                if expected and not any(_same_shape(getattr(models, b), getattr(models, e)) for e in expected)
+                if expected and b not in also
+                and not any(_same_shape(getattr(models, b), getattr(models, e)) for e in expected)
             }
             if wrong:
                 print(f"[GAP ] {call.name:28} {route.method} {route.path}: parses {sorted(wrong)}, "
@@ -591,6 +605,11 @@ def check_endpoints(ref: str) -> list:
         if key not in used or key not in deprecated:
             print(f"[GAP ] EXPECTED_DEPRECATED_USE entry {key} is stale")
             gaps.append({"client": None, "route": f"{key[0]} {key[1]}", "problem": "stale EXPECTED_DEPRECATED_USE entry"})
+    for (method, path), models_ in EXPECTED_SHAPES.items():
+        for model in models_:
+            if (method, path, model) not in shapes_used:
+                print(f"[GAP ] EXPECTED_SHAPES entry {(method, path, model)} is stale")
+                gaps.append({"client": None, "route": f"{method} {path}", "problem": "stale EXPECTED_SHAPES entry"})
     accepted = {(r.method, r.path, q) for r in routes for q in r.query}
     for key in EXPECTED_UNSENT:
         if key not in accepted:

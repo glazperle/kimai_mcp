@@ -13,7 +13,6 @@ from mcp.types import TextContent, Tool
 from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
 from ..models import (
     MetaFieldForm,
-    ProjectFilter,
     SortOrder,
     TimesheetEditForm,
     TimesheetFilter,
@@ -22,6 +21,8 @@ from ..models import (
 from .batch_utils import execute_batch, format_batch_result
 from .dates import parse_local_datetime, parse_local_end, parse_utc_datetime, whole_day
 from .errors import ToolError
+from .lookups import RecordNames, best_effort, record_names
+from .search_term import is_literal_meta_value
 from .timesheet_analytics import TimesheetAnalytics, worked_hours
 from .user_discovery import own_records_note, resolve_accessible_users
 
@@ -46,52 +47,46 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                 "action": {
                     "type": "string",
                     "enum": ["list", "get", "create", "update", "delete", "duplicate", "export_toggle", "meta_update", "user_guide", "batch_delete", "batch_export"],
-                    "description": """The action to perform:
-                    - list: List timesheets
-                    - create: Create a new timesheet
-                    - get: Get a timesheet by ID
-                    - update: Update a timesheet by ID
-                    - delete: Delete a timesheet by ID
-                    - duplicate: Duplicate a timesheet by ID
-                    - export_toggle: Toggle export status (bool) for a timesheet by ID
-                    - meta_update: Update meta fields for a timesheet by ID
-                    - user_guide: Gives information about how to limit users when listing timesheets and lists available users.
-                    - batch_delete: Delete multiple timesheets by IDs
-                    - batch_export: Mark multiple timesheets as exported by IDs
-                    """
+                    "description": (
+                        "export_toggle flips the export flag; batch_export marks as exported. "
+                        "user_guide explains user_scope and lists users."
+                    )
                 },
                 "id": {
                     "type": "integer",
-                    "description": "Timesheet ID (required for get, update, delete, duplicate, export_toggle, meta_update)"
+                    "description": "Required for get, update, delete, duplicate, export_toggle, meta_update"
                 },
                 "ids": {
                     "type": "array",
                     "items": {"type": "integer"},
-                    "description": "List of timesheet IDs for batch operations (batch_delete, batch_export)"
+                    "description": "batch_delete, batch_export"
                 },
                 "filters": {
                     "type": "object",
-                    "description": "Filters for list action",
+                    "description": (
+                        "For list: one page ('page', 'size') with names and the total. calculate_stats "
+                        "and meta read every record of the filter."
+                    ),
                     "properties": {
                         "user_scope": {
                             "type": "string",
                             "enum": ["self", "all", "specific"],
-                            "description": "User scope: 'self' (current user), 'all' (all users), 'specific' (particular user)"
+                            "description": "Default self; specific needs 'user'"
                         },
                         "user": {
                             "type": "string",
-                            "description": "User ID when user_scope is 'specific'"
+                            "description": "User ID for user_scope=specific"
                         },
                         "project": {"type": "integer"},
                         "activity": {"type": "integer"},
                         "customer": {"type": "integer"},
                         "begin": {
                             "type": "string",
-                            "description": "Start date and time filter in the user's local time, no offset or 'Z' (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00)."
+                            "description": "Local time, no offset or 'Z': YYYY-MM-DDThh:mm:ss"
                         },
                         "end": {
                             "type": "string",
-                            "description": "End date and time filter in the user's local time, no offset or 'Z' (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00)."
+                            "description": "Like begin; a date alone means the end of that day"
                         },
                         "exported": {"type": "integer", "enum": [0, 1]},
                         "active": {"type": "integer", "enum": [0, 1]},
@@ -110,15 +105,14 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                             "type": "string",
                             "description": "Only entries changed after this date-time, in UTC (Kimai stores it in UTC), format YYYY-MM-DDThh:mm:ss."
                         },
-                        "page": {"type": "integer", "minimum": 1, "default": 1, "description": "Page number for pagination. Default is 1."},
-                        "size": {"type": "integer", "minimum": 1, "default": 50, "description": "Number of records per page. Default is 50."},
+                        "page": {"type": "integer", "minimum": 1, "default": 1},
+                        "size": {"type": "integer", "minimum": 1, "default": 50},
                         "term": {"type": "string"},
                         "meta": {
                             "type": "object",
                             "description": (
-                                "Only return entries whose timesheet meta field 'name' equals 'value' "
-                                "(exact match, case-insensitive), e.g. {name: 'issue_tracker_id', value: 'CA-376'}. "
-                                "Omit 'value' to match any non-empty value; value '' matches entries without one."
+                                "Entries whose meta field 'name' equals 'value' (case-insensitive), e.g. "
+                                "{name: 'issue_tracker_id', value: 'CA-376'}. No value: any; '': none."
                             ),
                             "required": ["name"],
                             "properties": {
@@ -127,14 +121,14 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                             }
                         },
                         "include_user_list": {"type": "boolean", "default": False},
-                        "calculate_stats": {"type": "boolean", "default": False, "description": "Calculate statistics from the results"},
+                        "calculate_stats": {"type": "boolean", "default": False},
                         "stats_format": {"type": "string", "enum": ["summary", "detailed", "json"], "default": "summary"},
-                        "breakdown_by_year": {"type": "boolean", "default": False, "description": "Break down statistics by year (auto-enabled if time span > 1 year)"}
+                        "breakdown_by_year": {"type": "boolean", "default": False, "description": "Automatic beyond one year"}
                     }
                 },
                 "data": {
                     "type": "object",
-                    "description": "Data for create/update actions",
+                    "description": "For create/update",
                     "properties": {
                         "project": {"type": "integer"},
                         "activity": {"type": "integer"},
@@ -149,38 +143,26 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                         "user": {"type": "integer"},
                         "billable": {
                             "type": "boolean",
-                            "description": (
-                                "Whether the entry is billable. Only send this when the token has "
-                                "edit_billable_own_timesheet (or edit_billable_other_timesheet for another "
-                                "user); otherwise leave it omitted so Kimai applies its automatic default."
-                            )
+                            "description": "Needs edit_billable_own/other_timesheet; omit for Kimai's default"
                         },
                         "fixedRate": {"type": "number"},
                         "hourlyRate": {"type": "number"},
                         "exported": {
                             "type": "boolean",
-                            "description": (
-                                "Export flag. Only send this when the token has edit_export_own_timesheet "
-                                "(or edit_export_other_timesheet); otherwise Kimai rejects the request."
-                            )
+                            "description": "Needs edit_export_own/other_timesheet"
                         },
                         "break": {
                             "type": ["integer", "string"],
                             "description": (
-                                "Break duration. An integer is SECONDS, the same unit a "
-                                "read returns (900 = 15 minutes). A string is a Kimai "
-                                'duration with a unit ("15m", "0:15"); a bare number in a '
-                                "string would be read as HOURS and is rejected. Only send "
-                                "this when the Kimai instance has 'Break time' enabled "
-                                "(Settings > Timesheet); otherwise the API rejects the whole "
-                                "request with 'This form should not contain extra fields.'"
+                                "An integer is SECONDS (900 = 15 min); a string needs a unit ('15m', '0:15'). "
+                                "Only where Kimai's 'Break time' setting is on, else the request fails."
                             )
                         }
                     }
                 },
                 "meta": {
                     "type": "array",
-                    "description": "Meta fields for meta_update action",
+                    "description": "For meta_update",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -191,7 +173,7 @@ NOTE: For running timers (no end time), use the 'timer' tool instead.""",
                 },
                 "show_users": {
                     "type": "boolean",
-                    "description": "Show available users (for user_guide action)",
+                    "description": "user_guide: list the users",
                     "default": True
                 }
             }
@@ -349,7 +331,7 @@ def _filter_by_meta(timesheets: list, name: str, wanted: str | None) -> tuple[li
     Kimai's term asked for this value or for "any value". It is left out, and
     counted, when Kimai could only be asked whether *some* value is stored
     because this value cannot be expressed in its term syntax. When the name
-    itself cannot be a term (whitespace or ':'), Kimai was not asked at all:
+    itself cannot be a term (whitespace, ':', ...), Kimai was not asked at all:
     only records that show the field are matched, and the note says so
     instead of counting every other record in the period.
     """
@@ -386,7 +368,7 @@ def _filter_by_meta(timesheets: list, name: str, wanted: str | None) -> tuple[li
         notes.append(f"{left_out} record(s) with a hidden '{name}' were left out: their value cannot be checked, "
                      "and Kimai's search cannot express this one.")
     if unsearched:
-        notes.append(f"Kimai's search cannot address a meta field named '{name}' (whitespace or ':'), so only "
+        notes.append(f"Kimai's search cannot address a meta field named '{name}' (whitespace, ':', '!' or '\\'), so only "
                      "records that show the field were checked; is this the field's internal name?")
     return kept, "".join(f"Note: {n}\n\n" for n in notes)
 
@@ -397,26 +379,30 @@ def _meta_search_term(name: str, value: str | None) -> str | None:
     Kimai matches ``name:value`` with ``LIKE '%value%'`` (so ``CA-376`` also
     returns ``CA-3760``), which makes the server-side term a pre-filter only;
     the exact comparison happens afterwards in ``_handle_timesheet_list``.
-    The term is split on spaces and ``!``, ``*``, ``~`` and ``""`` are operators,
-    and the LIKE pattern is not escaped (a backslash is MySQL's escape
-    character), so such a value falls back to ``name:*`` (any value).
+    A value the term cannot express literally (``search_term``) falls back
+    to ``name:*`` (any value).
     Returns None when no term may be sent: the name cannot be expressed, or
     the value is empty. Kimai turns ``name:""`` into "value IS NULL or no such
     field", which misses a value cleared to ``''`` (all ``meta_update`` can
     store), so empty values are matched here only.
     """
-    if not name or any(c.isspace() for c in name) or ":" in name or value == "":
+    if not name or not is_literal_meta_value(name) or value == "":
         return None
-    if value is None:
-        return f"{name}:*"
-    if any(c.isspace() for c in value) or value.startswith("!") or value in ("*", "~", '""') or "\\" in value:
+    if value is None or not is_literal_meta_value(value):
         return f"{name}:*"
     return f"{name}:{value}"
 
 
 # Timesheet action handlers
 async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[TextContent]:
-    """Handle timesheet list action."""
+    """Handle timesheet list action.
+
+    The listing is one page (``page``, ``size``) of Kimai's, Expanded so the
+    rows carry names, with the total from Kimai's pagination headers.
+    Statistics and the exact meta match need every record of the filter: they
+    page through all of it (up to MAX_STATS_RESULTS), and the listing shows
+    the requested page of what matched.
+    """
 
     # Handle user scope
     user_scope = filters.get("user_scope", "self")
@@ -437,10 +423,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         user_filter = "all"  # API requires explicit "all" to return all users' timesheets
 
     begin_datetime = parse_local_datetime(filters["begin"], "begin") if filters.get("begin") else None
-    end_datetime = parse_local_end(filters["end"], "end") if filters.get("end") else None
-
-
-    end_datetime = whole_day(begin_datetime, end_datetime)
+    end_datetime = whole_day(begin_datetime, parse_local_end(filters["end"], "end") if filters.get("end") else None)
 
     meta_filter = filters.get("meta")
     term = filters.get("term")
@@ -452,7 +435,6 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             # Kimai ANDs the space-separated parts of a search term.
             term = f"{term} {meta_term}" if term else meta_term
 
-    # Build filter
     timesheet_filter = TimesheetFilter(
         user=user_filter,
         users=filters.get("users"),
@@ -474,129 +456,97 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         billable=filters.get("billable"),
         order_by=filters.get("order_by"),
         order=filters.get("order"),
-        # Only pass 'page' when explicitly requested by the user,
-        # otherwise the client's auto-pagination is disabled.
-        page=filters.get("page"),
-        size=filters.get("size", 50),
-        term=term
+        term=term,
     )
 
-    requested_page = timesheet_filter.page or 1  # coerced to int by the model
-    page_size = min(timesheet_filter.size or 50, MAX_PAGE_SIZE)
+    # int(): a direct caller may pass 2.0 (dispatch_tool coerces, this does not).
+    requested_page = int(filters.get("page") or 1)
+    page_size = min(int(filters.get("size") or 50), MAX_PAGE_SIZE)
+    calculate_stats = bool(filters.get("calculate_stats"))
+    # The schema default is not applied server-side, so default here.
+    stats_format = filters.get("stats_format", "summary")
+    lists_rows = not (calculate_stats and stats_format == "summary")
     # Statistics cover the whole filter. So does the exact meta match: Kimai
-    # paginates its LIKE pre-filter, so a requested page full of near-misses
-    # would hide the exact matches on later pages. Both fetch everything, in
-    # the largest pages Kimai serves, and cut the requested page out afterwards.
-    fetch_everything = bool(filters.get("calculate_stats")) or meta_filter is not None
-    if fetch_everything:
-        timesheet_filter.page = 1
-        timesheet_filter.size = MAX_PAGE_SIZE
-    timesheets, fetched_all, last_page = await client.get_timesheets(timesheet_filter)
+    # paginates its LIKE pre-filter, so a page full of near-misses would hide
+    # the exact matches on later pages.
+    fetch_everything = calculate_stats or meta_filter is not None
 
-    # Auto-fetch remaining pages if the client did not already fetch
-    # everything (manual pagination, or no filter that triggers it).
-    if fetch_everything and not fetched_all:
-        all_timesheets = list(timesheets)
-        # A full page is as long as the first one: the size the server served.
-        served = len(timesheets) or MAX_PAGE_SIZE
-        page = (last_page or 1) + 1
-        while len(all_timesheets) < MAX_STATS_RESULTS:
-            timesheet_filter.page = page
-            try:
-                batch, _fetched, last_page = await client.get_timesheets(timesheet_filter)
-            except KimaiAPIError as e:
-                # Kimai answers the page after a full last page with 404.
-                if e.status_code != 404:
-                    raise
-                batch = []
-            if not batch:
-                fetched_all = True
-                break
-            all_timesheets.extend(batch)
-            if len(batch) < served:
-                fetched_all = True
-                break
-            page += 1
-        timesheets = all_timesheets
-    fetched = timesheets
+    names: RecordNames | None = None
+    if fetch_everything:
+        timesheet_filter.size = MAX_PAGE_SIZE
+        fetched, fetched_all, _last_page = await client.get_timesheets(
+            timesheet_filter, max_results=MAX_STATS_RESULTS, fetch_all=True
+        )
+        if fetched:
+            # These rows carry IDs; the names come from the listings.
+            # Statistics alone need the project names (and a customer check the
+            # projects' customers); listed rows need all of them.
+            names = await record_names(client, projects_only=not lists_rows)
+    else:
+        timesheet_filter.page = requested_page
+        timesheet_filter.size = page_size
+        timesheet_filter.full = "true"  # Expanded rows: names instead of IDs
+        try:
+            page = await client.get_timesheet_page(timesheet_filter)
+        except KimaiAPIError as e:
+            # Kimai answers a page past the end with 404 instead of an empty list.
+            if e.status_code != 404 or requested_page == 1:
+                raise
+            return [TextContent(
+                type="text",
+                text=f"Page {requested_page} is past the last page of timesheets for this filter; use a lower 'page'.",
+            )]
+        fetched = page.rows
+        fetched_all = True
 
     # The server-side term is a substring pre-filter (see _meta_search_term);
     # narrow it down to exact matches here, before the statistics see the
     # records and before the requested page is cut out.
-    meta_note = ""
+    matched, meta_note = fetched, ""
     if meta_filter is not None:
-        timesheets, meta_note = _filter_by_meta(timesheets, meta_filter["name"], meta_filter.get("value"))
+        matched, meta_note = _filter_by_meta(fetched, meta_filter["name"], meta_filter.get("value"))
 
-    matched = timesheets
-    stats_input = matched if filters.get("calculate_stats") else None
-    if fetch_everything and filters.get("page") is not None:
-        # The listing shows only the requested page.
-        start = (requested_page - 1) * page_size
-        timesheets = matched[start:start + page_size]
-
-    # Build response
-    found = len(matched)
-    if user_scope == "all":
-        result = f"Found {found} timesheets for all users\n\n"
-    elif user_scope == "specific":
-        result = f"Found {found} timesheets for user {user_filter}\n\n"
-    elif user_scope == "users":
-        result = f"Found {found} timesheets for users {', '.join(map(str, filters['users']))}\n\n"
+    first = (requested_page - 1) * page_size
+    if fetch_everything:
+        shown = matched[first:first + page_size]
+        found = len(matched)
+        more = first + page_size < found
+        complete = fetched_all
     else:
-        result = f"Found {found} timesheets for current user\n\n"
+        shown = matched
+        # Without Kimai's headers (a proxy may drop them) only this page is known.
+        found = page.total
+        more = page.has_more
+        complete = requested_page == 1 and not more
+
+    who = {
+        "all": "for all users",
+        "specific": f"for user {user_filter}",
+        "users": f"for users {', '.join(map(str, filters.get('users') or []))}",
+    }.get(user_scope, "for current user")
+    if found is None:
+        result = f"Found {len(shown)} timesheets {who} on page {requested_page}"
+    else:
+        result = f"Found {found} timesheets {who}"
+        if lists_rows and (requested_page > 1 or found > len(shown)):
+            result += f", showing {first + 1}-{first + len(shown)}" if shown else f", none on page {requested_page}"
+    result += "\n\n"
 
     if meta_filter is not None:
         wanted = meta_filter.get("value")
         result += f"Meta filter: {meta_filter['name']}={'<any>' if wanted is None else wanted}\n\n"
         result += meta_note
 
-    # Kimai ignores user/users[] without view_other_timesheet, and skips IDs
-    # that do not exist; with nothing left it returns the caller's own
-    # records. A header naming the requested users would present them as
-    # someone else's. Checked on everything fetched, before the meta match
-    # narrows it. (If the caller is among the requested users, nothing here
-    # can tell the difference.)
-    requested_users = (
-        set(filters["users"]) if user_scope == "users"
-        else {int(user_filter)} if user_scope == "specific" and str(user_filter).isdigit()
-        else None
-    )
-    returned_users = {ts.user for ts in fetched if ts.user is not None}
-    foreign = sorted(returned_users - requested_users) if requested_users is not None else []
-    if foreign:
-        result += (
-            f"Warning: Kimai returned records of user(s) {', '.join(map(str, foreign))}, which were not "
-            "requested. It does so when the token lacks view_other_timesheet or the requested user IDs "
-            "do not exist: it then ignores the user filter and returns the caller's own records.\n\n"
-        )
-    elif len(returned_users) == 1 and (user_scope == "all" or len(requested_users or ()) > 1):
-        # Only one user's records for 'all', or for several requested users of
-        # whom the caller is one: possibly only the caller's, the rest hidden.
-        note = await own_records_note(client, next(iter(returned_users)))
-        if note:
-            result += note + "\n\n"
-
-    # Kimai drops project and activity IDs that do not exist and then applies
-    # no project/activity filter at all, so a wrong ID lists everything.
-    for attr, single, several in (("project", "project", "projects"), ("activity", "activity", "activities")):
-        asked = set(filters.get(several) or []) | ({filters[single]} if filters.get(single) is not None else set())
-        stray = sorted({getattr(ts, attr) for ts in fetched} - asked) if asked else []
-        if stray:
-            result += (
-                f"Warning: Kimai returned records of {attr} ID(s) {', '.join(map(str, stray))}, which were not "
-                f"requested: it ignores {attr} IDs that do not exist and then does not filter by {attr} at all.\n\n"
-            )
+    result += await _filter_warnings(client, filters, user_scope, user_filter, fetched, names, complete)
 
     if not fetched_all:
-        if fetch_everything:
-            result += (
-                f"Not all records were used: the first {len(fetched)} were fetched (the limit is "
-                f"{MAX_STATS_RESULTS}); narrow the filter, e.g. a shorter period.\n\n"
-            )
-        else:
-            # last_page: the client may have paged on by itself (auto-pagination).
-            result += f"There may be more records: use 'page' {(last_page or requested_page) + 1} for the next ones.\n\n"
-    
+        result += (
+            f"Not all records were used: the first {len(fetched)} were fetched (the limit is "
+            f"{MAX_STATS_RESULTS}); narrow the filter, e.g. a shorter period.\n\n"
+        )
+    if lists_rows and more:
+        result += f"More records: use 'page' {requested_page + 1} for the next ones.\n\n"
+
     # Include user list if requested
     if filters.get("include_user_list"):
         try:
@@ -616,9 +566,8 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
                 result += "Note: Unable to list users (insufficient permissions). Use user_scope='self' or specify a user ID.\n\n"
             else:
                 result += f"Note: Unable to list users: {e!s}\n\n"
-    
-    # Calculate statistics if requested
-    if filters.get("calculate_stats"):
+
+    if calculate_stats:
         # Auto-enable year breakdown if time span > 1 year
         breakdown_by_year = filters.get("breakdown_by_year", False)
         if (
@@ -630,27 +579,18 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             breakdown_by_year = True
 
         stats = TimesheetAnalytics.calculate_statistics(
-            stats_input,
+            matched,
             breakdown_by_year=breakdown_by_year,
             period=(begin_datetime, end_datetime),
         )
-        
-        # Load project names for better display
+
+        # Only the projects in this report, not every project of the instance.
         reported = stats.get("projects") or {}
-        project_map = {}
-        if reported:
-            try:
-                # All projects: by default Kimai lists only visible ones running today.
-                projects = await client.get_projects(ProjectFilter.everything())
-                # Only the projects in this report, not every project of the instance.
-                project_map = {p.id: p.name for p in projects if p.id in reported}
-            # Project names are cosmetic; without them the report shows IDs.
-            except Exception:  # noqa: BLE001
-                project_map = {}
+        project_map = {
+            pid: names.projects[pid].name for pid in reported if names is not None and pid in names.projects
+        }
         stats["project_names"] = project_map
-        
-        # The schema default is not applied server-side, so default here.
-        stats_format = filters.get("stats_format", "summary")
+
         if stats_format == "json":
             result += "\n## Statistics (JSON):\n"
             result += json.dumps(stats, indent=2)
@@ -658,16 +598,82 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         else:
             result += "\n" + TimesheetAnalytics.format_statistics_report(stats, project_map)
             result += "\n\n"
-        
-        # If only stats requested, return early
-        if stats_format == "summary":
+
+        if not lists_rows:
             return [TextContent(type="text", text=result)]
-    
-    # List timesheets
-    for ts in timesheets:
-        result += _describe_timesheet(ts) + "\n"
+
+    show_user = user_scope != "self"
+    for ts in shown:
+        result += _describe_timesheet(ts, names, show_user=show_user)
 
     return [TextContent(type="text", text=result)]
+
+
+async def _filter_warnings(
+    client: KimaiClient, filters: dict, user_scope: str, user_filter: str | None, fetched: list,
+    names: RecordNames | None, complete: bool,
+) -> str:
+    """Say when the records show that Kimai ignored a filter.
+
+    A record that was not asked for is evidence on any page. "Only the
+    caller's records" is not: the next page may hold someone else's, so that
+    note needs the ``complete`` result.
+
+    Kimai ignores user/users[] without view_other_timesheet, and skips IDs
+    that do not exist; with nothing left it returns the caller's own records.
+    It also drops project, activity and customer IDs that do not exist and
+    then does not filter by that relation at all, so a wrong ID lists
+    everything. Checked on everything fetched, before the meta match narrows
+    it. (If the caller is among the requested users, nothing here can tell
+    the difference.)
+    """
+    text = ""
+    requested_users = (
+        set(filters["users"]) if user_scope == "users"
+        else {int(user_filter)} if user_scope == "specific" and str(user_filter).isdigit()
+        else None
+    )
+    returned_users = {_ref(ts.user) for ts in fetched if ts.user is not None}
+    foreign = sorted(returned_users - requested_users) if requested_users is not None else []
+    if foreign:
+        text += (
+            f"Warning: Kimai returned records of user(s) {', '.join(map(str, foreign))}, which were not "
+            "requested. It does so when the token lacks view_other_timesheet or the requested user IDs "
+            "do not exist: it then ignores the user filter and returns the caller's own records.\n\n"
+        )
+    elif complete and len(returned_users) == 1 and (user_scope == "all" or len(requested_users or ()) > 1):
+        # Only one user's records for 'all', or for several requested users of
+        # whom the caller is one: possibly only the caller's, the rest hidden.
+        note = await own_records_note(client, next(iter(returned_users)))
+        if note:
+            text += note + "\n\n"
+    elif not fetched and requested_users:
+        # An ignored user filter returns the caller's own records; when the
+        # caller has none, the empty result looks like the requested user's.
+        me = await best_effort(client.get_current_user())
+        if me is not None and me.id not in requested_users:
+            text += (
+                "Note: no records. Without view_other_timesheet Kimai ignores the user filter and returns "
+                "your own records instead, so this may only mean that you have none for this filter.\n\n"
+            )
+
+    relations = (
+        ("project", "projects", lambda ts: _ref(ts.project)),
+        ("activity", "activities", lambda ts: _ref(ts.activity)),
+        ("customer", "customers", lambda ts: _customer_id(ts, names)),
+    )
+    for single, several, row_id in relations:
+        asked = set(filters.get(several) or []) | ({filters[single]} if filters.get(single) is not None else set())
+        if not asked:
+            continue
+        returned = {row_id(ts) for ts in fetched} - {None}
+        stray = sorted(returned - asked)
+        if stray:
+            text += (
+                f"Warning: Kimai returned records of {single} ID(s) {', '.join(map(str, stray))}, which were not "
+                f"requested: it ignores {single} IDs that do not exist and then does not filter by {single} at all.\n\n"
+            )
+    return text
 
 
 async def _handle_timesheet_get(client: KimaiClient, id: int | None) -> list[TextContent]:
@@ -993,58 +999,98 @@ async def _handle_timer_restart(client: KimaiClient, id: int | None) -> list[Tex
     )]
 
 
-def _describe_timesheet(ts) -> str:
-    """One record of a listing, with every field Kimai sent for it.
+def _ref(value):
+    """The ID of a relation, whether the row has it as an ID or as an object (Expanded)."""
+    return getattr(value, "id", value)
 
-    ``timesheet list`` gets ``TimesheetEntity`` rows, whose relations are ids.
-    ``/timesheets/active``, ``/timesheets/recent`` and ``/favorites/timesheets``
-    are Expanded schemas, so there the relations are objects and can be named
-    (issue #24). Rates are printed only where Kimai sent them: since 2.66 it
-    strips them per record unless the token may view rates.
-    """
+
+def _customer_id(ts, names: RecordNames | None) -> int | None:
+    """The customer of a row: from the Expanded project, else from the project listing."""
+    if not isinstance(ts.project, int):
+        return ts.project.customer.id if ts.project.customer else None
+    project = names.projects.get(ts.project) if names else None
+    return project.customer if project else None
+
+
+def _work_label(ts, names: RecordNames | None) -> str:
+    """``Customer / Project (#id) / Activity (#id)``, or the IDs where no name is known."""
     if isinstance(ts.project, int):
-        text = f"ID: {ts.id} - Project ID: {ts.project} / Activity ID: {ts.activity}\n"
-        text += f"  User ID: {ts.user if ts.user else 'Unknown'}\n"
+        known = names.projects.get(ts.project) if names else None
+        project = f"project #{ts.project}"
+        if known:
+            project = f"{known.name} (#{known.id})"
+            if known.parent_title:  # the customer's name
+                project = f"{known.parent_title} / {project}"
     else:
-        project = ts.project.name
+        project = f"{ts.project.name} (#{ts.project.id})"
         if ts.project.customer:
             project = f"{ts.project.customer.name} / {project}"
-        text = f"ID: {ts.id} - Project: {project} / Activity: {ts.activity.name}\n"
-        if ts.user:
-            text += f"  User: {ts.user.alias or ts.user.username} (ID: {ts.user.id})\n"
-
-    if ts.end:
-        text += f"  Duration: {worked_hours(ts):.2f} hours\n"
+    if isinstance(ts.activity, int):
+        name = names.activities.get(ts.activity) if names else None
+        activity = f"{name} (#{ts.activity})" if name else f"activity #{ts.activity}"
     else:
-        text += "  Status: Running\n"
-    text += f"  Begin: {ts.begin.strftime('%Y-%m-%d %H:%M')}\n"
-    if ts.end:
-        text += f"  End: {ts.end.strftime('%Y-%m-%d %H:%M')}\n"
-    if ts.break_duration:
-        text += f"  Break: {ts.break_duration // 60} minutes\n"
-    text += f"  Billable: {'Yes' if ts.billable else 'No'} | Exported: {'Yes' if ts.exported else 'No'}\n"
+        activity = f"{ts.activity.name} (#{ts.activity.id})"
+    return f"{project} / {activity}"
 
-    rates = [
-        f"{label}: {value}"
+
+def _user_label(user, names: RecordNames | None) -> str:
+    if isinstance(user, int):
+        name = names.users.get(user) if names else None
+        return f"{name} (#{user})" if name else f"user #{user}"
+    return f"{user.alias or user.username} (#{user.id})"
+
+
+def _describe_timesheet(ts, names: RecordNames | None = None, show_user: bool = True) -> str:
+    """One record of a listing: a line with when, how long, what, who and why,
+    then a line each only for what is present or deviates.
+
+    The Expanded rows (list, active, recent, favorites) name their relations;
+    the ``TimesheetEntity`` rows behind statistics and the meta filter are
+    named from ``names`` where the lookups found them, else shown by ID.
+    "not billable" and "exported" are printed only when they apply. Rates
+    are printed only where Kimai sent them: since 2.66 it strips them per
+    record unless the token may view rates.
+    """
+    begin = ts.begin
+    if ts.end is None:
+        # tzinfo=None mirrors a naive begin, so both sides stay comparable.
+        elapsed = (datetime.now(begin.tzinfo) - begin).total_seconds() / 3600
+        when = f"{begin:%Y-%m-%d %H:%M}-now (running, {elapsed:.2f} h so far)"
+    else:
+        end = f"{ts.end:%H:%M}" if ts.end.date() == begin.date() else f"{ts.end:%Y-%m-%d %H:%M}"
+        when = f"{begin:%Y-%m-%d %H:%M}-{end}, {worked_hours(ts):.2f} h"
+    if ts.break_duration:
+        when += f" (break {ts.break_duration // 60} min)"
+    line = f"#{ts.id} {when}, {_work_label(ts, names)}"
+    if show_user and ts.user is not None:
+        line += f", {_user_label(ts.user, names)}"
+    if ts.description:
+        line += " - " + " | ".join(part.strip() for part in ts.description.splitlines() if part.strip())
+    lines = [line]
+
+    details = ["not billable"] if not ts.billable else []
+    if ts.exported:
+        details.append("exported")
+    details += [
+        f"{label} {value}"
         for label, value in (
-            ("Rate", ts.rate),
-            ("Internal Rate", ts.internal_rate),
-            ("Fixed Rate", ts.fixed_rate),
-            ("Hourly Rate", ts.hourly_rate),
+            ("rate", ts.rate),
+            ("internal rate", ts.internal_rate),
+            ("fixed rate", ts.fixed_rate),
+            ("hourly rate", ts.hourly_rate),
         )
         if value is not None
     ]
-    if rates:
-        text += f"  {' | '.join(rates)}\n"
+    if details:
+        lines.append("  " + ", ".join(details))
 
-    if ts.description:
-        text += f"  Description: {ts.description}\n"
-    if ts.tags:
-        text += f"  Tags: {', '.join(ts.tags)}\n"
+    extras = [f"tags: {', '.join(ts.tags)}"] if ts.tags else []
     meta = _format_meta_fields(ts.meta_fields)
     if meta:
-        text += f"  Meta: {meta}\n"
-    return text
+        extras.append(f"meta: {meta}")
+    if extras:
+        lines.append("  " + "; ".join(extras))
+    return "\n".join(lines) + "\n"
 
 
 async def _handle_timer_active(client: KimaiClient) -> list[TextContent]:
@@ -1057,14 +1103,8 @@ async def _handle_timer_active(client: KimaiClient) -> list[TextContent]:
     result = f"Found {len(timesheets)} active timer(s):\n\n"
     
     for ts in timesheets:
-        # tzinfo=None mirrors ts.begin being naive, so both sides stay comparable.
-        now = datetime.now(ts.begin.tzinfo)
-        elapsed = (now - ts.begin).total_seconds() / 3600
+        result += _describe_timesheet(ts, show_user=False)
 
-        result += _describe_timesheet(ts)
-        result += f"  Elapsed: {elapsed:.2f} hours\n"
-        result += "\n"
-    
     return [TextContent(type="text", text=result)]
 
 
@@ -1081,7 +1121,7 @@ async def _handle_timer_favorites(client: KimaiClient) -> list[TextContent]:
     result = f"Found {len(timesheets)} favorite timesheet(s). Start one with timer action=restart id=<ID>.\n\n"
 
     for ts in timesheets:
-        result += _describe_timesheet(ts) + "\n"
+        result += _describe_timesheet(ts, show_user=False)
 
     return [TextContent(type="text", text=result)]
 
@@ -1118,7 +1158,7 @@ async def _handle_timer_recent(client: KimaiClient, size: int, begin: str | None
     )
 
     for ts in timesheets:
-        result += _describe_timesheet(ts) + "\n"
+        result += _describe_timesheet(ts, show_user=False)
 
     return [TextContent(type="text", text=result)]
 

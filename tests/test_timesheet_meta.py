@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from kimai_mcp.client import TimesheetPage
 from kimai_mcp.models import TimesheetEntity, User
 from kimai_mcp.tools.timesheet_consolidated import (
     _handle_timesheet_get,
@@ -32,9 +33,13 @@ def _timesheet(id: int, issue: str | None) -> TimesheetEntity:
 
 
 def _mock_client(timesheets: list[TimesheetEntity]) -> AsyncMock:
+    """The listing reads one page; statistics and the meta filter read everything."""
     client = AsyncMock()
     client.get_current_user.return_value = User(id=1, username="tester", enabled=True)
     client.get_timesheets.return_value = (timesheets, True, 1)
+    client.get_timesheet_page.return_value = TimesheetPage(
+        rows=timesheets, page=1, size=50, total=len(timesheets), total_pages=1
+    )
     return client
 
 
@@ -44,9 +49,9 @@ async def test_list_shows_non_empty_meta_fields():
 
     text = (await _handle_timesheet_list(client, {}))[0].text
 
-    entry_1, entry_2 = text.split("ID: 101 - ")[1].split("ID: 102 - ")
-    assert "  Meta: issue_tracker_id=CA-376\n" in entry_1
-    assert "Meta:" not in entry_2
+    entry_1, entry_2 = text.split("#101 ")[1].split("#102 ")
+    assert "  meta: issue_tracker_id=CA-376\n" in entry_1
+    assert "meta:" not in entry_2
 
 
 @pytest.mark.asyncio
@@ -56,7 +61,7 @@ async def test_list_without_meta_fields_has_no_meta_line():
 
     text = (await _handle_timesheet_list(client, {}))[0].text
 
-    assert "Meta" not in text
+    assert "meta" not in text.lower()
 
 
 @pytest.mark.asyncio
@@ -90,9 +95,9 @@ async def test_meta_filter_is_sent_as_search_term_and_matched_exactly():
 
     assert client.get_timesheets.await_args.args[0].term == "issue_tracker_id:CA-376"
     assert text.startswith("Found 2 timesheets")
-    assert "ID: 101 - " in text
-    assert "ID: 104 - " in text
-    assert "ID: 102 - " not in text
+    assert "#101 " in text
+    assert "#104 " in text
+    assert "#102 " not in text
 
 
 @pytest.mark.asyncio
@@ -113,8 +118,8 @@ async def test_meta_filter_without_value_matches_any_value():
     text = (await _handle_timesheet_list(client, {"meta": {"name": "issue_tracker_id"}}))[0].text
 
     assert client.get_timesheets.await_args.args[0].term == "issue_tracker_id:*"
-    assert "ID: 101 - " in text
-    assert "ID: 102 - " not in text
+    assert "#101 " in text
+    assert "#102 " not in text
 
 
 @pytest.mark.asyncio
@@ -128,9 +133,9 @@ async def test_meta_filter_with_empty_value_matches_entries_without_one():
     ))[0].text
 
     assert client.get_timesheets.await_args.args[0].term is None
-    assert "ID: 101 - " not in text
-    assert "ID: 102 - " in text
-    assert "ID: 103 - " in text
+    assert "#101 " not in text
+    assert "#102 " in text
+    assert "#103 " in text
 
 
 @pytest.mark.asyncio
@@ -168,16 +173,16 @@ async def test_meta_filter_matches_exactly_across_pages():
     near-misses used to hide the exact matches further on ("Found 0")."""
     near_misses = [_timesheet(200 + i, f"CA-1{i:02d}") for i in range(50)]
     exact = [_timesheet(301, "CA-1"), _timesheet(302, "CA-1")]
-    client = _mock_client([])
-    client.get_timesheets.side_effect = [(near_misses, False, 1), (exact, True, 2)]
+    client = _mock_client(near_misses + exact)
 
     text = (await _handle_timesheet_list(
         client, {"page": 1, "meta": {"name": "issue_tracker_id", "value": "CA-1"}}
     ))[0].text
 
+    assert client.get_timesheets.await_args.kwargs["fetch_all"] is True
     assert text.startswith("Found 2 timesheets")
-    assert "ID: 301 - " in text
-    assert "ID: 302 - " in text
+    assert "#301 " in text
+    assert "#302 " in text
 
 
 def _without_row(id: int) -> TimesheetEntity:
@@ -196,8 +201,8 @@ async def test_meta_filter_compares_names_case_insensitively():
         client, {"meta": {"name": "Issue_Tracker_Id", "value": "ca-376"}}
     ))[0].text
 
-    assert "ID: 101 - " in text
-    assert "ID: 102 - " not in text
+    assert "#101 " in text
+    assert "#102 " not in text
 
 
 @pytest.mark.asyncio
@@ -211,8 +216,8 @@ async def test_records_without_the_field_that_kimai_matched_are_kept_with_a_note
         client, {"meta": {"name": "issue_tracker_id", "value": "CA-376"}}
     ))[0].text
 
-    assert "ID: 101 - " in text
-    assert "ID: 102 - " in text
+    assert "#101 " in text
+    assert "#102 " in text
     assert "1 of these matched Kimai's substring search on a hidden 'issue_tracker_id'" in text
 
 
@@ -227,7 +232,7 @@ async def test_an_empty_search_includes_records_without_the_field():
     ))[0].text
 
     assert text.startswith("Found 2 timesheets")
-    assert "ID: 103 - " not in text
+    assert "#103 " not in text
 
 
 @pytest.mark.asyncio
@@ -240,8 +245,8 @@ async def test_records_without_the_field_are_dropped_when_kimai_did_not_match_th
         client, {"meta": {"name": "issue_tracker_id", "value": "two words"}}
     ))[0].text
 
-    assert "ID: 101 - " in text
-    assert "ID: 102 - " not in text
+    assert "#101 " in text
+    assert "#102 " not in text
 
 
 @pytest.mark.asyncio
@@ -251,8 +256,8 @@ async def test_a_meta_search_fetches_in_pages_of_500():
 
     await _handle_timesheet_list(client, {"page": 3, "meta": {"name": "issue_tracker_id", "value": "CA-1"}})
 
-    sent = client.get_timesheets.await_args.args[0]
-    assert (sent.page, sent.size) == (1, 500)
+    assert client.get_timesheets.await_args.args[0].size == 500
+    assert client.get_timesheets.await_args.kwargs["fetch_all"] is True
 
 
 @pytest.mark.asyncio
@@ -288,7 +293,7 @@ async def test_a_date_only_end_includes_that_day():
 
     await _handle_timesheet_list(client, {"begin": "2025-06-01", "end": "2025-06-30"})
 
-    sent = client.get_timesheets.await_args.args[0]
+    sent = client.get_timesheet_page.await_args.args[0]
     assert sent.end.isoformat() == "2025-06-30T23:59:59"
 
 
@@ -319,7 +324,7 @@ async def test_an_any_value_search_says_a_hidden_value_may_be_empty():
 
     text = (await _handle_timesheet_list(client, {"meta": {"name": "internal_ref"}}))[0].text
 
-    assert "ID: 101 - " in text
+    assert "#101 " in text
     assert "which may be empty" in text
     assert "substring" not in text
 
@@ -382,18 +387,71 @@ async def test_an_integral_float_page_does_not_break_the_slice():
 
     text = (await _handle_timesheet_list(client, {"page": 1.0, "meta": {"name": "issue_tracker_id", "value": "CA-1"}}))[0].text
 
-    assert "ID: 101 - " in text
+    assert "#101 " in text
 
 
 @pytest.mark.asyncio
-async def test_the_next_page_hint_follows_the_pages_already_fetched():
-    """The client may have paged on by itself; 'page 2' would repeat records."""
+async def test_the_listing_reads_one_page_of_the_requested_size():
+    """Without 'page' the listing used to fetch every page and ignore 'size'."""
     client = _mock_client([])
-    client.get_timesheets.return_value = ([_timesheet(101, None)], False, 100)
+    client.get_timesheet_page.return_value = TimesheetPage(
+        rows=[_timesheet(101 + i, None) for i in range(5)], page=3, size=5, total=23, total_pages=5
+    )
+
+    text = (await _handle_timesheet_list(client, {"page": 3, "size": 5}))[0].text
+
+    sent = client.get_timesheet_page.await_args.args[0]
+    assert (sent.page, sent.size, sent.full) == (3, 5, "true")
+    client.get_timesheets.assert_not_awaited()
+    assert text.startswith("Found 23 timesheets for current user, showing 11-15")
+    assert "use 'page' 4" in text
+
+
+@pytest.mark.asyncio
+async def test_the_last_page_has_no_next_page_hint():
+    client = _mock_client([_timesheet(101, None)])
 
     text = (await _handle_timesheet_list(client, {}))[0].text
 
-    assert "use 'page' 101" in text
+    assert text.startswith("Found 1 timesheets for current user\n")
+    assert "use 'page'" not in text
+
+
+@pytest.mark.asyncio
+async def test_without_pagination_headers_a_full_page_offers_the_next():
+    client = _mock_client([])
+    client.get_timesheet_page.return_value = TimesheetPage(rows=[_timesheet(101, None)], page=1, size=1)
+
+    text = (await _handle_timesheet_list(client, {"size": 1}))[0].text
+
+    assert text.startswith("Found 1 timesheets for current user on page 1")
+    assert "use 'page' 2" in text
+
+
+@pytest.mark.asyncio
+async def test_a_page_past_the_end_is_said_so():
+    from kimai_mcp.client import KimaiAPIError
+
+    client = _mock_client([])
+    client.get_timesheet_page.side_effect = KimaiAPIError("Not Found", 404)
+
+    text = (await _handle_timesheet_list(client, {"page": 9}))[0].text
+
+    assert "Page 9 is past the last page" in text
+
+
+@pytest.mark.asyncio
+async def test_meta_matches_are_paged_by_size():
+    client = _mock_client([_timesheet(101 + i, "CA-1") for i in range(3)])
+
+    text = (await _handle_timesheet_list(
+        client, {"size": 2, "page": 2, "meta": {"name": "issue_tracker_id", "value": "CA-1"}}
+    ))[0].text
+
+    assert text.startswith("Found 3 timesheets for current user, showing 3-3")
+    assert "#103 " in text
+    assert "#101 " not in text
+    assert "use 'page'" not in text
 
 
 @pytest.mark.asyncio

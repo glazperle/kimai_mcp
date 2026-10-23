@@ -408,8 +408,20 @@ Then use this Claude Desktop configuration:
 }
 ```
 
-`list` and `get` print the non-empty timesheet meta fields of each entry (e.g. `Meta: issue_tracker_id=CA-376`).
-Kimai only serializes meta fields whose definition is marked visible (`setIsVisible(true)` in the plugin).
+`list` returns one page (`page`, default 1; `size`, default 50, at most 500) with Kimai's total and a hint
+for the next page. Each entry is one line with names instead of IDs, and a further line only for what applies:
+
+```
+Found 57 timesheets for all users, showing 1-50
+
+#101 2026-10-20 09:00-17:30, 7.50 h (break 30 min), Acme / Website Relaunch (#7) / Development (#12), Ana (#5) - Sprint planning
+#102 2026-10-20 13:00-15:00, 2.00 h, Acme / Website Relaunch (#7) / Support (#3), Ben (#8)
+  not billable, exported
+  tags: bug; meta: issue_tracker_id=CA-376
+```
+
+`list` and `get` print the non-empty timesheet meta fields of each entry. Kimai only serializes meta fields
+whose definition is marked visible (`setIsVisible(true)` in the plugin).
 
 #### List Timesheets by Meta Field
 ```json

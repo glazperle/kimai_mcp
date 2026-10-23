@@ -329,8 +329,8 @@ async def test_timer_favorites_lists_names_and_points_to_restart():
 
     [content] = await timesheet_consolidated.handle_timer(client, action="favorites")
 
-    assert "ID: 5 - Project: Acme / Relaunch / Activity: Meetings" in content.text
-    assert "Tags: meeting" in content.text
+    assert "#5 2026-09-01 09:00-10:00, 1.00 h, Acme / Relaunch (#2) / Meetings (#1) - Weekly sync" in content.text
+    assert "  tags: meeting" in content.text
     assert "action=restart" in content.text
 
 

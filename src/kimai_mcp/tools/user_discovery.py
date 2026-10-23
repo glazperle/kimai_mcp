@@ -1,8 +1,9 @@
 """Shared helper for discovering users accessible to the current API token."""
 
 
-from ..client import KimaiAPIError, KimaiClient
+from ..client import KimaiClient
 from .batch_utils import execute_batch
+from .lookups import best_effort
 
 
 async def resolve_accessible_users(client: KimaiClient) -> list:
@@ -60,15 +61,8 @@ async def own_records_note(client: KimaiClient, user_id: int | None) -> str | No
     lookup only feeds this note, so any failure skips the note instead of
     failing the result; a 401 (token gone) propagates, as everywhere.
     """
-    try:
-        me = await client.get_current_user()
-    except KimaiAPIError as e:
-        if e.status_code == 401:
-            raise
-        return None
-    except Exception:  # noqa: BLE001 - a non-JSON or unexpected body only drops the note
-        return None
-    if user_id != me.id:
+    me = await best_effort(client.get_current_user())
+    if me is None or user_id != me.id:
         return None
     return (
         "Note: every record returned is your own. Kimai returns only the records this token may see "
