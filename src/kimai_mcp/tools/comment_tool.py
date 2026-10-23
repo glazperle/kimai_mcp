@@ -5,6 +5,7 @@ from mcp.types import TextContent, Tool
 
 from ..client import KimaiClient
 from ..models import CommentForm
+from ..text import quoted
 from .errors import ToolError
 
 
@@ -119,5 +120,7 @@ def _format_comment_list(comments: list, entity: str, entity_id: int) -> str:
             result += f"  By: {comment.created_by.username}\n"
         if comment.created_at:
             result += f"  At: {comment.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-        result += f"  {comment.message}\n\n"
+        # Labelled like every other field: unlabelled, a one-line message
+        # 'By: admin' read as a second author line.
+        result += f"  Message: {quoted(comment.message)}\n\n"
     return result

@@ -6,8 +6,9 @@ from mcp.types import TextContent, Tool
 
 from ..client import KimaiAPIError, KimaiClient
 from ..models import AbsenceFilter, AbsenceForm
+from ..text import quoted
 from .absence_analytics import AbsenceAnalytics
-from .batch_utils import execute_batch, format_batch_result
+from .batch_utils import execute_batch, format_batch_result, read_batch
 from .dates import day_end, day_start, parse_iso_date, today
 from .errors import ToolError
 from .user_discovery import resolve_accessible_users
@@ -192,11 +193,12 @@ async def _fetch_absences_for_users(
     begin_date: str | None,
     end_date: str | None,
     status: str
-) -> list:
+) -> tuple[list, str]:
     """Fetch absences for multiple users in parallel (max 10 concurrent).
 
-    Users we don't have permission to view are skipped silently
-    (same behavior as the previous sequential implementation).
+    Returns the absences and a note naming the users whose absences this
+    token may not read (403/404, skipped), or "". Any other failure is
+    raised (``read_batch``): a missing user's absences are no answer.
     """
     async def fetch_one(user_id):
         return await client.get_absences(AbsenceFilter(
@@ -206,86 +208,85 @@ async def _fetch_absences_for_users(
             status=status
         ))
 
-    success, _failed = await execute_batch(list(user_ids), fetch_one)
-    return [absence for user_absences in success for absence in user_absences]
+    success, skipped = await read_batch(sorted(user_ids), fetch_one, route_may_be_missing=True)
+    absences = [absence for user_absences in success for absence in user_absences]
+    return absences, _skipped_note(skipped)
 
 
-async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextContent]:
-    """Handle absence list action."""
-    # Handle user scope - API only supports single user or no user filter
-    user_scope = filters.get("user_scope", "self")
-    
-    # Process date formats - convert YYYY-MM-DD to ISO 8601 with time
+def _skipped_note(user_ids: list) -> str:
+    if not user_ids:
+        return ""
+    return (
+        f"\n\nNote: the absences of {len(user_ids)} user(s) could not be read (403/404) and are "
+        f"not included: user ID(s) {', '.join(str(user_id) for user_id in user_ids)}."
+    )
+
+
+def _period(filters: dict) -> tuple[str | None, str | None]:
+    """``begin``/``end`` of a listing as Kimai takes them; a begin after the
+    end is refused here, Kimai answers it with a bare 404."""
     begin_date = filters.get("begin")
     end_date = filters.get("end")
-    
     if begin_date:
         try:
             begin_date = day_start(begin_date)
         except ValueError:
             raise ToolError(f"Error: Invalid begin date format. Expected YYYY-MM-DD, got '{begin_date}'")
-
     if end_date:
         try:
             end_date = day_end(end_date)
         except ValueError:
             raise ToolError(f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{end_date}'")
+    if begin_date and end_date and begin_date > end_date:
+        raise ToolError(f"Error: begin ({filters['begin']}) is after end ({filters['end']}).")
+    return begin_date, end_date
 
-    # Handle different user scopes
-    absences = []
-    
+
+async def _absences_in_scope(client: KimaiClient, filters: dict, user_scope: str) -> tuple[list, str]:
+    """The absences of ``user_scope`` in the filters' period, and a note naming
+    the users left out (``_fetch_absences_for_users``), shared by list and
+    statistics."""
+    begin_date, end_date = _period(filters)
+    status = filters.get("status", "all")
+
     if user_scope == "self":
-        # Get absences for current user
         current_user = await client.get_current_user()
-        absence_filter = AbsenceFilter(
-            user=str(current_user.id),
-            begin=begin_date,
-            end=end_date,
-            status=filters.get("status", "all")
-        )
-        absences = await client.get_absences(absence_filter)
-        
-    elif user_scope == "specific":
-        # Get absences for specific user
+        return await client.get_absences(
+            AbsenceFilter(user=str(current_user.id), begin=begin_date, end=end_date, status=status)
+        ), ""
+
+    if user_scope == "specific":
         user_filter = filters.get("user")
         if not user_filter:
             raise ToolError("Error: 'user' parameter required when user_scope is 'specific'")
-        
-        absence_filter = AbsenceFilter(
-            user=user_filter,
-            begin=begin_date,
-            end=end_date,
-            status=filters.get("status", "all")
-        )
-        absences = await client.get_absences(absence_filter)
-        
-    elif user_scope == "all":
-        # Try to get absences for all users the current user has access to
-        # (teams first, get_users as fallback)
-        try:
-            accessible_users = await resolve_accessible_users(client)
-        except Exception as e:
-            if isinstance(e, KimaiAPIError) and e.status_code == 403:
-                raise ToolError(
-                    "Error: You don't have permission to view all users' absences.\n\n"
-                    "This requires either:\n"
-                    "- System Administrator role, or\n"
-                    "- Being a team lead (to see team members' absences)\n\n"
-                    "Use user_scope='self' to view your own absences, or\n"
-                    "user_scope='specific' with a user ID if you have permission for that user."
-                )
-            raise
+        return await client.get_absences(
+            AbsenceFilter(user=user_filter, begin=begin_date, end=end_date, status=status)
+        ), ""
 
-        # Now fetch absences for each accessible user (in parallel)
-        accessible_user_ids = {user.id for user in accessible_users}
-        absences = await _fetch_absences_for_users(
-            client,
-            accessible_user_ids,
-            begin_date,
-            end_date,
-            filters.get("status", "all")
-        )
-    
+    # All users the token may see (teams first, get_users as fallback)
+    try:
+        accessible_users = await resolve_accessible_users(client)
+    except Exception as e:
+        if isinstance(e, KimaiAPIError) and e.status_code == 403:
+            raise ToolError(
+                "Error: You don't have permission to view all users' absences.\n\n"
+                "This requires either:\n"
+                "- System Administrator role, or\n"
+                "- Being a team lead (to see team members' absences)\n\n"
+                "Use user_scope='self' for your own absences, or\n"
+                "user_scope='specific' with a user ID if you have permission for that user."
+            )
+        raise
+    return await _fetch_absences_for_users(
+        client, {user.id for user in accessible_users}, begin_date, end_date, status
+    )
+
+
+async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextContent]:
+    """Handle absence list action."""
+    user_scope = filters.get("user_scope", "self")
+    absences, note = await _absences_in_scope(client, filters, user_scope)
+
     # Build response
     if user_scope == "all":
         result = f"Found {len(absences)} absence(s) for all users\n\n"
@@ -296,7 +297,7 @@ async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextC
         result = f"Found {len(absences)} absence(s) for current user\n\n"
     
     if not absences:
-        result += "No absences found for the specified criteria."
+        result += "No absences found for the specified criteria." + note
         return [TextContent(type="text", text=result)]
     
     for absence in absences:
@@ -313,14 +314,14 @@ async def _handle_absence_list(client: KimaiClient, filters: dict) -> list[TextC
             result += "  Half Day: Yes\n"
         
         if hasattr(absence, "comment") and absence.comment:
-            result += f"  Comment: {absence.comment}\n"
+            result += f"  Comment: {quoted(absence.comment)}\n"
         
         if hasattr(absence, "duration") and absence.duration:
             result += f"  Duration: {absence.duration}\n"
         
         result += "\n"
     
-    return [TextContent(type="text", text=result)]
+    return [TextContent(type="text", text=result.rstrip("\n") + note if note else result)]
 
 
 async def _handle_absence_statistics(
@@ -330,75 +331,8 @@ async def _handle_absence_statistics(
     breakdown_by_month: bool
 ) -> list[TextContent]:
     """Handle absence statistics action."""
-    # First, fetch absences using the same logic as list
     user_scope = filters.get("user_scope", "all")  # Default to all for statistics
-
-    # Process date formats
-    begin_date = filters.get("begin")
-    end_date = filters.get("end")
-
-    if begin_date:
-        try:
-            begin_date = day_start(begin_date)
-        except ValueError:
-            raise ToolError(f"Error: Invalid begin date format. Expected YYYY-MM-DD, got '{begin_date}'")
-
-    if end_date:
-        try:
-            end_date = day_end(end_date)
-        except ValueError:
-            raise ToolError(f"Error: Invalid end date format. Expected YYYY-MM-DD, got '{end_date}'")
-
-    # Fetch absences based on user scope
-    absences = []
-
-    if user_scope == "self":
-        current_user = await client.get_current_user()
-        absence_filter = AbsenceFilter(
-            user=str(current_user.id),
-            begin=begin_date,
-            end=end_date,
-            status=filters.get("status", "all")
-        )
-        absences = await client.get_absences(absence_filter)
-
-    elif user_scope == "specific":
-        user_filter = filters.get("user")
-        if not user_filter:
-            raise ToolError("Error: 'user' parameter required when user_scope is 'specific'")
-
-        absence_filter = AbsenceFilter(
-            user=user_filter,
-            begin=begin_date,
-            end=end_date,
-            status=filters.get("status", "all")
-        )
-        absences = await client.get_absences(absence_filter)
-
-    else:  # user_scope == "all"
-        # Get accessible users (teams first, get_users as fallback)
-        try:
-            accessible_users = await resolve_accessible_users(client)
-        except Exception as e:
-            if isinstance(e, KimaiAPIError) and e.status_code == 403:
-                raise ToolError(
-                    "Error: You don't have permission to view all users' absences.\n\n"
-                    "This requires either:\n"
-                    "- System Administrator role, or\n"
-                    "- Being a team lead (to see team members' absences)\n\n"
-                    "Use user_scope='self' to view your own absence statistics."
-                )
-            raise
-
-        # Fetch absences for each accessible user (in parallel)
-        accessible_user_ids = {user.id for user in accessible_users}
-        absences = await _fetch_absences_for_users(
-            client,
-            accessible_user_ids,
-            begin_date,
-            end_date,
-            filters.get("status", "all")
-        )
+    absences, note = await _absences_in_scope(client, filters, user_scope)
 
     # Calculate statistics
     stats = AbsenceAnalytics.calculate_statistics(
@@ -409,17 +343,17 @@ async def _handle_absence_statistics(
 
     # Generate report title based on filters
     title = "Absence Statistics Report"
-    if begin_date and end_date:
+    if filters.get("begin") and filters.get("end"):
         title += f" ({filters.get('begin')} to {filters.get('end')})"
-    elif begin_date:
+    elif filters.get("begin"):
         title += f" (from {filters.get('begin')})"
-    elif end_date:
+    elif filters.get("end"):
         title += f" (until {filters.get('end')})"
 
     # Format and return report
     report = AbsenceAnalytics.format_statistics_report(stats, title)
 
-    return [TextContent(type="text", text=report)]
+    return [TextContent(type="text", text=report + note)]
 
 
 async def _handle_absence_types(client: KimaiClient, language: str) -> list[TextContent]:
@@ -626,9 +560,11 @@ async def _get_accessible_users(client: KimaiClient, user_scope: str) -> list:
     # For "all" scope, try teams first then fallback to get_users
     try:
         users = await resolve_accessible_users(client)
-    # Both discovery paths failing (no permission, API error) degrades to an
-    # empty report rather than a failed tool call.
-    except Exception:  # noqa: BLE001
+    # No permission on either discovery path is an empty report, which the
+    # caller explains. Anything else (an outage, a 401) is reported as such.
+    except KimaiAPIError as e:
+        if e.status_code != 403:
+            raise
         return []
 
     # Only include active users
@@ -682,9 +618,10 @@ async def _handle_attendance(
         ))
         return user, absences
 
-    # Check all users in parallel (max 10 concurrent);
-    # users we can't check are skipped silently
-    success, _failed = await execute_batch(all_users, check_user)
+    # Check all users in parallel (max 10 concurrent). A user whose absences
+    # this token may not read is listed as not checked: counted present, a
+    # colleague on holiday was reported in the office.
+    success, unchecked = await read_batch(all_users, check_user, route_may_be_missing=True)
 
     for user, absences in success:
         if absences:
@@ -692,8 +629,11 @@ async def _handle_attendance(
             absence_type = absences[0].type if absences else "Abwesend"
             absent_users_with_reason[user.id] = (user, absence_type)
 
-    # 4. Present = All - Absent
-    present_users = [u for u in all_users if u.id not in absent_users_with_reason]
+    # 4. Present = All - Absent - Not checked
+    unchecked_ids = {u.id for u in unchecked}
+    present_users = [
+        u for u in all_users if u.id not in absent_users_with_reason and u.id not in unchecked_ids
+    ]
 
     # 5. Build report
     # Format date with weekday
@@ -717,6 +657,11 @@ async def _handle_attendance(
             display_name = user.alias if hasattr(user, 'alias') and user.alias else user.username
             type_label = type_labels.get(absence_type, absence_type)
             result += f"- ✗ {display_name} ({type_label})\n"
+
+    if unchecked:
+        result += f"\n## Not checked ({len(unchecked)}): their absences could not be read (403/404)\n"
+        for user in sorted(unchecked, key=lambda u: u.username.lower()):
+            result += f"- ? {getattr(user, 'alias', None) or user.username}\n"
 
     return [TextContent(type="text", text=result)]
 

@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.20.1] - 2026-10-24
+
+### Security
+
+- **Text a Kimai user writes could forge records in a listing.** Timesheet rows are one line each since
+  2.20.0, but a line break in an alias, an account number, a preference, a project or tag name, a meta
+  field or a comment started a line of its own, and one shaped like `#6 2026-09-01 11:00-12:00, 8.00 h,
+  ... bob (#4)`, `User: admin (ID: 1)` or `Exported: No` read as another record or field. Inside a row an
+  alias such as `Bob (#4) - approved by Ana (#5)` did the same without any line break. A plain user can
+  edit their own profile and preferences, so this needed no special rights. Now:
+  - every text field of a read model is joined to one line when it is parsed, except the few that may
+    span lines (descriptions, comments, meta and preference values, the legacy customer address);
+  - those are shown JSON-quoted wherever they would be ambiguous (a line break, an invisible character
+    such as a zero-width space, a bidi override, a variation selector or a Hangul filler, outer
+    whitespace, a first character that could be a quote, such as `"` or U+05F4 `״`), and joined with
+    ` | ` in a one-line row. The quoting is lossless, so a value read with `get` can be written back;
+  - a meta value or tag is quoted when it holds a separator (`CA-1, approved=yes`), and a name in a row
+    when it holds `#` or ` / `. Beyond ASCII only letters, digits, numbers and currency signs, the
+    modifier letters that are part of words, combining marks right after a letter, and typographic
+    apostrophes and dashes stay unquoted, so look-alikes count too (fullwidth `，` `＝` `＃`, U+201A `‚`,
+    U+266F `♯`), including those Unicode normalization does not fold; names in Japanese, Devanagari or
+    with a decomposed umlaut stay as they are.
+- The user list of `include_user_list` and `user_guide` shows each account's status before its alias:
+  an alias `Ana (inactive)` made an active account read as a disabled one. A comment in `comment
+  action=list` is labelled `Message:`; unlabelled, a one-line message `By: admin` read as its author.
+- **A 401 is never lost, and a revoked token recovers.** The client flags every 401. A tool call that saw
+  one, also where the tool reported the failure as text (a batch result, `config type=all`, a name
+  lookup), marks its session; the streamable server replaces it on the next request, once, and the
+  legacy `/mcp/{slug}` route does too. A provisioned user's token is forgotten at that moment, and at
+  session start after a restart, and their OAuth tokens stop verifying, so the client is asked to sign in
+  again, which provisions a new token (it used to get 503 until someone reconnected twice). The request
+  whose session start Kimai refused gets that 401 itself. A 401 inside a success response (Kimai's error
+  envelope) is flagged like any other.
+
+### Fixed
+
+- **An outage no longer shrinks an answer about everyone.** User discovery (`user_scope=all` for
+  absences and `lock_month`/`unlock_month`, `include_user_list`, `user_guide`) skips a team the token
+  may not open, but reports any other failure of `GET /teams` or a team's details (a timeout, a 5xx, a
+  401) instead of answering from the other teams: `lock_month user_scope=all` locked one team, left the
+  other open and reported success. `GET /users` is asked only when the teams name nobody.
+- `absence list` and `statistics` for all users fail on an outage instead of answering "Found 0
+  absence(s)", and name the users whose absences the token may not read. `absence attendance` lists those
+  as not checked; it counted them present, and reports an outage as such instead of "you may need a
+  permission". A Kimai without the absence endpoints (core Kimai has none; they come with the
+  WorkContract plugin) gets an error naming the plugin instead of zero absences. After the first failure
+  that is not a 403/404, the per-user requests not started yet are no longer sent. A begin date after the
+  end date is refused with a message; the plugin answered it with a bare 404.
+- Streamable server: a replaced session answers its user's running requests before it stops (it
+  cancelled them, or dropped the answer of a call that had just finished); sessions are built under a
+  lock per user, so one user's slow Kimai no longer holds up another's first request; after a failed
+  session start the user's requests are answered at once for 10 seconds instead of each trying again
+  (with retries, under that lock); two concurrent requests for a forgotten user no longer end in an
+  HTTP 500; the legacy route builds a configured user's missing session on demand and keeps a
+  provisioned session it is using (the idle sweep released it every hour).
+- With `--provision-store`: a deployment whose users all come from the store starts during a Kimai outage
+  instead of restarting until Kimai is back, and concurrent writes to the store no longer lose entries or
+  leave a file that does not decode.
+- `analyze_project_team` finds a project whose name holds a line break by the name as tools show it
+  (`Support | 2023`) or as stored.
+- Without Kimai's pagination headers (a proxy may drop them) a full page says "There may be more
+  records" instead of promising a next page; with only `X-Total-Count`, the count decides.
+- The "only your own records" probe asks for one plain row, not an Expanded one; the page request no
+  longer modifies the caller's filter.
+- A direct client caller's `size=0` is left to Kimai's default and a page below 1 is page 1.
+- `filters.meta` states that a value with a colon needs Kimai 2.35+ (the README too).
+
+### Internal
+
+- `kimai_mcp/text.py` (`one_line`, `quoted`, `value_text`, `label_text`), `KimaiModel.multiline_fields`
+  (applied by one model validator per class to the fields that can hold text; a 500-row Expanded page
+  parses in about 40 ms instead of 20), `client.unauthorized`, `UserMCPSession.token_rejected`,
+  `batch_utils.read_batch`.
+- `tests/test_read_coverage.py::test_no_text_field_starts_a_line_of_its_own` puts a line break into
+  every string of every read surface's payload in turn, so a render site that drops `quoted` fails CI.
+- Invoice and timesheet `meta_fields` are `MetaField` models like those of customers, projects and
+  activities.
+- `scripts/audit_api_models.py`: `EXPECTED_SHAPES` is keyed by client method and route, so excusing
+  `TimesheetExpanded` for `get_timesheet_page` no longer excuses it for `get_timesheets`.
+
 ## [2.20.0] - 2026-10-23
 
 ### Changed

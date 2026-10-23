@@ -104,9 +104,11 @@ EXPECTED_UNSENT = {
     ),
 }
 
-# Models a route returns besides its declared schema: (METHOD, route) -> {model: reason}.
+# Models a client method parses besides the route's declared schema:
+# (client method, METHOD, route) -> {model: reason}. Keyed by method too, so the
+# excuse covers only the reader that asks for that shape.
 EXPECTED_SHAPES = {
-    ("GET", "/timesheets"): {
+    ("get_timesheet_page", "GET", "/timesheets"): {
         "TimesheetExpanded": (
             "full=true serializes the Expanded groups (TimesheetController::cgetAction), which the route "
             "declares only as TimesheetCollection; get_timesheet_page parses each shape for its 'full'"
@@ -563,8 +565,8 @@ def check_endpoints(ref: str) -> list:
                       "is not in SCHEMA_TO_MODEL, so the parsed model is unchecked")
                 gaps.append({"client": call.name, "route": f"{route.method} {route.path}",
                              "problem": f"unmapped schema {route.schemas}"})
-            also = EXPECTED_SHAPES.get((route.method, route.path), {})
-            shapes_used.update((route.method, route.path, b) for b in built if b in also)
+            also = EXPECTED_SHAPES.get((call.name, route.method, route.path), {})
+            shapes_used.update((call.name, route.method, route.path, b) for b in built if b in also)
             wrong = {
                 b for b in built
                 if expected and b not in also
@@ -605,11 +607,11 @@ def check_endpoints(ref: str) -> list:
         if key not in used or key not in deprecated:
             print(f"[GAP ] EXPECTED_DEPRECATED_USE entry {key} is stale")
             gaps.append({"client": None, "route": f"{key[0]} {key[1]}", "problem": "stale EXPECTED_DEPRECATED_USE entry"})
-    for (method, path), models_ in EXPECTED_SHAPES.items():
+    for (name, method, path), models_ in EXPECTED_SHAPES.items():
         for model in models_:
-            if (method, path, model) not in shapes_used:
-                print(f"[GAP ] EXPECTED_SHAPES entry {(method, path, model)} is stale")
-                gaps.append({"client": None, "route": f"{method} {path}", "problem": "stale EXPECTED_SHAPES entry"})
+            if (name, method, path, model) not in shapes_used:
+                print(f"[GAP ] EXPECTED_SHAPES entry {(name, method, path, model)} is stale")
+                gaps.append({"client": name, "route": f"{method} {path}", "problem": "stale EXPECTED_SHAPES entry"})
     accepted = {(r.method, r.path, q) for r in routes for q in r.query}
     for key in EXPECTED_UNSENT:
         if key not in accepted:

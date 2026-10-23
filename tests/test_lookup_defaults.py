@@ -340,7 +340,7 @@ async def test_a_project_name_with_a_backslash_is_matched_without_a_term():
 
 @pytest.mark.asyncio
 async def test_a_401_while_listing_users_is_not_taken_for_a_refusal():
-    """A 401 means the token is gone; the server rebuilds the session on it."""
+    """A 401 means the token is gone: the analysis fails instead of naming no one."""
     client = _client()
     client.get_users.side_effect = KimaiAPIError("Unauthorized", 401)
 

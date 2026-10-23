@@ -430,10 +430,10 @@ Found 57 timesheets for all users, showing 1-2
 
 More records: use 'page' 2 for the next ones.
 
-#101 2026-10-20 09:00-17:30, 8.00 h (break 30 min), Acme / Website Relaunch (#7) / Development (#12), Ana (#5) - Sprint planning
 #102 2026-10-20 13:00-15:00, 2.00 h, Acme / Website Relaunch (#7) / Support (#3), Ben (#8)
   not billable, exported
   tags: bug; meta: issue_tracker_id=CA-376
+#101 2026-10-20 09:00-17:30, 8.00 h (break 30 min), Acme / Website Relaunch (#7) / Development (#12), Ana (#5) - Sprint planning
 ```
 
 `list` and `get` print the non-empty timesheet meta fields of each entry. Kimai only serializes meta fields
@@ -458,7 +458,8 @@ The value must match exactly (case-insensitive, the field name too). Omit `value
 the field is set, or pass `"value": ""` for entries where it is not. The filter is sent to Kimai as the search
 term `issue_tracker_id:CA-376` to narrow the result; because Kimai matches that term as a substring (`CA-376`
 also finds `CA-3760`), the MCP server fetches the whole result and keeps only exact matches, then shows the
-requested `page`. A value Kimai's term syntax cannot express (spaces, a leading `!`, a backslash) is narrowed
+requested `page`. A value with a colon needs Kimai 2.35+ (older versions split the search word at every
+colon and find nothing). A value Kimai's term syntax cannot express (spaces, a leading `!`, a backslash) is narrowed
 to "field is set" on the server and matched on the MCP side. Kimai sends back only the meta rows that are
 stored and visible, so an entry saved before the field existed, or while it was hidden, arrives without it:
 it counts as a match for `"value": ""`, is listed as Kimai's (substring) match when Kimai searched this value,

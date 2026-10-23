@@ -1,8 +1,8 @@
 """Shared helper for discovering users accessible to the current API token."""
 
 
-from ..client import KimaiClient
-from .batch_utils import execute_batch
+from ..client import KimaiAPIError, KimaiClient
+from .batch_utils import read_batch
 from .lookups import best_effort
 
 
@@ -12,11 +12,13 @@ async def resolve_accessible_users(client: KimaiClient) -> list:
     Strategy:
     1. Try to get users from teams (works for team leads and admins):
        get_teams(), then fetch each team in parallel (concurrency-limited via
-       execute_batch) and collect the members. Failures of individual teams are
-       skipped.
-    2. If no users were found via teams, fall back to get_users()
-       (requires higher permissions). Errors from this fallback (e.g. 403)
-       propagate to the caller.
+       read_batch) and collect the members. A team this token may not open
+       (403, 404) is skipped; any other failure is raised, because a member
+       list missing one team would silently shrink every "all users"
+       operation, lock_month included.
+    2. If the teams name nobody (403 on /teams, no teams, no members), fall
+       back to get_users() (requires higher permissions). Errors from this
+       fallback (e.g. 403) propagate to the caller.
 
     Returns:
         Deduplicated list of user objects (not just IDs).
@@ -27,22 +29,23 @@ async def resolve_accessible_users(client: KimaiClient) -> list:
     # Try to get users from teams (works for team leads and admins)
     try:
         teams = await client.get_teams()
-    # Teams are only the first discovery path; on any failure (403 for plain
-    # users, API error) we fall through to get_users below.
-    except Exception:  # noqa: BLE001
+    # Teams are only the first discovery path: a token that may not list teams
+    # (403) falls through to get_users below. Anything else, a 401, a timeout or
+    # a 5xx the client already retried, is the real error: asking /users as
+    # well would double the wait and could hide it behind a 403.
+    except KimaiAPIError as e:
+        if e.status_code != 403:
+            raise
         teams = []
 
     if teams:
         # Fetch team details in parallel; teams we cannot access are dropped.
-        team_details, _failed = await execute_batch(
-            [team.id for team in teams], client.get_team
-        )
-        for team_detail in team_details:
-            if team_detail.members:
-                for member in team_detail.members:
-                    if member.user.id not in seen_user_ids:
-                        seen_user_ids.add(member.user.id)
-                        accessible_users.append(member.user)
+        team_details, _skipped = await read_batch([team.id for team in teams], client.get_team)
+        for team in team_details:
+            for member in team.members or []:
+                if member.user.id not in seen_user_ids:
+                    seen_user_ids.add(member.user.id)
+                    accessible_users.append(member.user)
 
     # If no users from teams, try get_users (requires higher permissions)
     if not accessible_users:

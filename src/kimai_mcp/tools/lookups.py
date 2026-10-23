@@ -21,7 +21,9 @@ async def best_effort(fetch: Awaitable[T]) -> T | None:
     For lookups that only decorate a result: ``GET /users`` needs view_user
     (super admins by default) and a proxy may answer with HTML, so a failure
     drops the decoration instead of the result. A 401 means the token is gone
-    and propagates, as everywhere: the server rebuilds the session on it.
+    and propagates, as everywhere: the answer is then an error, not a result
+    missing its names. (The server notices the 401 through the client's
+    ``unauthorized`` flag either way.)
     """
     try:
         return await fetch

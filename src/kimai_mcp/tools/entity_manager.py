@@ -31,6 +31,7 @@ from ..models import (
     UserFilter,
     UserOrderBy,
 )
+from ..text import quoted
 from .batch_utils import execute_batch, format_batch_result
 from .dates import parse_local_datetime
 from .errors import ToolError
@@ -38,10 +39,9 @@ from .user_discovery import resolve_accessible_users
 
 logger = logging.getLogger(__name__)
 
-# Budget block shared by the customer, project and activity data schemas. Those
-# schemas are additionalProperties:false, so a field that is missing here cannot
-# be written at all - it is rejected by validate_arguments before the handler
-# runs, not merely left undocumented.
+# Schema overrides for the budget fields of the customer, project and activity
+# data schemas, which are otherwise derived from their forms: the derived type
+# of timeBudget would be a plain string, and the unit rules need saying.
 #
 # `timeBudget` is one field with two meanings (see models._normalize_duration):
 # Kimai serializes it as seconds but parses a bare number on write as hours.
@@ -227,8 +227,12 @@ def _team_tag_invoice_branches() -> list[dict]:
 
 
 def _shown(value) -> str:
-    """A meta field or preference value as printed: '(empty)' for null and ''."""
-    return "(empty)" if value is None or value == "" else str(value)
+    """A meta field or preference value as printed: '(empty)' for null and '',
+    JSON-quoted where it spans lines or could be misread (``text.quoted``),
+    and where it is the text '(empty)' itself."""
+    if value is None or value == "":
+        return "(empty)"
+    return '"(empty)"' if value == "(empty)" else quoted(value)
 
 
 # Preference aliases for more intuitive names
@@ -579,15 +583,13 @@ class BaseEntityHandler:
 
     @staticmethod
     def _serialize_meta_fields(entity) -> str:
-        """Render custom fields; items are MetaField models or plain dicts."""
+        """Render custom fields (MetaField models)."""
         meta_fields = getattr(entity, 'meta_fields', None)
         if not meta_fields:
             return ""
         result = "Meta Fields:\n"
         for mf in meta_fields:
-            name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
-            value = mf.value if hasattr(mf, 'value') else mf.get('value')
-            result += f"  - {name}: {_shown(value)}\n"
+            result += f"  - {mf.name}: {_shown(mf.value)}\n"
         return result
 
     async def list(self, filters: dict) -> list[TextContent]:
@@ -649,7 +651,7 @@ class ProjectEntityHandler(BaseEntityHandler):
         result += self._serialize_teams(project)
 
         if getattr(project, 'comment', None):
-            result += f"Comment: {project.comment}\n"
+            result += f"Comment: {quoted(project.comment)}\n"
         result += self._serialize_meta_fields(project)
         result += "\n"
         return result
@@ -744,7 +746,7 @@ class ActivityEntityHandler(BaseEntityHandler):
         result += self._serialize_budget(activity)
         result += self._serialize_teams(activity)
         if getattr(activity, 'comment', None):
-            result += f"Comment: {activity.comment}\n"
+            result += f"Comment: {quoted(activity.comment)}\n"
         result += self._serialize_meta_fields(activity)
         result += "\n"
         return result
@@ -854,9 +856,9 @@ class CustomerEntityHandler(BaseEntityHandler):
             result += "Address: " + ", ".join(address_parts) + "\n"
             # Kimai stores the old single-line field separately, so both can be set.
             if legacy_address:
-                result += f"Legacy Address: {legacy_address}\n"
+                result += f"Legacy Address: {quoted(legacy_address)}\n"
         elif legacy_address:
-            result += f"Address: {legacy_address}\n"
+            result += f"Address: {quoted(legacy_address)}\n"
 
         # Invoicing / billing
         if getattr(customer, 'vat_id', None):
@@ -869,7 +871,7 @@ class CustomerEntityHandler(BaseEntityHandler):
         result += self._serialize_teams(customer)
 
         if getattr(customer, 'comment', None):
-            result += f"Comment: {customer.comment}\n"
+            result += f"Comment: {quoted(customer.comment)}\n"
         result += self._serialize_meta_fields(customer)
         result += "\n"
 
@@ -975,8 +977,7 @@ def format_user(user) -> str:
     if preferences:
         result += "Preferences:\n"
         for pref in preferences:
-            value = pref.get('value')
-            result += f"  - {pref.get('name')}: {_shown(value)}\n"
+            result += f"  - {quoted(pref.get('name'))}: {_shown(pref.get('value'))}\n"
     return result
 
 
@@ -1190,7 +1191,7 @@ class UserEntityHandler(BaseEntityHandler):
         if user.preferences:
             result += "\nAll current preferences:\n"
             for pref in user.preferences:
-                result += f"  - {pref.get('name')}: {_shown(pref.get('value'))}\n"
+                result += f"  - {quoted(pref.get('name'))}: {_shown(pref.get('value'))}\n"
 
         return [TextContent(type="text", text=result)]
 
@@ -1335,7 +1336,7 @@ class InvoiceEntityHandler(BaseEntityHandler):
         if invoice.payment_date:
             result += f"Payment Date: {invoice.payment_date}\n"
         if invoice.comment:
-            result += f"Comment: {invoice.comment}\n"
+            result += f"Comment: {quoted(invoice.comment)}\n"
         if invoice.invoice_filename:
             result += f"File: {invoice.invoice_filename}\n"
         result += self._serialize_meta_fields(invoice)

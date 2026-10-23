@@ -1,10 +1,13 @@
 """Data models for Kimai API entities."""
 
+import functools
 import re
 from datetime import date, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal, get_args
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+
+from .text import one_line
 
 
 class KimaiModel(BaseModel):
@@ -20,6 +23,80 @@ class KimaiModel(BaseModel):
     """
 
     model_config = ConfigDict(populate_by_name=True)
+
+    # Read models: the fields whose text may span lines (a description, a
+    # comment, meta and preference values). Every other text field is joined to one line when
+    # it is parsed, so a line break a Kimai user put into an alias, an account
+    # number or a project name cannot pose as a record of its own in a listing
+    # (see text.py). Request models (*Form, *Filter) keep what the caller sent.
+    multiline_fields: ClassVar[frozenset[str]] = frozenset()
+    # The input keys (name and alias) of the other fields that can hold text,
+    # computed once per class: a field validator for "*" ran Python code for
+    # every field of every row, which made a 500-row page parse ten times
+    # slower, and looking at every key (dates, IDs, rates) still doubled it.
+    _one_line_keys: ClassVar[frozenset[str]] = frozenset()
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
+        super().__pydantic_init_subclass__(**kwargs)
+        if cls.__name__.endswith(("Form", "Filter")):
+            cls._one_line_keys = frozenset()
+            return
+        cls._one_line_keys = frozenset(
+            key
+            for name, field in cls.model_fields.items()
+            # A nested model applies its own rule.
+            if name not in cls.multiline_fields
+            and _holds_text(field.annotation)
+            and not _holds_model(field.annotation)
+            for key in (name, field.alias)
+            if key
+        )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _text_on_one_line(cls, data: Any) -> Any:
+        keys = cls._one_line_keys
+        if not keys or not isinstance(data, dict):
+            return data
+        fixed = {}
+        for key in keys:
+            value = data.get(key)
+            if isinstance(value, (str, list, dict)):
+                single = _one_line_deep(value)
+                if single is not value:
+                    fixed[key] = single
+        return {**data, **fixed} if fixed else data
+
+
+@functools.cache
+def _holds_text(annotation: Any) -> bool:
+    """Whether a field annotation can hold a string (str or Any, also nested)."""
+    if annotation is str or annotation is Any:
+        return True
+    return any(_holds_text(arg) for arg in get_args(annotation))
+
+
+@functools.cache
+def _holds_model(annotation: Any) -> bool:
+    """Whether a field annotation is, or contains, a model."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return True
+    return any(_holds_model(arg) for arg in get_args(annotation))
+
+
+def _one_line_deep(value: Any) -> Any:
+    """``value`` with every string in it on one line; the same object if none changed."""
+    if isinstance(value, str):
+        # Every line break is unprintable; the check runs in C.
+        return value if value.isprintable() else one_line(value)
+    if isinstance(value, list):
+        items = [_one_line_deep(item) for item in value]
+        return value if all(new is old for new, old in zip(items, value)) else items
+    if isinstance(value, dict):
+        items = {key: _one_line_deep(item) for key, item in value.items()}
+        return value if all(items[key] is item for key, item in value.items()) else items
+    return value
 
 
 # Kimai's duration grammar, transcribed from the alternatives in
@@ -179,10 +256,22 @@ class User(KimaiModel):
     timezone: str | None = None
 
 
+def _meta_value_text(value: Any) -> Any:
+    """A meta value as text. Kimai up to 2.5 answered a meta update with the
+    value it had cast (``(int) $value`` for a checkbox field), so a number or
+    a boolean must not fail the response after a write that succeeded."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return value
+
+
 class MetaField(KimaiModel):
     """Meta field model."""
+    multiline_fields = frozenset({"value"})
     name: str
-    value: str | None = None
+    value: Annotated[str | None, BeforeValidator(_meta_value_text)] = None
 
 
 class TeamRef(KimaiModel):
@@ -213,6 +302,8 @@ class Customer(KimaiModel):
       ``contact``, ``address``, ``email``, ``invoiceEmail``, ``buyerReference``
       and the budget fields.
     """
+
+    multiline_fields = frozenset({"comment", "address"})
 
     id: int
     name: str
@@ -267,6 +358,8 @@ class Project(KimaiModel):
     ``time`` permission for that project (``BudgetExclusionStrategy``, 2.66).
     """
 
+    multiline_fields = frozenset({"comment"})
+
     id: int
     name: str
     customer: int | None = None
@@ -297,6 +390,8 @@ class Project(KimaiModel):
 
 class Activity(KimaiModel):
     """Activity model."""
+
+    multiline_fields = frozenset({"comment"})
     id: int
     name: str
     project: int | None = None
@@ -331,6 +426,8 @@ class TimesheetEntity(KimaiModel):
     visible" stays distinguishable from a genuine zero rate.
     """
 
+    multiline_fields = frozenset({"description"})
+
     id: int | None = None
     activity: int
     project: int
@@ -346,7 +443,7 @@ class TimesheetEntity(KimaiModel):
     hourly_rate: float | None = Field(None, alias="hourlyRate")
     exported: bool = False
     billable: bool = True
-    meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
+    meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
     break_duration: int | None = Field(None, alias="break")
 
 
@@ -509,6 +606,8 @@ class AbsenceForm(KimaiModel):
 
 class Absence(KimaiModel):
     """Absence model matching API Absence2 schema."""
+
+    multiline_fields = frozenset({"comment"})
     id: int | None = None
     user: User
     date: datetime
@@ -601,6 +700,8 @@ PaymentDate = Annotated[date | None, BeforeValidator(_date_part)]
 
 class Invoice(KimaiModel):
     """Invoice model."""
+
+    multiline_fields = frozenset({"comment"})
     id: int | None = None
     invoice_number: str = Field(alias="invoiceNumber")
     comment: str | None = None
@@ -614,7 +715,7 @@ class Invoice(KimaiModel):
     vat: float = 0.0
     status: str = "new"
     payment_date: PaymentDate = Field(None, alias="paymentDate")
-    meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
+    meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
     overdue: bool | None = None  # Whether the invoice is overdue
     invoice_filename: str | None = Field(None, alias="invoiceFilename")
 
@@ -643,6 +744,8 @@ class InvoiceFilter(KimaiModel):
 
 class Comment(KimaiModel):
     """Comment on a project or customer."""
+
+    multiline_fields = frozenset({"message"})
     id: int | None = None
     message: str
     created_by: User | None = Field(None, alias="createdBy")
@@ -691,6 +794,10 @@ class UserEntity(User):
     ``/users/me`` used to be parsed as plain ``User``, which silently dropped
     roles, teams, the supervisor and the preferences (work contract included).
     """
+    # Preference values are user text (plugins keep user custom fields there):
+    # kept as they are and shown quoted, like meta values, so they stay
+    # lossless and read the same in every answer.
+    multiline_fields = frozenset({"preferences"})
     roles: list[str] = []
     supervisor: User | None = None
     teams: list[Team] = []
