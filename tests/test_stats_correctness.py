@@ -10,6 +10,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from kimai_mcp.client import KimaiAPIError, KimaiClient
@@ -37,16 +38,18 @@ def _entity(begin: datetime, hours: int = 8, user: int = 1, **extra) -> Timeshee
     return TimesheetEntity(**data)
 
 
-def _client(pages: dict[int, list | Exception]) -> KimaiClient:
+def _client(pages: dict[int, list | Exception], total_pages: int | None = None) -> KimaiClient:
+    """Answers per page; ``total_pages`` sends X-Total-Pages (None: no header)."""
     client = KimaiClient(base_url="https://kimai.example.com", api_token="token")
+    headers = httpx.Headers({"X-Total-Pages": str(total_pages)} if total_pages is not None else {})
 
     async def request(method, endpoint, params=None, **kwargs):
         result = pages.get(params.get("page", 1), [])
         if isinstance(result, Exception):
             raise result
-        return result
+        return result, headers
 
-    client._request = AsyncMock(side_effect=request)
+    client._request_with_headers = AsyncMock(side_effect=request)
     return client
 
 
@@ -78,8 +81,8 @@ async def test_size_above_kimais_cap_is_not_mistaken_for_the_last_page():
     rows, fetched_all = await client.get_timesheets(TimesheetFilter(user="1", size=1000))
 
     # A full page of 500 is not the end: the next page is asked for.
-    assert [c.kwargs["params"]["page"] for c in client._request.await_args_list] == [1, 2]
-    assert client._request.await_args.kwargs["params"]["size"] == 500
+    assert [c.kwargs["params"]["page"] for c in client._request_with_headers.await_args_list] == [1, 2]
+    assert client._request_with_headers.await_args.kwargs["params"]["size"] == 500
     assert (len(rows), fetched_all) == (500, True)
 
 
@@ -98,11 +101,43 @@ async def test_records_of_every_page_are_collected():
 
 @pytest.mark.asyncio
 async def test_max_results_stops_the_loop_and_says_so():
-    client = _client({page: [_row(i) for i in range(50)] for page in (1, 2, 3)})
+    client = _client({page: [_row(page * 100 + i) for i in range(50)] for page in (1, 2, 3)})
 
     rows, fetched_all = await client.get_timesheets(TimesheetFilter(user="1"), max_results=100)
 
     assert (len(rows), fetched_all) == (100, False)
+
+
+@pytest.mark.asyncio
+async def test_a_fetch_ending_exactly_at_the_limit_is_complete():
+    """10000 records in 20 full pages used to read as 'Not all records were used'."""
+    client = _client({1: [_row(i) for i in range(50)], 2: [_row(50 + i) for i in range(50)]}, total_pages=2)
+
+    rows, fetched_all = await client.get_timesheets(TimesheetFilter(user="1"), max_results=100)
+
+    assert (len(rows), fetched_all) == (100, True)
+    # Kimai's page count ends the loop: no 404 probe after the last full page.
+    assert client._request_with_headers.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_record_repeated_on_a_later_page_is_counted_once():
+    """Kimai's 'name:~' search counts and pages a record once per meta row."""
+    client = _client({1: [_row(1), _row(2)], 2: [_row(2), _row(3)]}, total_pages=2)
+
+    rows, _ = await client.get_timesheets(TimesheetFilter(user="1", size=2))
+
+    assert [r.id for r in rows] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_full_is_never_sent_by_the_every_page_reader():
+    """Its rows are parsed as TimesheetEntity; Expanded rows would not parse."""
+    client = _client({1: [_row(1)]})
+
+    await client.get_timesheets(TimesheetFilter(user="1", full="true"))
+
+    assert "full" not in client._request_with_headers.await_args.kwargs["params"]
 
 
 def _stats_client(rows: list) -> AsyncMock:

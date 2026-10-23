@@ -475,6 +475,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     if fetch_everything:
         timesheet_filter.size = MAX_PAGE_SIZE
         fetched, fetched_all = await client.get_timesheets(timesheet_filter, max_results=MAX_STATS_RESULTS)
+        capped = not fetched_all  # the record limit stopped the fetch
     else:
         timesheet_filter.page = requested_page
         timesheet_filter.size = page_size
@@ -490,7 +491,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
                 text=f"Page {requested_page} is past the last page of timesheets for this filter; use a lower 'page'.",
             )]
         fetched = page.rows
-        fetched_all = True
+        capped = False
 
     # The server-side term is a substring pre-filter (see _meta_search_term);
     # narrow it down to exact matches here, before the statistics see the
@@ -501,7 +502,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
 
     first = (requested_page - 1) * page_size
     show_user = user_scope != "self"
-    names: RecordNames | None = None
+    names = RecordNames()
     if fetch_everything:
         shown = matched[first:first + page_size]
         found = len(matched)
@@ -512,7 +513,11 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         named_rows = bool(shown) and lists_rows
         asks_customer = bool(filters.get("customers")) or filters.get("customer") is not None
         if named_rows or (calculate_stats and matched) or (asks_customer and fetched):
-            names = await record_names(client, activities=named_rows, users=named_rows and show_user)
+            names = await record_names(
+                client,
+                activities_of={ts.project for ts in shown} if named_rows else None,
+                users=named_rows and show_user,
+            )
     else:
         shown = matched
         # Without Kimai's headers (a proxy may drop them) only this page is known.
@@ -525,7 +530,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
             return True
         if fetch_everything or found is None:
             # Everything read, unless the record limit cut it off.
-            return fetch_everything and fetched_all
+            return fetch_everything and not capped
         # One record of the same filter for that user alone: the same total
         # means nobody else has any.
         probe = timesheet_filter.model_copy(update={"user": str(user_id), "users": None, "page": 1, "size": 1})
@@ -540,7 +545,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
     if found is None:
         result = f"Found {len(shown)} timesheets {who} on page {requested_page}"
     else:
-        result = f"Found {found} timesheets {who}"
+        result = f"Found {'at least ' if capped else ''}{found} timesheets {who}"
         if lists_rows and (requested_page > 1 or found > len(shown)):
             result += f", showing {first + 1}-{first + len(shown)}" if shown else f", none on page {requested_page}"
     result += "\n\n"
@@ -550,9 +555,17 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         result += f"Meta filter: {meta_filter['name']}={'<any>' if wanted is None else wanted}\n\n"
         result += meta_note
 
+    if any(word.split(":", 1)[1] in ("~", '""') for word in (filters.get("term") or "").split() if ":" in word):
+        # SearchHelper joins the meta rows without a condition for these two,
+        # and the count has no DISTINCT (checked at Kimai 2.70.2).
+        result += (
+            "Note: for a search like 'name:~' or 'name:\"\"' Kimai counts a record once per meta field it "
+            "has, so the total and the page count can be too high and later pages repeat records.\n\n"
+        )
+
     result += await _filter_warnings(client, filters, user_scope, user_filter, fetched, names, all_records_of)
 
-    if not fetched_all:
+    if capped:
         result += (
             f"Not all records were used: the first {len(fetched)} were fetched (the limit is "
             f"{MAX_STATS_RESULTS}); narrow the filter, e.g. a shorter period.\n\n"
@@ -599,9 +612,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
 
         # Only the projects in this report, not every project of the instance.
         reported = stats.get("projects") or {}
-        project_map = {
-            pid: names.projects[pid].name for pid in reported if names is not None and pid in names.projects
-        }
+        project_map = {pid: names.projects[pid].name for pid in reported if pid in names.projects}
         stats["project_names"] = project_map
 
         if stats_format == "json":
@@ -623,7 +634,7 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
 
 async def _filter_warnings(
     client: KimaiClient, filters: dict, user_scope: str, user_filter: str | None, fetched: list,
-    names: RecordNames | None, all_records_of: Callable[[int], Awaitable[bool]],
+    names: RecordNames, all_records_of: Callable[[int], Awaitable[bool]],
 ) -> str:
     """Say when the records show that Kimai ignored a filter.
 
@@ -660,15 +671,20 @@ async def _filter_warnings(
         note = await own_records_note(client, only)
         if note and await all_records_of(only):
             text += note + "\n\n"
-    elif not fetched and (user_scope == "all" or requested_users):
+    elif not fetched and user_scope == "all":
         # An ignored user filter searches the caller's own records; when the
-        # caller has none, the empty result reads as "nobody" or as the
-        # requested users' answer.
+        # caller has none, the empty result reads as "nobody".
+        text += (
+            "Note: no records. Without view_other_timesheet Kimai ignores user=all and searches only your "
+            "own records, so this may only mean that you have none for this filter.\n\n"
+        )
+    elif not fetched and requested_users:
         me = await best_effort(client.get_current_user())
-        if me is not None and (user_scope == "all" or requested_users != {me.id}):
+        if me is not None and requested_users != {me.id}:
             text += (
-                "Note: no records. Without view_other_timesheet Kimai ignores the user filter and searches "
-                "only your own records, so this may only mean that you have none for this filter.\n\n"
+                "Note: no records. Kimai ignores the user filter, and searches only your own records, when the "
+                "token lacks view_other_timesheet or the requested user IDs do not exist; so this may only "
+                "mean that you have none for this filter.\n\n"
             )
 
     relations = (
@@ -680,8 +696,15 @@ async def _filter_warnings(
         asked = set(filters.get(several) or []) | ({filters[single]} if filters.get(single) is not None else set())
         if not asked:
             continue
-        returned = {row_id(ts) for ts in fetched} - {None}
-        stray = sorted(returned - asked)
+        ids = [row_id(ts) for ts in fetched]
+        stray = sorted({i for i in ids if i is not None} - asked)
+        if None in ids:
+            # Rows with IDs only, whose project the project listing did not
+            # have (or the listing failed): their customer is unknown.
+            text += (
+                f"Note: {ids.count(None)} record(s) could not be checked against the {single} filter: "
+                "their project is not in the project list this token can read.\n\n"
+            )
         if stray:
             text += (
                 f"Warning: Kimai returned records of {single} ID(s) {', '.join(map(str, stray))}, which were not "
@@ -1018,18 +1041,18 @@ def _ref(value):
     return getattr(value, "id", value)
 
 
-def _customer_id(ts, names: RecordNames | None) -> int | None:
+def _customer_id(ts, names: RecordNames) -> int | None:
     """The customer of a row: from the Expanded project, else from the project listing."""
     if not isinstance(ts.project, int):
         return ts.project.customer.id if ts.project.customer else None
-    project = names.projects.get(ts.project) if names else None
+    project = names.projects.get(ts.project)
     return project.customer if project else None
 
 
-def _work_label(ts, names: RecordNames | None) -> str:
+def _work_label(ts, names: RecordNames) -> str:
     """``Customer / Project (#id) / Activity (#id)``, or the IDs where no name is known."""
     if isinstance(ts.project, int):
-        known = names.projects.get(ts.project) if names else None
+        known = names.projects.get(ts.project)
         project = f"project #{ts.project}"
         if known:
             project = f"{known.name} (#{known.id})"
@@ -1040,21 +1063,24 @@ def _work_label(ts, names: RecordNames | None) -> str:
         if ts.project.customer:
             project = f"{ts.project.customer.name} / {project}"
     if isinstance(ts.activity, int):
-        name = names.activities.get(ts.activity) if names else None
+        name = names.activities.get(ts.activity)
         activity = f"{name} (#{ts.activity})" if name else f"activity #{ts.activity}"
     else:
         activity = f"{ts.activity.name} (#{ts.activity.id})"
     return f"{project} / {activity}"
 
 
-def _user_label(user, names: RecordNames | None) -> str:
+def _user_label(user, names: RecordNames) -> str:
     if isinstance(user, int):
-        name = names.users.get(user) if names else None
+        name = names.users.get(user)
         return f"{name} (#{user})" if name else f"user #{user}"
     return f"{user.alias or user.username} (#{user.id})"
 
 
-def _describe_timesheet(ts, names: RecordNames | None = None, show_user: bool = True) -> str:
+_NO_NAMES = RecordNames()  # Expanded rows name themselves
+
+
+def _describe_timesheet(ts, names: RecordNames = _NO_NAMES, show_user: bool = True) -> str:
     """One record of a listing: a line with when, how long, what, who and why,
     then a line each only for what is present or deviates.
 

@@ -85,22 +85,21 @@ async def _find_project(client: KimaiClient, name: str):
 
 async def _project_by_id(client: KimaiClient, project_id: int):
     """GET /projects/{id} needs the 'view' permission on the project, which a
-    default ROLE_USER lacks; the listing needs API access only. Once a 403
-    came for a project the listing has, the client remembers it and asks the
-    listing directly."""
-    if not getattr(client, "project_view_denied", False):
+    default ROLE_USER lacks (a team lead has it for its teams' projects); the
+    listing needs API access only. The client remembers each refused project,
+    so a second analysis of it asks the listing directly."""
+    denied = getattr(client, "denied_project_views", None)
+    if denied is None or project_id not in denied:
         try:
             return await client.get_project(project_id)
         except KimaiAPIError as e:
             if e.status_code != 403:
                 raise
+            if denied is not None:
+                denied.add(project_id)
     project = next((p for p in await client.get_projects(ProjectFilter.everything()) if p.id == project_id), None)
     if project is None:
         raise ToolError(f"❌ Project ID {project_id} is not visible to this token.")
-    # Listed but not viewable: view_project is missing for the role (a default
-    # ROLE_USER), not for this one project, so later IDs skip the 403. A team
-    # lead refused a project outside its teams does not list it either.
-    client.project_view_denied = True
     return project
 
 
@@ -206,7 +205,13 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             )
             timesheets, fetched_all = timesheets
             if users is None and not team_users:
-                scope_notes.append("> User names are not shown: the user list could not be loaded (it needs view_user).")
+                # The caller is named at least, as in timesheet list.
+                me = await best_effort(client.get_current_user())
+                team_users = [me] if me is not None else []
+                scope_notes.append(
+                    "> Only your own name is shown; other users appear by ID: the user list could not be "
+                    "loaded (it needs view_user)."
+                )
             users, activities = users or team_users, activities or []
         except KimaiAPIError as e:
             if e.status_code == 401:
@@ -254,6 +259,14 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             timesheets = [ts for ts in timesheets if ts.user in team_user_ids]
 
         if not timesheets:
+            if user_scope in ('all', 'specific'):
+                # Kimai searched the caller's records only if it ignored the
+                # user filter; then "none" may just mean the caller has none.
+                scope_notes.append(
+                    "> Note: Kimai ignores the user filter, and searches only your own records, when the token "
+                    "lacks view_other_timesheet or the requested user does not exist; so this may only mean "
+                    "that you have none in this project and period."
+                )
             return [TextContent(
                 type="text",
                 text="\n".join([

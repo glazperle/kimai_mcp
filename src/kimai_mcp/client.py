@@ -3,7 +3,8 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -106,6 +107,23 @@ class KimaiAPIError(Exception):
         super().__init__(self.message)
 
 
+def _query_for_log(kwargs: dict) -> str:
+    """The query string of a request, for a log line; never the body.
+
+    A write's body can hold a new user's ``plainPassword`` and
+    ``plainApiToken``, and the log goes to a file and, on the streamable
+    server, to every user's shared log.
+    """
+    params = kwargs.get("params")
+    return f" with params {params}" if params else ""
+
+
+def _int_header(headers: httpx.Headers, name: str) -> int | None:
+    """A non-negative integer header (ASCII digits only), else None."""
+    value = headers.get(name)
+    return int(value) if value is not None and value.isascii() and value.isdigit() else None
+
+
 def _prune_empty_dicts(obj: Any) -> Any:
     """Drop keys whose value is an empty dict, recursively.
 
@@ -170,10 +188,13 @@ class KimaiClient:
             timeout=timeout,
             verify=ssl_verify
         )
-        # Set once GET /projects/{id} answered 403: it needs view_project,
-        # which a default ROLE_USER lacks for every project, so callers go to
-        # the listing directly instead of drawing the same 403 each time.
-        self.project_view_denied = False
+        # Projects GET /projects/{id} answered 403 for: it needs 'view' on that
+        # project (view_project, or view_teamlead_project for a team's own), so
+        # a second analysis of the same project goes to the listing directly.
+        self.denied_project_views: set[int] = set()
+        # Set once GET /users answered 403: view_user is a super-admin
+        # permission by default, so the name lookups stop asking.
+        self.users_list_denied = False
     
     async def __aenter__(self):
         """Async context manager entry."""
@@ -202,15 +223,26 @@ class KimaiClient:
     # again and fails the same way.
     RETRY_ERRORS = (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError)
 
-    def _retry_delay(self, response: httpx.Response | None, attempt: int) -> float | None:
-        """Seconds to wait before the next attempt, or None not to retry."""
-        header = response.headers.get("Retry-After") if response is not None else None
+    def _retry_delay(self, response: httpx.Response, attempt: int) -> float | None:
+        """Seconds to wait before the next attempt, or None not to retry.
+
+        ``Retry-After`` is seconds or an HTTP date (RFC 9110); an unreadable
+        one falls back to the fixed delay.
+        """
+        header = response.headers.get("Retry-After")
         if header is None:
             return self.RETRY_DELAYS[attempt]
         try:
-            seconds = max(float(header), 0.0)
+            seconds = float(header)
         except ValueError:
-            return self.RETRY_DELAYS[attempt]  # an HTTP date
+            try:
+                when = parsedate_to_datetime(header)
+            except (TypeError, ValueError):
+                return self.RETRY_DELAYS[attempt]
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            seconds = (when - datetime.now(timezone.utc)).total_seconds()
+        seconds = max(seconds, 0.0)
         return seconds if seconds <= self.MAX_RETRY_AFTER else None  # NaN and inf too
 
     async def _send(self, method: str, endpoint: str, **kwargs) -> httpx.Response:
@@ -230,7 +262,7 @@ class KimaiClient:
                 if last:
                     raise
                 logger.warning(f"{method} {endpoint} failed ({e!s}); retrying")
-                await asyncio.sleep(self._retry_delay(None, attempt))
+                await asyncio.sleep(self.RETRY_DELAYS[attempt])
                 continue
             if response.status_code in self.RETRY_STATUSES and not last:
                 delay = self._retry_delay(response, attempt)
@@ -316,7 +348,7 @@ class KimaiClient:
             # routine for the best-effort lookups); the caller reports it.
             log = logger.warning if e.response.status_code < 500 else logger.error
             log(
-                f"API error: {message} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
+                f"API error: {message} for request {method} {endpoint}{_query_for_log(kwargs)}"
                 + (f" | details: {error_details}" if error_details else "")
             )
 
@@ -324,9 +356,7 @@ class KimaiClient:
                 message, e.response.status_code, details=error_details, method=method, endpoint=endpoint
             )
         except httpx.RequestError as e:
-            logger.error(
-                f"API error: {e!s} for request {method} {endpoint}" + (f" with params {kwargs}" if kwargs else "")
-            )
+            logger.error(f"API error: {e!s} for request {method} {endpoint}{_query_for_log(kwargs)}")
             raise KimaiAPIError(f"Request failed: {e!s}")
 
     # Version and status endpoints
@@ -414,8 +444,7 @@ class KimaiClient:
         expanded = str(filters.full).lower() in ("1", "true")
 
         def header(name: str) -> int | None:
-            value = headers.get(name)
-            return int(value) if value is not None and value.isdigit() else None
+            return _int_header(headers, name)
 
         return TimesheetPage(
             rows=[TimesheetExpanded(**item) if expanded else TimesheetEntity(**item) for item in data],
@@ -445,17 +474,23 @@ class KimaiClient:
             ``max_results`` or the page cap stopped the loop).
         """
         params = self._timesheet_params(filters)
+        # These rows are parsed as TimesheetEntity; full=true would send the
+        # Expanded shape (objects for the relations).
+        params.pop("full", None)
         page_size = params.get("size", 50)
 
         all_timesheets = []
+        seen: set = set()
         page = 1
         fetched_all = True
 
         while True:
             paginated_params = {**params, "page": page, "size": page_size}
 
+            total_pages = None
             try:
-                data = await self._request("GET", "/timesheets", params=paginated_params)
+                data, headers = await self._request_with_headers("GET", "/timesheets", params=paginated_params)
+                total_pages = _int_header(headers, "X-Total-Pages")
             except KimaiAPIError as e:
                 # Kimai answers an out-of-range page with 404 on the API (it
                 # only clamps the page for UI queries, src/Utils/Pagination.php).
@@ -468,9 +503,15 @@ class KimaiClient:
             if not data:
                 break
 
-            all_timesheets.extend([TimesheetEntity(**item) for item in data])
+            # A record seen on an earlier page is skipped: Kimai's count and
+            # pages repeat records for some meta searches ('name:~').
+            for item in data:
+                if item.get("id") is None or item["id"] not in seen:
+                    seen.add(item.get("id"))
+                    all_timesheets.append(TimesheetEntity(**item))
 
-            if len(data) < page_size:
+            # The last page: Kimai says so, or it is not full.
+            if (total_pages is not None and page >= total_pages) or len(data) < page_size:
                 break
 
             if max_results is not None and len(all_timesheets) >= max_results:

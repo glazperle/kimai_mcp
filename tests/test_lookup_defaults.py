@@ -227,8 +227,9 @@ async def test_the_analysis_runs_without_permission_to_list_users():
 
     text = (await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD}))[0].text
 
-    assert "User ID 1" in text
-    assert "User names are not shown" in text
+    # The caller is named from /users/me, as in timesheet list; others by ID.
+    assert "User ID 1" not in text
+    assert "Only your own name is shown" in text
 
 
 @pytest.mark.asyncio
@@ -394,7 +395,7 @@ async def test_a_failing_user_list_only_drops_the_names():
     text = (await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD}))[0].text
 
     assert "Project Team Analysis" in text
-    assert "User names are not shown" in text
+    assert "Only your own name is shown" in text
 
 
 @pytest.mark.asyncio

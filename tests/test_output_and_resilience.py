@@ -6,7 +6,7 @@ showed IDs only, and an unknown customer ID or an ignored user filter on an
 empty result went unnoticed.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -193,6 +193,26 @@ async def test_a_read_timeout_is_not_retried(slept):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("offset", "retried"), [(5, True), (3600, False)])
+async def test_a_retry_after_date_is_honoured(slept, offset, retried):
+    """RFC 9110 allows an HTTP date; it was read as 'unparsable' and retried at once."""
+    from email.utils import format_datetime
+
+    when = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=offset), usegmt=True)
+    handler, calls = _answers(503, 200, headers={"Retry-After": when})
+    client = _transport_client(handler)
+
+    if retried:
+        await client._request("GET", "/version")
+        assert len(slept) == 1
+        assert 3 <= slept[0] <= 5
+    else:
+        with pytest.raises(KimaiAPIError):
+            await client._request("GET", "/version")
+        assert (len(calls), slept) == (1, [])
+
+
+@pytest.mark.asyncio
 async def test_a_client_error_is_not_retried(slept):
     handler, calls = _answers(404, 200)
     client = _transport_client(handler)
@@ -344,7 +364,8 @@ async def test_an_empty_result_for_another_user_says_the_filter_may_be_ignored()
         "user_scope": "specific", "user": "7",
     }}))[0].text
 
-    assert "Without view_other_timesheet Kimai ignores the user filter" in text
+    assert "Kimai ignores the user filter, and searches only your own records" in text
+    assert "requested user IDs do not exist" in text
 
 
 @pytest.mark.asyncio
@@ -374,30 +395,128 @@ async def test_project_view_403_is_remembered():
     client.get_timesheets.return_value = ([record], True)
     arguments = {"project_id": 7, "begin": "2024-01-01T00:00:00", "end": "2024-12-31T23:59:59"}
 
+    client.denied_project_views = set()
+
     await dispatch_tool(client, "analyze_project_team", arguments)
     await dispatch_tool(client, "analyze_project_team", arguments)
 
     assert client.get_project.await_count == 1
-    assert client.project_view_denied is True
+    assert client.denied_project_views == {7}
 
 
 @pytest.mark.asyncio
-async def test_a_project_outside_the_teams_does_not_stop_later_views():
-    """A team lead may open its teams' projects; a 403 for another team's
-    project, which it cannot list either, must not route later IDs to the
-    full listing."""
-    from kimai_mcp.tools.errors import ToolError
-
+async def test_a_refused_project_does_not_stop_views_of_others():
+    """A team lead may open its teams' projects but not one without teams; that
+    403 must not route its own projects to the full listing."""
     client = AsyncMock(spec=KimaiClient)
-    client.get_project.side_effect = KimaiAPIError("Forbidden", 403)
-    client.get_projects.return_value = [Project(id=7, name="Relaunch")]
+    client.denied_project_views = {99}
+    client.get_project.return_value = Project(id=7, name="Relaunch")
+    client.get_activities.return_value = []
+    client.get_users.return_value = []
+    client.get_current_user.return_value = UserEntity(id=1, username="me", enabled=True)
+    client.get_timesheets.return_value = ([], True)
 
-    with pytest.raises(ToolError, match="not visible"):
-        await dispatch_tool(client, "analyze_project_team", {
-            "project_id": 99, "begin": "2024-01-01T00:00:00", "end": "2024-12-31T23:59:59",
-        })
+    await dispatch_tool(client, "analyze_project_team", {
+        "project_id": 7, "begin": "2024-01-01T00:00:00", "end": "2024-12-31T23:59:59",
+    })
 
-    assert getattr(client, "project_view_denied", False) is False
+    client.get_project.assert_awaited_once_with(7)
+    client.get_projects.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_users_403_is_remembered():
+    """view_user is role-wide: the second listing does not ask GET /users again."""
+    row = TimesheetEntity(id=1, project=2, activity=1, user=5, begin="2026-09-01T09:00:00+0200",
+                          end="2026-09-01T10:00:00+0200", duration=3600,
+                          metaFields=[{"name": "ticket", "value": "CA-1"}])
+    client = _listing_client([row])
+    client.users_list_denied = False
+    client.get_users.side_effect = KimaiAPIError("Access denied", 403)
+    arguments = {"action": "list", "filters": {"user_scope": "all", "meta": {"name": "ticket", "value": "CA-1"}}}
+
+    await dispatch_tool(client, "timesheet", arguments)
+    await dispatch_tool(client, "timesheet", arguments)
+
+    assert client.get_users.await_count == 1
+    assert client.users_list_denied is True
+
+
+@pytest.mark.asyncio
+async def test_activities_are_looked_up_for_the_shown_projects_only():
+    row = TimesheetEntity(id=1, project=2, activity=1, user=1, begin="2026-09-01T09:00:00+0200",
+                          end="2026-09-01T10:00:00+0200", duration=3600,
+                          metaFields=[{"name": "ticket", "value": "CA-1"}])
+    client = _listing_client([row])
+
+    await dispatch_tool(client, "timesheet", {"action": "list", "filters": {"meta": {"name": "ticket", "value": "CA-1"}}})
+
+    assert client.get_activities.await_args.args[0].projects == [2]
+
+
+@pytest.mark.asyncio
+async def test_records_whose_customer_cannot_be_told_are_counted():
+    """A failed project listing used to drop the customer check without a word."""
+    row = TimesheetEntity(id=1, project=2, activity=1, user=1, begin="2026-09-01T09:00:00+0200",
+                          end="2026-09-01T10:00:00+0200", duration=3600)
+    client = _listing_client([row])
+    client.get_projects.side_effect = KimaiAPIError("Internal Server Error", 500)
+
+    text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {
+        "customer": 99999, "calculate_stats": True,
+    }}))[0].text
+
+    assert "1 record(s) could not be checked against the customer filter" in text
+
+
+@pytest.mark.asyncio
+async def test_a_capped_result_says_at_least():
+    row = TimesheetEntity(id=1, project=2, activity=1, user=1, begin="2026-09-01T09:00:00+0200",
+                          end="2026-09-01T10:00:00+0200", duration=3600)
+    client = _listing_client([row])
+    client.get_timesheets.return_value = ([row], False)
+
+    text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {"calculate_stats": True}}))[0].text
+
+    assert text.startswith("Found at least 1 timesheets")
+    assert "Not all records were used" in text
+
+
+@pytest.mark.asyncio
+async def test_a_meta_search_with_tilde_warns_about_kimais_count():
+    client = _listing_client([])
+
+    text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {"term": "ticket:~"}}))[0].text
+
+    assert "Kimai counts a record once per meta field" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arguments", [
+    {"type": "user", "action": "create", "data": {"username": "ana", "email": "a@example.com",
+                                                   "language": "de", "locale": "de", "timezone": "Europe/Berlin",
+                                                   "plainPassword": "S3cr3t-PW!", "plainApiToken": "tok-123456"}},
+])
+async def test_a_failed_write_never_logs_its_body(caplog, arguments):
+    """The 4xx log line carried the request body, a new user's password included."""
+    def handler(request):
+        return httpx.Response(400, json={"code": 400, "message": "The username is already used."})
+
+    client = _transport_client(handler)
+
+    with caplog.at_level("INFO"), pytest.raises(KimaiAPIError):
+        await dispatch_tool(client, "entity", arguments)
+
+    assert "S3cr3t-PW!" not in caplog.text
+    assert "tok-123456" not in caplog.text
+
+
+def test_the_server_log_masks_secrets():
+    from kimai_mcp.server import redact_secrets
+
+    masked = redact_secrets({"type": "user", "data": {"plainPassword": "pw", "plainApiToken": "t", "email": "e"}})
+
+    assert masked == {"type": "user", "data": {"plainPassword": "***", "plainApiToken": "***", "email": "e"}}
 
 
 @pytest.mark.asyncio
@@ -432,7 +551,8 @@ async def test_an_empty_result_for_all_users_says_the_filter_may_be_ignored():
         "user_scope": "all", "project": 12,
     }}))[0].text
 
-    assert "Without view_other_timesheet Kimai ignores the user filter" in text
+    assert "Without view_other_timesheet Kimai ignores user=all" in text
+    client.get_current_user.assert_not_awaited()  # nothing to compare with for 'all'
 
 
 @pytest.mark.asyncio
@@ -441,7 +561,7 @@ async def test_an_empty_result_for_users_including_the_caller_says_so_too():
 
     text = (await dispatch_tool(client, "timesheet", {"action": "list", "filters": {"users": [1, 5]}}))[0].text
 
-    assert "Without view_other_timesheet Kimai ignores the user filter" in text
+    assert "Kimai ignores the user filter, and searches only your own records" in text
 
 
 @pytest.mark.asyncio
