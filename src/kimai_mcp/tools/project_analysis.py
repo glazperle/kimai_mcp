@@ -8,6 +8,7 @@ from mcp.types import TextContent, Tool
 
 from ..client import MAX_PAGE_SIZE, KimaiAPIError, KimaiClient
 from ..models import ActivityFilter, ProjectFilter, TimesheetFilter, UserFilter
+from ..text import one_line
 from .dates import parse_local_datetime, parse_local_end, whole_day
 from .errors import ToolError
 from .lookups import best_effort
@@ -59,10 +60,17 @@ async def _find_project(client: KimaiClient, name: str):
 
     A name Kimai's search term would not take literally (see
     ``search_term.is_literal``) is matched here without a server term.
+
+    A name is compared as the tools show it: a line break in a stored name is
+    joined to ' | ' when it is parsed (``models.KimaiModel``), so the stored
+    and the shown spelling both find it. Kimai searches the stored name word
+    by word, so the term leaves the ' | ' out.
     """
-    term = name if is_literal(name) else None
+    shown = one_line(name)
+    words = " ".join(word for word in shown.split() if word != "|")
+    term = words if is_literal(words) else None
     projects = await client.get_projects(ProjectFilter.everything(term=term))
-    wanted = name.casefold()
+    wanted = shown.casefold()
     matching = [p for p in projects if wanted in p.name.casefold()]
     if not matching:
         # Load all projects only to present available options
@@ -157,7 +165,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                 raise
             except KimaiAPIError as e:
                 if e.status_code == 401:
-                    raise  # the token is gone; the server rebuilds the session
+                    raise  # the token is gone: an error, not a degraded analysis
                 raise ToolError(f"❌ Error accessing team {arguments['team']}: {e!s}")
         
         # 3. Get timesheets for this project with user filtering. Datetimes,
@@ -215,7 +223,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             users, activities = users or team_users, activities or []
         except KimaiAPIError as e:
             if e.status_code == 401:
-                raise  # the token is gone; the server rebuilds the session
+                raise  # the token is gone: an error, not a degraded analysis
             if e.status_code == 403:
                 raise ToolError(
                     f"❌ Kimai refused data for project '{project.name}': {e.message} (Status: 403).\n\n"

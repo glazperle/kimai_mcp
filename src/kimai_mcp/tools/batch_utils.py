@@ -73,18 +73,27 @@ async def read_batch(
     An item the token may not read (403) or that is gone (404) is skipped and
     returned, so the caller can say so. Any other failure (a 401, a timeout, a
     5xx) is raised: skipping it made "everyone's absences" or "all users" a
-    confident answer that silently left people out.
+    confident answer that silently left people out. The reads not started yet
+    are not sent then; each would fail the same way, with its retries.
+
+    A 404 for every item is raised too: that is the route missing (a Kimai
+    without the plugin that serves it), not every item gone at once.
 
     Returns:
         Tuple of (results, skipped items)
     """
     errors: list[Exception] = []
+    missing: list[KimaiAPIError] = []
 
     async def read(item: Any) -> Any:
+        if errors:
+            raise errors[0]
         try:
             return await operation(item)
         except KimaiAPIError as e:
-            if e.status_code not in (403, 404):
+            if e.status_code == 404:
+                missing.append(e)
+            elif e.status_code != 403:
                 errors.append(e)
             raise
         except Exception as e:
@@ -94,6 +103,8 @@ async def read_batch(
     success, failed = await execute_batch(items, read, max_concurrent)
     if errors:
         raise errors[0]
+    if missing and len(missing) == len(failed) and not success:
+        raise missing[0]
     return success, [item for item, _ in failed]
 
 

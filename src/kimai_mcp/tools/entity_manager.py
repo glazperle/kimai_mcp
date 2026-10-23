@@ -580,15 +580,13 @@ class BaseEntityHandler:
 
     @staticmethod
     def _serialize_meta_fields(entity) -> str:
-        """Render custom fields; items are MetaField models or plain dicts."""
+        """Render custom fields (MetaField models)."""
         meta_fields = getattr(entity, 'meta_fields', None)
         if not meta_fields:
             return ""
         result = "Meta Fields:\n"
         for mf in meta_fields:
-            name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
-            value = mf.value if hasattr(mf, 'value') else mf.get('value')
-            result += f"  - {name}: {_shown(value)}\n"
+            result += f"  - {mf.name}: {_shown(mf.value)}\n"
         return result
 
     async def list(self, filters: dict) -> list[TextContent]:

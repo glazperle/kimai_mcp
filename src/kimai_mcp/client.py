@@ -324,6 +324,8 @@ class KimaiClient:
             envelope = _as_validation_envelope(data)
             if envelope is not None:
                 message, code, error_details = envelope
+                if code == 401:
+                    self.unauthorized = True
                 logger.error(
                     f"API error: {message} for request {method} {endpoint} "
                     f"(HTTP {response.status_code} with an error envelope)"

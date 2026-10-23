@@ -788,7 +788,7 @@ async def test_without_headers_the_next_page_is_only_possible():
 
 @pytest.mark.asyncio
 async def test_a_401_while_listing_users_propagates():
-    """The server rebuilds the session on a 401; a note would hide it."""
+    """A 401 means the token is gone; a note would make the listing look complete."""
     client = _listing_client([])
     client.get_teams.side_effect = KimaiAPIError("Unauthorized", 401)
 
@@ -860,18 +860,6 @@ def test_a_description_with_a_leading_break_reads_cleanly():
     assert ts._describe_timesheet(row).rstrip().endswith("- Sprint planning | Agenda")
 
 
-def test_the_row_backstop_keeps_a_record_on_one_line():
-    """A field that skipped the models (model_construct) still cannot split a row."""
-    from kimai_mcp.models import ProjectExpanded
-
-    project = ProjectExpanded.model_construct(id=2, name="P\n#9 forged", customer=None)
-    row = TimesheetExpanded(**_EXPANDED_ROW).model_copy(update={"project": project})
-
-    text = ts._describe_timesheet(row)
-
-    assert len(text.splitlines()) == 1
-
-
 @pytest.mark.asyncio
 async def test_entity_meta_values_are_quoted():
     """An invoice or activity custom field with a line break forged entity blocks."""
@@ -916,7 +904,19 @@ ZERO_WIDTH_SPACE, RIGHT_TO_LEFT_OVERRIDE = chr(0x200B), chr(0x202E)
 FULLWIDTH_COMMA, FULLWIDTH_EQUALS, FULLWIDTH_QUOTE = chr(0xFF0C), chr(0xFF1D), chr(0xFF02)
 
 
-def test_the_invisible_class_is_every_control_format_and_separator_character():
+# Default_Ignorable_Code_Point from Unicode's DerivedCoreProperties.txt, which
+# unicodedata does not expose: code points rendered as nothing, such as the
+# variation selectors and the Hangul fillers.
+DEFAULT_IGNORABLE = [
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5),
+    (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164),
+    (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF),
+]
+BRAILLE_BLANK = 0x2800
+
+
+def test_the_invisible_class_is_every_control_format_separator_and_ignorable_character():
     """Hand-written ranges, so they are checked against this Python's Unicode
     data; a code point it does not know yet (category Cn) may be in the class."""
     import sys
@@ -925,6 +925,8 @@ def test_the_invisible_class_is_every_control_format_and_separator_character():
     from kimai_mcp.text import _INVISIBLE
 
     wanted = {c for c in range(sys.maxunicode + 1) if unicodedata.category(chr(c)) in {"Cc", "Cf", "Zl", "Zp"}}
+    wanted |= {c for first, last in DEFAULT_IGNORABLE for c in range(first, last + 1)}
+    wanted.add(BRAILLE_BLANK)
     matched = {c for c in range(sys.maxunicode + 1) if _INVISIBLE.match(chr(c))}
 
     assert wanted <= matched

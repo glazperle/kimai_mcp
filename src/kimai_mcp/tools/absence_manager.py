@@ -364,6 +364,7 @@ async def _handle_absence_statistics(
 
     # Fetch absences based on user scope
     absences = []
+    note = ""
 
     if user_scope == "self":
         current_user = await client.get_current_user()

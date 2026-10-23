@@ -24,21 +24,28 @@ import unicodedata
 
 _LINE_BREAK = re.compile("[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
 # Characters that are not shown as themselves: controls (Cc), format
-# characters (Cf: zero-width spaces and joiners, bidi overrides, the BOM) and
-# the line and paragraph separators (Zl, Zp). A zero-width space in front of
-# '"Kickoff"' made it look like the quoted form of Kickoff, and U+202E turns
-# the rest of a line around on screen. tests/test_output_and_resilience.py
-# checks this class against unicodedata.
+# characters (Cf: zero-width spaces and joiners, bidi overrides, the BOM), the
+# line and paragraph separators (Zl, Zp), the other default-ignorable code
+# points (variation selectors, the combining grapheme joiner, the Hangul
+# fillers) and the blank Braille pattern U+2800. A zero-width space in front
+# of '"Kickoff"' made it look like the quoted form of Kickoff, and U+202E
+# turns the rest of a line around on screen. tests/test_output_and_resilience.py
+# checks this class against unicodedata and the default-ignorable list.
 _INVISIBLE = re.compile(
-    "[\x00-\x1f\x7f-\x9f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u180e"
-    "\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb"
+    "[\x00-\x1f\x7f-\x9f\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2"
+    "\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u2028-\u202e\u2060-\u206f"
+    "\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb"
     "\U000110bd\U000110cd\U00013430-\U0001343f\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
-    "\U000e0001\U000e0020-\U000e007f]"
+    "\U000e0000-\U000e0fff]"
 )
-# One or more words without separators or quotes, single spaces between them.
-# ';' separates the segments of a row ("tags: ...; meta: ..."), ',' and '='
-# the values inside one.
-_PLAIN_VALUE = re.compile(r'[^\s,;="\\]+(?: [^\s,;="\\]+)*')
+# Beyond ASCII, what a value or a label may hold and still be shown as is:
+# letters, digits and currency signs, and the typographic apostrophes and
+# dashes common in names (O'Brien with U+2019). Other punctuation, symbols,
+# spaces and marks are quoted: among them are look-alikes of the separators
+# that NFKC does not fold (U+201A for ',', U+A78A for '=', U+266F for '#',
+# U+2215 for '/'), and quoting is lossless.
+_SHOWN_AS_IS = frozenset({"Lu", "Ll", "Lt", "Lo", "Nd", "Sc"})
+_TYPOGRAPHIC = frozenset("\u2013\u2014\u2018\u2019")
 
 
 def one_line(text) -> str:
@@ -75,6 +82,19 @@ def _ambiguous(text: str) -> bool:
     )
 
 
+def _shown_as_is(text: str, reserved: str) -> bool:
+    """Whether every character of ``text`` is printable ASCII outside
+    ``reserved``, or a visible letter, digit or currency sign beyond ASCII
+    (U+3164 HANGUL FILLER is a letter, and blank), or ``_TYPOGRAPHIC``."""
+    return all(
+        " " <= char <= "~" and char not in reserved
+        if char.isascii()
+        else char in _TYPOGRAPHIC
+        or (unicodedata.category(char) in _SHOWN_AS_IS and not _INVISIBLE.match(char))
+        for char in text
+    )
+
+
 def quoted(text) -> str:
     """Free text (a description, a comment): as is, or as a JSON string."""
     text = str(text)
@@ -84,18 +104,16 @@ def quoted(text) -> str:
 def value_text(value) -> str:
     """A meta value or tag inside a ``name=value, ...`` list: plain, else JSON-quoted.
 
-    Quoted as soon as it holds a separator (``,`` ``;`` ``=``, or a look-alike
-    that NFKC folds into one, such as U+FF0C), a quote, a backslash, an
-    invisible character or outer whitespace, so ``ticket=CA-1, approved=yes``
-    cannot be one value posing as two fields, and the stored value can be
-    read back.
+    ';' separates the segments of a row ("tags: ...; meta: ..."), ',' and '='
+    the values inside one. A value is plain only as one or more words of
+    printable ASCII other than those, a quote or a backslash, or of letters,
+    digits and currency signs (``_SHOWN_AS_IS``), single spaces between them.
+    So ``ticket=CA-1, approved=yes`` cannot be one value posing as two fields,
+    with ASCII separators or with look-alikes of them, and the stored value
+    can be read back.
     """
     text = str(value)
-    plain = (
-        _PLAIN_VALUE.fullmatch(text)
-        and _PLAIN_VALUE.fullmatch(unicodedata.normalize("NFKC", text))
-        and not _INVISIBLE.search(text)
-    )
+    plain = text and text == text.strip() and "  " not in text and _shown_as_is(text, ',;="\\')
     return text if plain else _json(text)
 
 
@@ -105,7 +123,10 @@ def label_text(name) -> str:
     In ``Acme / Relaunch (#2) / Meetings (#1), Bob (#4) - description`` each
     ``(#id)`` ends a label, so a name holding a '#' (an alias such as
     'Bob (#4) - approved by Ana (#5)') or ' / ' could pose as other labels and
-    is quoted, as is an ambiguous one (see ``quoted``).
+    is quoted, as is one holding a character beyond ASCII other than a letter,
+    digit or currency sign (a look-alike such as U+FF03 or U+266F, see
+    ``_SHOWN_AS_IS``) and an ambiguous one (see ``quoted``).
     """
     text = str(name)
-    return _json(text) if "#" in text or " / " in text or _ambiguous(text) else text
+    plain = not _ambiguous(text) and " / " not in text and _shown_as_is(text, "#")
+    return text if plain else _json(text)

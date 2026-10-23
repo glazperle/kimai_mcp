@@ -961,8 +961,8 @@ async def _users_section(client: KimaiClient, limit: int) -> str:
     """The users the token can see (teams first, then GET /users), one per line.
 
     Supplementary context for the listing and the guide: a failure is a line
-    of text, except a 401, which propagates so the server rebuilds the
-    session.
+    of text, except a 401, which propagates: the token is gone, so the answer
+    is an error rather than a listing that only looks complete.
     """
     try:
         users = await resolve_accessible_users(client)
@@ -975,9 +975,11 @@ async def _users_section(client: KimaiClient, limit: int) -> str:
                 "works where the token may see that user.\n"
             )
         return f"Unable to list users: {e!s}\n"
+    # The status comes before the text a user writes: as a suffix, an alias
+    # 'Ana (inactive)' made an active account read as a disabled one.
     lines = [
-        f"  - ID: {user.id}, Username: {user.username}, Name: {user.alias or 'N/A'}"
-        f"{'' if user.enabled else ' (inactive)'}"
+        f"  - ID: {user.id}, {'active' if user.enabled else 'inactive'}, Username: {value_text(user.username)}, "
+        f"Name: {value_text(user.alias) if user.alias else 'N/A'}"
         for user in users[:limit]
     ]
     if len(users) > limit:

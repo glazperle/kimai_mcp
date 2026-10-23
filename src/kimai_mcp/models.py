@@ -30,9 +30,10 @@ class KimaiModel(BaseModel):
     # number or a project name cannot pose as a record of its own in a listing
     # (see text.py). Request models (*Form, *Filter) keep what the caller sent.
     multiline_fields: ClassVar[frozenset[str]] = frozenset()
-    # The input keys (name and alias) of the other fields, computed once per
-    # class: a field validator for "*" ran Python code for every field of every
-    # row, which made a 500-row page parse ten times slower.
+    # The input keys (name and alias) of the other fields that can hold text,
+    # computed once per class: a field validator for "*" ran Python code for
+    # every field of every row, which made a 500-row page parse ten times
+    # slower, and looking at every key (dates, IDs, rates) still doubled it.
     _one_line_keys: ClassVar[frozenset[str]] = frozenset()
 
     @classmethod
@@ -45,7 +46,9 @@ class KimaiModel(BaseModel):
             key
             for name, field in cls.model_fields.items()
             # A nested model applies its own rule.
-            if name not in cls.multiline_fields and not _holds_model(field.annotation)
+            if name not in cls.multiline_fields
+            and _holds_text(field.annotation)
+            and not _holds_model(field.annotation)
             for key in (name, field.alias)
             if key
         )
@@ -57,12 +60,21 @@ class KimaiModel(BaseModel):
         if not keys or not isinstance(data, dict):
             return data
         fixed = {}
-        for key, value in data.items():
-            if key in keys and isinstance(value, (str, list, dict)):
+        for key in keys:
+            value = data.get(key)
+            if isinstance(value, (str, list, dict)):
                 single = _one_line_deep(value)
                 if single is not value:
                     fixed[key] = single
         return {**data, **fixed} if fixed else data
+
+
+@functools.cache
+def _holds_text(annotation: Any) -> bool:
+    """Whether a field annotation can hold a string (str or Any, also nested)."""
+    if annotation is str or annotation is Any:
+        return True
+    return any(_holds_text(arg) for arg in get_args(annotation))
 
 
 @functools.cache
@@ -76,7 +88,8 @@ def _holds_model(annotation: Any) -> bool:
 def _one_line_deep(value: Any) -> Any:
     """``value`` with every string in it on one line; the same object if none changed."""
     if isinstance(value, str):
-        return one_line(value)
+        # Every line break is unprintable; the check runs in C.
+        return value if value.isprintable() else one_line(value)
     if isinstance(value, list):
         items = [_one_line_deep(item) for item in value]
         return value if all(new is old for new, old in zip(items, value)) else items
