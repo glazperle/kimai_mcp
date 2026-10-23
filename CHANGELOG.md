@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.19.0] - 2026-10-23
+
 ### Added
 
 - **Timesheet meta fields are readable.** `timesheet action=list` and `action=get` now print the
