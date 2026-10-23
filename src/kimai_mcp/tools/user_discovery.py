@@ -36,11 +36,19 @@ async def resolve_accessible_users(client: KimaiClient) -> list:
             raise
         teams = []
 
+    errors: list[KimaiAPIError] = []
+
+    async def team_detail(team_id: int):
+        try:
+            return await client.get_team(team_id)
+        except KimaiAPIError as e:
+            if e.status_code not in (403, 404):
+                errors.append(e)  # an outage, not a team this token may not open
+            raise
+
     if teams:
         # Fetch team details in parallel; teams we cannot access are dropped.
-        team_details, _failed = await execute_batch(
-            [team.id for team in teams], client.get_team
-        )
+        team_details, _failed = await execute_batch([team.id for team in teams], team_detail)
         for team_detail in team_details:
             if team_detail.members:
                 for member in team_detail.members:
@@ -48,8 +56,12 @@ async def resolve_accessible_users(client: KimaiClient) -> list:
                         seen_user_ids.add(member.user.id)
                         accessible_users.append(member.user)
 
-    # If no users from teams, try get_users (requires higher permissions)
+    # If no users from teams, try get_users (requires higher permissions). Not
+    # when the team details failed for another reason than access: that error
+    # is the answer, and /users would only add a wait and maybe hide it.
     if not accessible_users:
+        if errors:
+            raise errors[0]
         accessible_users = list(await client.get_users())
 
     return accessible_users

@@ -6,11 +6,11 @@ from mcp.types import TextContent, Tool
 
 from ..client import KimaiAPIError, KimaiClient
 from ..models import AbsenceFilter, AbsenceForm
+from ..text import quoted
 from .absence_analytics import AbsenceAnalytics
 from .batch_utils import execute_batch, format_batch_result
 from .dates import day_end, day_start, parse_iso_date, today
 from .errors import ToolError
-from .text import quoted
 from .user_discovery import resolve_accessible_users
 
 
@@ -627,11 +627,10 @@ async def _get_accessible_users(client: KimaiClient, user_scope: str) -> list:
     # For "all" scope, try teams first then fallback to get_users
     try:
         users = await resolve_accessible_users(client)
-    # Both discovery paths failing (no permission, API error) degrades to an
-    # empty report rather than a failed tool call; a 401 (token gone)
-    # propagates, so the server rebuilds the session.
-    except Exception as e:
-        if isinstance(e, KimaiAPIError) and e.status_code == 401:
+    # No permission on either discovery path is an empty report, which the
+    # caller explains. Anything else (an outage, a 401) is reported as such.
+    except KimaiAPIError as e:
+        if e.status_code != 403:
             raise
         return []
 

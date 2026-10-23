@@ -115,24 +115,19 @@ def is_low_entropy_slug(slug: str) -> bool:
 class UserMCPSession:
     """MCP session for a single user with their own Kimai credentials."""
 
-    def __init__(
-        self,
-        user_slug: str,
-        config: UserConfig,
-        on_auth_failure: Callable[[str], Awaitable[None]] | None = None,
-    ):
+    def __init__(self, user_slug: str, config: UserConfig):
         """Initialize user session.
 
         Args:
             user_slug: User identifier (used in URL path)
             config: User's Kimai configuration
-            on_auth_failure: Called when Kimai rejects this session's token, so
-                the owner can drop the session instead of serving it forever.
         """
         self.user_slug = user_slug
         self.config = config
         self.kimai_client: KimaiClient | None = None
-        self._on_auth_failure = on_auth_failure
+        # Set when Kimai answered 401 during a tool call: the owner drops and
+        # rebuilds this session on the next request (_ensure_session).
+        self.token_rejected = False
 
         # Create MCP server for this user. SDK 2.x takes the handlers as
         # constructor arguments; the decorator API was removed.
@@ -225,14 +220,16 @@ class UserMCPSession:
         # cached session cannot notice on its own: it was verified once at
         # initialize() and then trusted forever. An admin deleting the token,
         # or a second replica re-minting it under the same name, therefore
-        # left the session answering errors until the process restarted.
-        # Telling the owner lets it drop the session and rebuild it. The
+        # left the session answering errors until the process restarted. The
         # client's flag also catches a 401 a tool reported as text (a batch
         # item, a best-effort lookup, config type=all).
-        auth_failed = auth_failed or getattr(self.kimai_client, "unauthorized", False) is True
-        if auth_failed and self._on_auth_failure is not None:
-            with contextlib.suppress(Exception):
-                await self._on_auth_failure(self.user_slug)
+        #
+        # The session is only marked here. Tearing it down inside this call
+        # would cancel the task group running it: the call never answered, and
+        # on the legacy route the session was gone for good. The owner rebuilds
+        # it on the next request instead, once, under its init lock.
+        if auth_failed or getattr(self.kimai_client, "unauthorized", False) is True:
+            self.token_rejected = True
         return result
 
 
@@ -263,6 +260,7 @@ class MCPRoutingMiddleware:
         oauth_mcp_app: ASGIApp | None = None,
         legacy_slugs_enabled: bool = True,
         trusted_proxies: list[str] | None = None,
+        ensure_session: Callable[[str], Awaitable[UserMCPSession | None]] | None = None,
     ):
         """Initialize middleware.
 
@@ -272,9 +270,11 @@ class MCPRoutingMiddleware:
             oauth_mcp_app: Bearer-auth protected ASGI app serving /mcp
             legacy_slugs_enabled: Whether the deprecated /mcp/{slug} routes are served
             trusted_proxies: IPs of reverse proxies whose forwarding headers may be trusted
+            ensure_session: Rebuilds a session whose token Kimai rejected
         """
         self.app = app
         self.user_sessions = user_sessions
+        self.ensure_session = ensure_session
         self.oauth_mcp_app = oauth_mcp_app
         self.legacy_slugs_enabled = legacy_slugs_enabled
         self.trusted_proxies = trusted_proxies or []
@@ -345,6 +345,16 @@ class MCPRoutingMiddleware:
             return
 
         session = self.user_sessions[user_slug]
+        if session.token_rejected and self.ensure_session is not None:
+            rebuilt = await self.ensure_session(user_slug)
+            if rebuilt is None:
+                # The slug is configured, so this is no enumeration attempt:
+                # answer like an unknown slug without counting it.
+                await random_delay(0.1, 0.3)
+                response = JSONResponse({"error": "Not found"}, status_code=404)
+                await response(scope, receive, send)
+                return
+            session = rebuilt
         if not session.session_manager:
             response = JSONResponse(
                 {"error": "Session not initialized"},
@@ -465,7 +475,7 @@ class StreamableHTTPMCPServer:
     async def initialize_users(self) -> None:
         """Initialize all user sessions."""
         for slug, config in self.users_config.users.items():
-            session = UserMCPSession(slug, config, on_auth_failure=self._handle_auth_failure)
+            session = UserMCPSession(slug, config)
             try:
                 await session.initialize()
             # One unreachable Kimai instance or bad token must not prevent the
@@ -740,20 +750,23 @@ class StreamableHTTPMCPServer:
             return None
         self._session_last_used[slug] = time.time()
         session = self.user_sessions.get(slug)
-        if session is not None and session.session_manager is not None:
+        if session is not None and session.session_manager is not None and not session.token_rejected:
             return session
         if slug not in self.users_config.users:
             return None
         async with self._session_init_lock:
             # Re-check after acquiring the lock (another request may have won).
             session = self.user_sessions.get(slug)
-            if session is not None and session.session_manager is not None:
+            if session is not None and session.token_rejected:
+                # Kimai rejected its token in an earlier call. Dropped here, in
+                # another request, so the teardown cannot cancel the call that
+                # noticed it; under the lock, so concurrent requests do it once.
+                await self._handle_auth_failure(slug)
+                if slug not in self.users_config.users:
+                    return None  # a provisioned user, forgotten until the next sign-in
+            elif session is not None and session.session_manager is not None:
                 return session
-            new_session = UserMCPSession(
-                slug,
-                self.users_config.users[slug],
-                on_auth_failure=self._handle_auth_failure,
-            )
+            new_session = UserMCPSession(slug, self.users_config.users[slug])
             try:
                 await new_session.initialize()
                 # The manager's run() must be entered before it can serve a
@@ -845,6 +858,7 @@ class StreamableHTTPMCPServer:
             oauth_mcp_app=self._create_oauth_mcp_app(),
             legacy_slugs_enabled=self.legacy_slugs_enabled,
             trusted_proxies=self.trusted_proxies,
+            ensure_session=self._ensure_session,
         )
 
         # Security middlewares (order matters: rate limit -> security headers -> app)

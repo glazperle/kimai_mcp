@@ -522,3 +522,59 @@ async def test_a_recently_used_provisioned_session_is_kept(monkeypatch):
     await server._sweep_idle_sessions()
 
     assert "autoSlug12345678" in server.user_sessions
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_session_is_rebuilt_once_on_the_next_request(monkeypatch):
+    """The call that saw the 401 only marks the session; tearing it down inside
+    that call cancelled the call itself. Concurrent requests rebuild it once."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from kimai_mcp.streamable_http_server import UserMCPSession
+
+    users = UsersConfig(users={"declaredUserSlug16": _config()})
+    server = _server(users, monkeypatch)
+    server._serving = True
+    server._start_session_manager = AsyncMock()
+    old = UserMCPSession("declaredUserSlug16", users.users["declaredUserSlug16"])
+    old.session_manager = object()
+    old.token_rejected = True
+    server.user_sessions["declaredUserSlug16"] = old
+    teardowns = []
+    teardown = server._handle_auth_failure
+
+    async def counting(slug):
+        teardowns.append(slug)
+        await teardown(slug)
+
+    server._handle_auth_failure = counting
+
+    first, second = await asyncio.gather(
+        server._ensure_session("declaredUserSlug16"), server._ensure_session("declaredUserSlug16")
+    )
+
+    assert first is second
+    assert first is not old
+    assert first.token_rejected is False
+    assert teardowns == ["declaredUserSlug16"]
+
+
+@pytest.mark.asyncio
+async def test_the_legacy_route_rebuilds_a_rejected_session():
+    """It served from the session table only: a dropped session answered 404,
+    and ten of those blocked the client's IP for five minutes."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from kimai_mcp.streamable_http_server import MCPRoutingMiddleware
+
+    rebuilt = SimpleNamespace(token_rejected=False, session_manager=SimpleNamespace(handle_request=AsyncMock()))
+    stale = SimpleNamespace(token_rejected=True, session_manager=object())
+    ensure = AsyncMock(return_value=rebuilt)
+    middleware = MCPRoutingMiddleware(AsyncMock(), {"legacySlug": stale}, ensure_session=ensure)
+
+    await middleware._handle_mcp_request({"type": "http", "client": ("10.0.0.1", 1)}, AsyncMock(), AsyncMock(), "legacySlug")
+
+    ensure.assert_awaited_once_with("legacySlug")
+    rebuilt.session_manager.handle_request.assert_awaited_once()

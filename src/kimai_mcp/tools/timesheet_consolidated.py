@@ -19,12 +19,12 @@ from ..models import (
     TimesheetFilter,
     TimesheetOrderBy,
 )
+from ..text import one_line, quoted, value_text
 from .batch_utils import execute_batch, format_batch_result
 from .dates import parse_local_datetime, parse_local_end, parse_utc_datetime, whole_day
 from .errors import ToolError
 from .lookups import RecordNames, best_effort, record_names
 from .search_term import is_literal_meta_value, is_meta_name
-from .text import one_line, quoted, value_text
 from .timesheet_analytics import TimesheetAnalytics, worked_hours
 from .user_discovery import own_records_note, resolve_accessible_users
 
@@ -1106,7 +1106,7 @@ def _describe_timesheet(ts, names: RecordNames = _NO_NAMES, show_user: bool = Tr
     if show_user and ts.user is not None:
         line += f", {_user_label(ts.user, names)}"
     if ts.description:
-        line += " - " + one_line(ts.description).strip()
+        line += " - " + one_line(ts.description)
     lines = [line]
 
     details = ["not billable"] if not ts.billable else []
@@ -1131,8 +1131,10 @@ def _describe_timesheet(ts, names: RecordNames = _NO_NAMES, show_user: bool = Tr
         extras.append(f"meta: {meta}")
     if extras:
         lines.append("  " + "; ".join(extras))
-    # Every part is single-line already; this keeps it so for anything added later.
-    return "\n".join(one_line(line) for line in lines) + "\n"
+    # Backstop: the models hand over single-line names and the values above are
+    # quoted, so no part brings a line break. A field added later without that
+    # care is still kept from splitting the record (the indent stays).
+    return "\n".join(line[: len(line) - len(line.lstrip())] + one_line(line.lstrip()) for line in lines) + "\n"
 
 
 async def _handle_timer_active(client: KimaiClient) -> list[TextContent]:

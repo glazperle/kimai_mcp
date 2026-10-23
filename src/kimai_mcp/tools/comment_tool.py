@@ -5,8 +5,8 @@ from mcp.types import TextContent, Tool
 
 from ..client import KimaiClient
 from ..models import CommentForm
+from ..text import quoted
 from .errors import ToolError
-from .text import quoted
 
 
 def comment_tool() -> Tool:

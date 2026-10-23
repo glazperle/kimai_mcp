@@ -1,25 +1,13 @@
 """Data models for Kimai API entities."""
 
+import functools
 import re
 from datetime import date, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal, get_args
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationInfo, field_validator
 
-
-def _one_line(value: Any) -> Any:
-    """A name's lines joined by ' | ' (blank lines dropped); anything else unchanged."""
-    if isinstance(value, str) and len(value.splitlines()) > 1:
-        return " | ".join(part.strip() for part in value.splitlines() if part.strip())
-    return value
-
-
-# A name Kimai stores as free text (a user's own alias, a project or tag name).
-# A line break in it would let one record pose as several in a listing, where
-# each record is one line, so read models take it on one line. Free text that
-# may span lines (descriptions, comments, meta values) is quoted when rendered
-# instead, see tools/text.py.
-OneLine = Annotated[str, BeforeValidator(_one_line)]
+from .text import one_line
 
 
 class KimaiModel(BaseModel):
@@ -35,6 +23,40 @@ class KimaiModel(BaseModel):
     """
 
     model_config = ConfigDict(populate_by_name=True)
+
+    # Read models: the fields whose text may span lines (a description, a
+    # comment, meta values). Every other text field is joined to one line when
+    # it is parsed, so a line break a Kimai user put into an alias, an account
+    # number or a project name cannot pose as a record of its own in a listing
+    # (see text.py). Request models (*Form, *Filter) keep what the caller sent.
+    multiline_fields: ClassVar[frozenset[str]] = frozenset()
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _text_on_one_line(cls, value: Any, info: ValidationInfo) -> Any:
+        if cls.__name__.endswith(("Form", "Filter")) or info.field_name in cls.multiline_fields:
+            return value
+        if _holds_model(cls.model_fields[info.field_name].annotation):
+            return value  # a nested model applies its own rule
+        return _one_line_deep(value)
+
+
+@functools.cache
+def _holds_model(annotation: Any) -> bool:
+    """Whether a field annotation is, or contains, a model."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return True
+    return any(_holds_model(arg) for arg in get_args(annotation))
+
+
+def _one_line_deep(value: Any) -> Any:
+    if isinstance(value, str):
+        return one_line(value)
+    if isinstance(value, list):
+        return [_one_line_deep(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _one_line_deep(item) for key, item in value.items()}
+    return value
 
 
 # Kimai's duration grammar, transcribed from the alternatives in
@@ -159,7 +181,7 @@ class AccessTokenInfo(KimaiModel):
     """
 
     id: int
-    name: OneLine | None = None
+    name: str | None = None
     last_usage: str | None = Field(None, alias="lastUsage")
     expires_at: str | None = Field(None, alias="expiresAt")
 
@@ -179,9 +201,9 @@ class User(KimaiModel):
     """
 
     id: int
-    username: OneLine
-    alias: OneLine | None = None
-    title: OneLine | None = None
+    username: str
+    alias: str | None = None
+    title: str | None = None
     enabled: bool = False
     color: str | None = None
     email: str | None = None
@@ -196,7 +218,8 @@ class User(KimaiModel):
 
 class MetaField(KimaiModel):
     """Meta field model."""
-    name: OneLine
+    multiline_fields = frozenset({"value"})
+    name: str
     value: str | None = None
 
 
@@ -209,7 +232,7 @@ class TeamRef(KimaiModel):
     """
 
     id: int | None = None
-    name: OneLine | None = None
+    name: str | None = None
     color: str | None = None
 
 
@@ -229,8 +252,10 @@ class Customer(KimaiModel):
       and the budget fields.
     """
 
+    multiline_fields = frozenset({"comment", "address", "meta_fields"})
+
     id: int
-    name: OneLine
+    name: str
     country: str | None = None
     currency: str | None = None
     timezone: str | None = None
@@ -282,8 +307,10 @@ class Project(KimaiModel):
     ``time`` permission for that project (``BudgetExclusionStrategy``, 2.66).
     """
 
+    multiline_fields = frozenset({"comment", "meta_fields"})
+
     id: int
-    name: OneLine
+    name: str
     customer: int | None = None
     comment: str | None = None
     visible: bool = True
@@ -302,7 +329,7 @@ class Project(KimaiModel):
     # without a timezone; group Default, so listings carry it too.
     locked_until: date | None = Field(None, alias="lockedUntil")
     order_number: str | None = Field(None, alias="orderNumber")
-    parent_title: OneLine | None = Field(None, alias="parentTitle")  # customer name
+    parent_title: str | None = Field(None, alias="parentTitle")  # customer name
     teams: list[TeamRef] | None = None
     # Budget_Money / Budget_Time: entity and (since 2.66) listing, per record
     budget: float | None = None
@@ -312,8 +339,10 @@ class Project(KimaiModel):
 
 class Activity(KimaiModel):
     """Activity model."""
+
+    multiline_fields = frozenset({"comment", "meta_fields"})
     id: int
-    name: OneLine
+    name: str
     project: int | None = None
     comment: str | None = None
     visible: bool = True
@@ -322,7 +351,7 @@ class Activity(KimaiModel):
     color: str | None = None
     # Serializer group Default, so listings carry them too.
     meta_fields: list[MetaField] | None = Field(None, alias="metaFields")
-    parent_title: OneLine | None = Field(None, alias="parentTitle")  # project name
+    parent_title: str | None = Field(None, alias="parentTitle")  # project name
     teams: list[TeamRef] | None = None
     # Budget_Money / Budget_Time: entity and (since 2.66) listing, per record
     budget: float | None = None
@@ -345,6 +374,8 @@ class TimesheetEntity(KimaiModel):
     default ``ROLE_USER`` does not. All four default to ``None`` so "not
     visible" stays distinguishable from a genuine zero rate.
     """
+
+    multiline_fields = frozenset({"description", "meta_fields"})
 
     id: int | None = None
     activity: int
@@ -524,6 +555,8 @@ class AbsenceForm(KimaiModel):
 
 class Absence(KimaiModel):
     """Absence model matching API Absence2 schema."""
+
+    multiline_fields = frozenset({"comment"})
     id: int | None = None
     user: User
     date: datetime
@@ -567,7 +600,7 @@ class TeamEditForm(KimaiModel):
 class Team(KimaiModel):
     """Team model."""
     id: int | None = None
-    name: OneLine
+    name: str
     members: list[TeamMember] = []
     customers: list[Customer] = []
     projects: list[Project] = []
@@ -585,7 +618,7 @@ class TeamFilter(KimaiModel):
 class TagEntity(KimaiModel):
     """Tag entity model."""
     id: int | None = None
-    name: OneLine
+    name: str
     visible: bool = True
     color: str | None = None
 
@@ -616,6 +649,8 @@ PaymentDate = Annotated[date | None, BeforeValidator(_date_part)]
 
 class Invoice(KimaiModel):
     """Invoice model."""
+
+    multiline_fields = frozenset({"comment", "meta_fields"})
     id: int | None = None
     invoice_number: str = Field(alias="invoiceNumber")
     comment: str | None = None
@@ -658,6 +693,8 @@ class InvoiceFilter(KimaiModel):
 
 class Comment(KimaiModel):
     """Comment on a project or customer."""
+
+    multiline_fields = frozenset({"message"})
     id: int | None = None
     message: str
     created_by: User | None = Field(None, alias="createdBy")
@@ -676,14 +713,14 @@ class CommentForm(KimaiModel):
 class PublicHolidayGroup(KimaiModel):
     """Public holiday group model."""
     id: int | None = None
-    name: OneLine
+    name: str
 
 
 class PublicHoliday(KimaiModel):
     """Public holiday model."""
     id: int | None = None
     date: datetime
-    name: OneLine
+    name: str
     public_holiday_group: PublicHolidayGroup | None = Field(None, alias="publicHolidayGroup")
     half_day: bool = Field(False, alias="halfDay")
 
@@ -788,7 +825,7 @@ class UserFilter(KimaiModel):
 
 class Plugin(KimaiModel):
     """Plugin model."""
-    name: OneLine
+    name: str
     version: str
 
 
@@ -807,7 +844,7 @@ class TimesheetConfig(KimaiModel):
 
 class CalendarEvent(KimaiModel):
     """Calendar event model."""
-    title: OneLine
+    title: str
     color: str | None = None
     text_color: str | None = Field(None, alias="textColor")
     all_day: bool = Field(False, alias="allDay")

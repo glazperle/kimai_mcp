@@ -31,10 +31,10 @@ from ..models import (
     UserFilter,
     UserOrderBy,
 )
+from ..text import quoted
 from .batch_utils import execute_batch, format_batch_result
 from .dates import parse_local_datetime
 from .errors import ToolError
-from .text import quoted
 from .user_discovery import resolve_accessible_users
 
 logger = logging.getLogger(__name__)
@@ -227,8 +227,9 @@ def _team_tag_invoice_branches() -> list[dict]:
 
 
 def _shown(value) -> str:
-    """A meta field or preference value as printed: '(empty)' for null and ''."""
-    return "(empty)" if value is None or value == "" else str(value)
+    """A meta field or preference value as printed: '(empty)' for null and '',
+    JSON-quoted where it spans lines or could be misread (``text.quoted``)."""
+    return "(empty)" if value is None or value == "" else quoted(value)
 
 
 # Preference aliases for more intuitive names
