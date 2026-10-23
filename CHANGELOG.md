@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.20.0] - 2026-10-23
+
 ### Changed
 
 - **`timesheet action=list` returns one page, with names.** Without `page` it used to fetch every page and
@@ -48,15 +50,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With one page listed, the "every record returned is your own" note asks Kimai for one record of the
   same filter for the caller alone and compares the totals, instead of reading every page.
 
+### Security
+
+- **A failed write logged its request body.** When Kimai refused `entity type=user action=create` (for
+  example "The username is already used."), the log line carried the whole payload, the new user's
+  `plainPassword` and `plainApiToken` included; on the streamable server that log is shared by all users,
+  and the stdio server also logged the tool arguments. The client now logs only the query string, and the
+  server masks every password, token and secret value in the arguments it logs.
+
 ### Fixed
 
-- `analyze_project_team` with `project_id` asked `GET /projects/{id}` on every call although a default
-  user gets a 403 there for every project. When the listing has the project (so the 403 is role-wide),
-  the client remembers it and uses the listing directly; a team lead refused another team's project
-  keeps the direct request for its own.
+- A fetch that ended exactly at the record limit (10,000 for statistics and the meta filter, 5,000 for
+  the analysis) was reported as cut off. The page loop now stops at Kimai's `X-Total-Pages`, which also
+  saves the 404 probe after a full last page; a record Kimai repeats on a later page is counted once.
+  When the limit does cut the result off, the listing says "Found at least N".
+- A `Retry-After` given as an HTTP date (RFC 9110) was ignored and the request retried at once.
+- `analyze_project_team` names the caller when the user list is not readable (it showed "User ID 1"
+  where `timesheet list` showed the name), and an empty analysis for `all` or a specific user notes that
+  Kimai may have searched the caller's records only.
+- `analyze_project_team` with `project_id` asked `GET /projects/{id}` again for a project that had
+  already answered 403; the client now remembers each refused project.
+- Records whose customer cannot be told (their project is not in the readable project list, or that
+  list failed) are counted in a note instead of silently escaping the customer check.
+- A free search term like `name:~` or `name:""` makes Kimai count a record once per meta field it has
+  (Kimai 2.70.2, `SearchHelper` without DISTINCT); the listing says so instead of reporting the
+  inflated total.
+- The empty-result notes name both reasons Kimai ignores a user filter (no `view_other_timesheet`, or a
+  user ID that does not exist), and `user_scope=all` no longer fetches the current user for it.
 
 ### Internal
 
+- The name lookups ask for the activities of the shown rows' projects only (Kimai adds the global ones)
+  instead of every activity, and the client remembers a 403 from `GET /users` (view_user is role-wide).
 - `client.get_timesheets` always reads every page and returns `(records, fetched_all)`; one page with
   Kimai's totals is `get_timesheet_page`. The heuristic that decided by itself whether to page through
   everything is gone, and so is the handler's second page loop. `get_users` takes a `UserFilter`. Shared
