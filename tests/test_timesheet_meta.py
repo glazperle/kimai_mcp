@@ -363,14 +363,17 @@ async def test_records_of_unrequested_activities_are_flagged():
 
 
 @pytest.mark.asyncio
-async def test_a_meta_name_kimai_cannot_search_notes_left_out_records():
-    """'issue ref' cannot be a search term; records without a visible row are
-    then unknown and left out, with a note instead of silently."""
-    client = _mock_client([_without_row(101)])
+async def test_a_meta_name_kimai_cannot_search_is_said_so():
+    """'Issue Ref' (a UI label) cannot be a search term, so Kimai was not asked
+    at all; counting every record without the field as 'hidden' would claim
+    thousands of hidden values instead of naming the actual problem."""
+    client = _mock_client([_without_row(101), _without_row(102)])
 
-    text = (await _handle_timesheet_list(client, {"meta": {"name": "issue ref", "value": "X"}}))[0].text
+    text = (await _handle_timesheet_list(client, {"meta": {"name": "Issue Ref", "value": "X"}}))[0].text
 
-    assert "1 record(s) with a hidden 'issue ref' were left out" in text
+    assert text.startswith("Found 0 timesheets")
+    assert "cannot address a meta field named 'Issue Ref'" in text
+    assert "hidden" not in text
 
 
 @pytest.mark.asyncio
@@ -380,3 +383,25 @@ async def test_an_integral_float_page_does_not_break_the_slice():
     text = (await _handle_timesheet_list(client, {"page": 1.0, "meta": {"name": "issue_tracker_id", "value": "CA-1"}}))[0].text
 
     assert "ID: 101 - " in text
+
+
+@pytest.mark.asyncio
+async def test_the_next_page_hint_follows_the_pages_already_fetched():
+    """The client may have paged on by itself; 'page 2' would repeat records."""
+    client = _mock_client([])
+    client.get_timesheets.return_value = ([_timesheet(101, None)], False, 100)
+
+    text = (await _handle_timesheet_list(client, {}))[0].text
+
+    assert "use 'page' 101" in text
+
+
+@pytest.mark.asyncio
+async def test_several_requested_users_returning_only_the_callers_records_are_noted():
+    """users=[5, 1] for caller 1 without view_other_timesheet: Kimai returns the
+    caller's records only, and nothing in them is 'foreign'."""
+    client = _mock_client([_timesheet(101, None)])  # user 1, the caller
+
+    text = (await _handle_timesheet_list(client, {"users": [5, 1]}))[0].text
+
+    assert "every record returned is your own" in text

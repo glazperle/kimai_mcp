@@ -128,7 +128,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             # Current user only - don't set user filter (uses current user by default)
             user_filter = None
         elif user_scope == 'specific':
-            if 'user' not in arguments:
+            if not arguments.get('user'):
                 raise ToolError(
                     "❌ Error: When user_scope is 'specific', you must provide a 'user' parameter."
                 )
@@ -150,11 +150,10 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                 user_filter = None
             except ToolError:
                 raise
-            # Anything else is turned into a client-facing tool error naming the team.
-            except Exception as e:  # noqa: BLE001
-                raise ToolError(
-                    f"❌ Error accessing team {arguments['team']}: {e!s}"
-                )
+            except KimaiAPIError as e:
+                if e.status_code == 401:
+                    raise  # the token is gone; the server rebuilds the session
+                raise ToolError(f"❌ Error accessing team {arguments['team']}: {e!s}")
         
         # 3. Get timesheets for this project with user filtering. Datetimes,
         # not strings: the client strips microseconds, which Kimai's strict
@@ -189,13 +188,16 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
 
         async def names(fetch):
             # Names are cosmetic: GET /users needs view_user, which default Kimai
-            # grants to super admins only, so a refusal must not stop the
-            # analysis. A 401 (token gone) is not a refusal and propagates.
+            # grants to super admins only, so no failure of these lookups may
+            # stop the analysis. A 401 (token gone) propagates: the server
+            # rebuilds the session on it.
             try:
                 return await fetch
             except KimaiAPIError as e:
-                if e.status_code != 403:
+                if e.status_code == 401:
                     raise
+                return None
+            except Exception:  # noqa: BLE001 - names only; IDs are shown instead
                 return None
 
         try:
@@ -210,7 +212,7 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
             )
             timesheets, fetched_all, _last_page = timesheets
             if users is None and not team_users:
-                scope_notes.append("> User names are not shown: this token may not list users (view_user).")
+                scope_notes.append("> User names are not shown: the user list could not be loaded (it needs view_user).")
             users, activities = users or team_users, activities or []
         except KimaiAPIError as e:
             if e.status_code == 401:
@@ -241,15 +243,16 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
         # Kimai ignores user/users[] for a token without view_other_timesheet
         # and returns the caller's own records. For 'specific' that would be a
         # report about the wrong person, so it is refused.
-        fetched_users = {ts.user for ts in timesheets}
+        fetched_users = {ts.user for ts in timesheets if ts.user is not None}
         if user_scope == 'specific' and str(user_filter).isdigit() and fetched_users - {int(user_filter)}:
             raise ToolError(
                 f"❌ Kimai returned records of user(s) {', '.join(map(str, sorted(fetched_users)))}, not of user "
-                f"{user_filter}: without view_other_timesheet (or access to that user) it ignores the user filter "
-                "and returns the caller's own records."
+                f"{user_filter}. It does so when the token lacks view_other_timesheet or user {user_filter} does "
+                "not exist: it then ignores the user filter and returns the caller's own records."
             )
+        team_fallback_used = bool(scope_notes)
         if user_scope == 'team':
-            if not scope_notes and fetched_users - set(team_user_ids):
+            if not team_fallback_used and fetched_users - set(team_user_ids):
                 scope_notes.append(
                     "> ⚠️ Kimai ignored the team filter (this token cannot see other users' records), so only "
                     "team members among the returned records are counted."
@@ -265,10 +268,10 @@ async def handle_analyze_project_team(client: KimaiClient, arguments: dict[str, 
                 ])
             )]
 
-        if user_scope == 'all' and len({ts.user for ts in timesheets}) == 1:
+        if user_scope in ('all', 'team') and len({ts.user for ts in timesheets}) == 1:
             note = await own_records_note(client, timesheets[0].user)
             if note:
-                scope_notes.append(f"> {note}")
+                scope_notes.append(f"> ⚠️ {note}")
 
         # Create lookup dictionaries
         user_lookup = {}

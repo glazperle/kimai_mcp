@@ -102,7 +102,8 @@ Each of these was data Kimai sent (or a filter it offered) that a tool silently 
   member names or user IDs, with a note. `project_id` works for tokens that may not open a single
   project (the listing is searched instead). The analysis fetches in pages of 500 (was 50, 100 requests
   for 5000 records). With `user_scope=specific`, records of anyone else than the requested user (what
-  Kimai returns when it ignores the filter) are refused instead of being reported as that user's.
+  Kimai returns when it ignores the filter) are refused instead of being reported as that user's; a
+  team or `all` analysis made of the caller's records only says so.
 
 Other fixes:
 
@@ -114,7 +115,7 @@ Other fixes:
   analysis now refuses a truncated fetch and asks for a shorter period.
 - **Filters Kimai ignored were not reported.** Without `view_other_timesheet`, or for user IDs that do not
   exist, Kimai returns the caller's own records for `user`/`users`, and it answers `user_scope=all` with
-  the records the token may see (without `view_all_data`: its own and its teams'). Unknown project and
+  the records the token may see (without `view_all_data`: its own and those of teams it leads). Unknown project and
   activity IDs make it drop that filter entirely. When the returned records show this (records of users,
   projects or activities that were not requested, or only the caller's records for `all`), the listing
   now says so instead of presenting them as the requested ones. Unknown customer IDs, and cases where

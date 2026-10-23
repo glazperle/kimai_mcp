@@ -31,9 +31,8 @@ async def execute_batch(
         return [], []
 
     # A repeated ID would run twice concurrently: a delete then reports a false
-    # "Failed" (404), and a toggle (batch_export) undoes itself.
-    # (dispatch_tool has already turned 1.0 into 1, so 1.0 == 1 cannot let a
-    # float spelling replace the real ID here.)
+    # "Failed" (404), and a toggle (batch_export) undoes itself. (dispatch_tool
+    # has already turned 1.0 into 1, so a float spelling cannot win here.)
     try:
         items = list(dict.fromkeys(items))
     except TypeError:

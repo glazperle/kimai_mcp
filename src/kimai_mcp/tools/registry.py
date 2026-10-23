@@ -172,9 +172,19 @@ def _declared_names(name: str) -> frozenset[str]:
 
 @functools.cache
 def _tool_validator(name: str) -> Any:
-    """The validator of a registered tool, its schema built and closed once."""
+    """The validator of a registered tool, from its schema built and closed once."""
+    return _validator(json.dumps(_closed_schema(name), sort_keys=True))
+
+
+@functools.cache
+def _closed_schema(name: str) -> dict:
+    """A registered tool's input schema as advertised (closed), built once.
+
+    Validation and the integer coercion read this same object; it is never
+    modified.
+    """
     factory, _run = _REGISTRY[name]
-    return _validator(json.dumps(_build(factory).input_schema, sort_keys=True))
+    return _build(factory).input_schema
 
 
 async def dispatch_tool(
@@ -187,10 +197,10 @@ async def dispatch_tool(
         raise ToolError(
             f"Unknown tool: {name}. Available tools: {', '.join(_REGISTRY)}"
         )
-    factory, run = entry
+    _factory, run = entry
     arguments = arguments or {}
     _check(_tool_validator(name), arguments)
-    arguments = _integers(_build(factory).input_schema, arguments)
+    arguments = _integers(_closed_schema(name), arguments)
     try:
         return await run(client, arguments)
     except pydantic.ValidationError as e:

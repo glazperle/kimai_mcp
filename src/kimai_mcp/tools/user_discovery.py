@@ -51,22 +51,27 @@ async def resolve_accessible_users(client: KimaiClient) -> list:
 
 
 async def own_records_note(client: KimaiClient, user_id: int | None) -> str | None:
-    """A note for a user=all result whose records all belong to ``user_id``.
+    """A note for a result whose records all belong to the caller (``user_id``).
 
-    Kimai answers user=all with the records the token may see: its own
-    without view_other_timesheet, its own and its teams' without
-    view_all_data. When every record is the caller's, other users' records
-    may be hidden rather than absent. The lookup only feeds this note, so a
-    failure skips the note instead of failing the result.
+    Kimai returns only the records the token may see: its own without
+    view_other_timesheet (any user filter is then ignored), its own and those
+    of the teams it leads without view_all_data. When every record is the
+    caller's, other users' records may be hidden rather than absent. The
+    lookup only feeds this note, so any failure skips the note instead of
+    failing the result; a 401 (token gone) propagates, as everywhere.
     """
     try:
         me = await client.get_current_user()
-    except KimaiAPIError:
+    except KimaiAPIError as e:
+        if e.status_code == 401:
+            raise
+        return None
+    except Exception:  # noqa: BLE001 - a non-JSON or unexpected body only drops the note
         return None
     if user_id != me.id:
         return None
     return (
         "Note: every record returned is your own. Kimai returns only the records this token may see "
-        "(its own without view_other_timesheet; its own and its teams' without view_all_data), so other "
-        "users' records may be missing rather than absent."
+        "(its own without view_other_timesheet; its own and those of teams it leads without "
+        "view_all_data), so other users' records may be hidden rather than absent."
     )

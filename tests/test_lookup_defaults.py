@@ -346,3 +346,64 @@ async def test_a_401_while_listing_users_is_not_taken_for_a_refusal():
 
     with pytest.raises(KimaiAPIError):
         await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD})
+
+
+@pytest.mark.asyncio
+async def test_a_team_analysis_of_only_the_callers_records_is_noted():
+    """Kimai ignores users[] without view_other_timesheet; a caller who is in the
+    team passes the team filter and would appear as the whole team."""
+    client = _client()  # records of user 1, the caller
+    client.get_team.return_value = Team(id=3, name="Web", members=[
+        TeamMember(user=User(id=1, username="me", enabled=True)),
+        TeamMember(user=User(id=5, username="ana", enabled=True)),
+    ])
+
+    text = (await dispatch_tool(client, "analyze_project_team", {
+        "project_id": 7, "user_scope": "team", "team": 3, **_PERIOD,
+    }))[0].text
+
+    assert "every record returned is your own" in text
+
+
+@pytest.mark.asyncio
+async def test_an_empty_specific_user_is_refused():
+    from kimai_mcp.tools.errors import ToolError
+
+    with pytest.raises(ToolError, match="must provide a 'user'"):
+        await dispatch_tool(_client(), "analyze_project_team", {
+            "project_id": 7, "user_scope": "specific", "user": "", **_PERIOD,
+        })
+
+
+@pytest.mark.asyncio
+async def test_a_non_json_answer_to_the_own_records_lookup_only_drops_the_note():
+    import json
+
+    client = _client()
+    client.get_current_user.side_effect = json.JSONDecodeError("Expecting value", "<html>", 0)
+
+    text = (await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD}))[0].text
+
+    assert "Project Team Analysis" in text
+
+
+@pytest.mark.asyncio
+async def test_a_failing_user_list_only_drops_the_names():
+    client = _client()
+    client.get_users.side_effect = KimaiAPIError("Service Unavailable", 503)
+
+    text = (await dispatch_tool(client, "analyze_project_team", {"project_id": 7, **_PERIOD}))[0].text
+
+    assert "Project Team Analysis" in text
+    assert "User names are not shown" in text
+
+
+@pytest.mark.asyncio
+async def test_a_401_while_loading_the_team_propagates():
+    client = _client()
+    client.get_team.side_effect = KimaiAPIError("Unauthorized", 401)
+
+    with pytest.raises(KimaiAPIError):
+        await dispatch_tool(client, "analyze_project_team", {
+            "project_id": 7, "user_scope": "team", "team": 3, **_PERIOD,
+        })

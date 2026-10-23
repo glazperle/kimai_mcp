@@ -348,20 +348,26 @@ def _filter_by_meta(timesheets: list, name: str, wanted: str | None) -> tuple[li
     and counted in the note, when it may match: for an empty search, and when
     Kimai's term asked for this value or for "any value". It is left out, and
     counted, when Kimai could only be asked whether *some* value is stored
-    because this value cannot be expressed in its term syntax.
+    because this value cannot be expressed in its term syntax. When the name
+    itself cannot be a term (whitespace or ':'), Kimai was not asked at all:
+    only records that show the field are matched, and the note says so
+    instead of counting every other record in the period.
     """
     term = _meta_search_term(name, wanted)
     any_value = term == f"{name}:*"
-    kept, unchecked, left_out = [], 0, 0
+    name_searchable = _meta_search_term(name, None) is not None
+    kept, unchecked, left_out, unsearched = [], 0, 0, 0
     for ts in timesheets:
         actual = _meta_value(ts.meta_fields, name)
         if actual is None:
             if wanted == "" or (term is not None and (wanted is None or not any_value)):
                 kept.append(ts)
                 unchecked += 1
+            elif not name_searchable:
+                unsearched += 1
             else:
-                # Kimai could not be asked for this value (fallback name:*, or
-                # a name its term syntax cannot carry), so nothing is known.
+                # Kimai could only be asked whether some value is stored
+                # (fallback name:*), so nothing is known about this one.
                 left_out += 1
         elif (actual != "") if wanted is None else (actual.casefold() == wanted.casefold()):
             kept.append(ts)
@@ -379,6 +385,9 @@ def _filter_by_meta(timesheets: list, name: str, wanted: str | None) -> tuple[li
     if left_out:
         notes.append(f"{left_out} record(s) with a hidden '{name}' were left out: their value cannot be checked, "
                      "and Kimai's search cannot express this one.")
+    if unsearched:
+        notes.append(f"Kimai's search cannot address a meta field named '{name}' (whitespace or ':'), so only "
+                     "records that show the field were checked; is this the field's internal name?")
     return kept, "".join(f"Note: {n}\n\n" for n in notes)
 
 
@@ -552,16 +561,18 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
         else {int(user_filter)} if user_scope == "specific" and str(user_filter).isdigit()
         else None
     )
-    if requested_users is not None:
-        foreign = sorted({ts.user for ts in fetched if ts.user is not None} - requested_users)
-        if foreign:
-            result += (
-                f"Warning: Kimai returned records of user(s) {', '.join(map(str, foreign))}, which were not "
-                "requested. It does so when the token lacks view_other_timesheet or the requested user IDs "
-                "do not exist: it then ignores the user filter and returns the caller's own records.\n\n"
-            )
-    elif user_scope == "all" and fetched and len({ts.user for ts in fetched}) == 1:
-        note = await own_records_note(client, fetched[0].user)
+    returned_users = {ts.user for ts in fetched if ts.user is not None}
+    foreign = sorted(returned_users - requested_users) if requested_users is not None else []
+    if foreign:
+        result += (
+            f"Warning: Kimai returned records of user(s) {', '.join(map(str, foreign))}, which were not "
+            "requested. It does so when the token lacks view_other_timesheet or the requested user IDs "
+            "do not exist: it then ignores the user filter and returns the caller's own records.\n\n"
+        )
+    elif len(returned_users) == 1 and (user_scope == "all" or len(requested_users or ()) > 1):
+        # Only one user's records for 'all', or for several requested users of
+        # whom the caller is one: possibly only the caller's, the rest hidden.
+        note = await own_records_note(client, next(iter(returned_users)))
         if note:
             result += note + "\n\n"
 
@@ -583,7 +594,8 @@ async def _handle_timesheet_list(client: KimaiClient, filters: dict) -> list[Tex
                 f"{MAX_STATS_RESULTS}); narrow the filter, e.g. a shorter period.\n\n"
             )
         else:
-            result += f"There may be more records: use 'page' {requested_page + 1} for the next ones.\n\n"
+            # last_page: the client may have paged on by itself (auto-pagination).
+            result += f"There may be more records: use 'page' {(last_page or requested_page) + 1} for the next ones.\n\n"
     
     # Include user list if requested
     if filters.get("include_user_list"):
