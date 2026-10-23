@@ -212,7 +212,7 @@ async def test_timer_recent_rejects_an_offset(value):
     client = AsyncMock(spec=KimaiClient)
     with pytest.raises(ToolError, match="without an offset"):
         await ts.handle_timer(client, action="recent", begin=value)
-    client.get_timesheets.assert_not_awaited()
+    client.get_recent_timesheets.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ from .models import (
     CustomerExtended,
     CustomerFilter,
     Invoice,
+    InvoiceEditForm,
     InvoiceFilter,
     MetaFieldForm,
     Plugin,
@@ -35,6 +36,7 @@ from .models import (
     PublicHolidayFilter,
     Rate,
     RateForm,
+    SortOrder,
     TagEditForm,
     TagEntity,
     TagFilter,
@@ -49,7 +51,7 @@ from .models import (
     UserCreateForm,
     UserEditForm,
     UserEntity,
-    UserFilter,
+    UserOrderBy,
     Version,
 )
 
@@ -273,23 +275,36 @@ class KimaiClient:
 
     # User endpoints
     
-    async def get_current_user(self) -> User:
-        """Get current authenticated user."""
+    async def get_current_user(self) -> UserEntity:
+        """Get current authenticated user (``UserEntity``: roles, teams, preferences)."""
         data = await self._request("GET", "/users/me")
-        return User(**data)
-    
-    async def get_users(self, visible: int = 1, term: str | None = None, full: bool = False) -> list[User]:
+        return UserEntity(**data)
+
+    async def get_users(
+        self,
+        visible: int = 1,
+        term: str | None = None,
+        full: bool = False,
+        order_by: UserOrderBy | None = None,
+        order: SortOrder | None = None,
+    ) -> list[User]:
         """Get list of users.
-        
+
         Args:
             visible: 1=visible, 2=hidden, 3=all
             term: Search term
             full: Whether to fetch full objects including subresources (default: False for performance)
+            order_by: id, username, alias or email (Kimai's default: username)
+            order: ASC or DESC
         """
         params = {"visible": visible, "full": "true" if full else "false"}
         if term:
             params["term"] = term
-        
+        if order_by:
+            params["orderBy"] = order_by
+        if order:
+            params["order"] = order
+
         data = await self._request("GET", "/users", params=params)
         return [User(**item) for item in data]
     
@@ -298,7 +313,8 @@ class KimaiClient:
     async def get_timesheets(
         self,
         filters: TimesheetFilter | None = None,
-        max_results: int | None = None
+        max_results: int | None = None,
+        fetch_all: bool = False,
     ) -> tuple[list[TimesheetEntity], bool, int | None]:
         """Get list of timesheets.
 
@@ -306,6 +322,8 @@ class KimaiClient:
             filters: Timesheet filters
             max_results: Optional cap for auto-pagination. Fetching stops once
                 this many records have been collected (fetched_all is False then).
+            fetch_all: Page through everything in pages of ``filters.size``
+                (up to Kimai's 500), whatever the heuristics below decide.
 
         Returns:
             * List of timesheets and a flag indicating if there are more results to fetch
@@ -313,7 +331,7 @@ class KimaiClient:
             * The last page fetched
         """
         params = {}
-        should_paginate_all = False
+        should_paginate_all = fetch_all
         
         if filters:
             params = filters.model_dump(exclude_none=True, by_alias=True)
@@ -338,10 +356,10 @@ class KimaiClient:
             manual_pagination = filters.page is not None
             large_size = filters.size is not None and filters.size > 100
             
-            should_paginate_all = (
-                (has_time_filter or has_entity_filter) and 
-                not manual_pagination and 
-                not large_size
+            should_paginate_all = fetch_all or (
+                (has_time_filter or has_entity_filter)
+                and not manual_pagination
+                and not large_size
             )
             
             if filters.begin:
@@ -457,7 +475,7 @@ class KimaiClient:
         """
         params = {"size": size}
         if begin:
-            params["begin"] = begin.isoformat()
+            params["begin"] = begin.replace(microsecond=0).isoformat()
 
         data = await self._request("GET", "/timesheets/recent", params=params)
         return [TimesheetExpanded(**item) for item in data]
@@ -950,14 +968,6 @@ class KimaiClient:
     
     # Tag endpoints
     
-    async def get_tags(self, filters: TagFilter | None = None) -> list[str]:
-        """Get list of tags as strings (deprecated endpoint)."""
-        params = {}
-        if filters and filters.name:
-            params["name"] = filters.name
-        
-        return await self._request("GET", "/tags", params=params)
-    
     async def get_tags_full(self, filters: TagFilter | None = None) -> list[TagEntity]:
         """Get list of tag entities."""
         params = {}
@@ -978,19 +988,6 @@ class KimaiClient:
         await self._request("DELETE", f"/tags/{tag_id}")
     
     # Extended User endpoints
-    
-    async def get_users_extended(self, filters: UserFilter | None = None) -> list[UserEntity]:
-        """Get list of users with extended information.
-        
-        Args:
-            filters: User filters
-        """
-        params = {}
-        if filters:
-            params = filters.model_dump(exclude_none=True, by_alias=True)
-        
-        data = await self._request("GET", "/users", params=params)
-        return [UserEntity(**item) for item in data]
     
     async def get_user_extended(self, user_id: int) -> UserEntity:
         """Get extended user information by ID."""
@@ -1106,6 +1103,12 @@ class KimaiClient:
     async def get_invoice(self, invoice_id: int) -> Invoice:
         """Get a specific invoice by ID."""
         data = await self._request("GET", f"/invoices/{invoice_id}")
+        return Invoice(**data)
+
+    async def update_invoice(self, invoice_id: int, invoice: InvoiceEditForm) -> Invoice:
+        """Update status, payment date or comment of an invoice (Kimai 2.68+, permission edit_invoice)."""
+        payload = invoice.model_dump(exclude_none=True, by_alias=True)
+        data = await self._request("PATCH", f"/invoices/{invoice_id}", json=payload)
         return Invoice(**data)
 
     async def delete_invoice(self, invoice_id: int) -> None:

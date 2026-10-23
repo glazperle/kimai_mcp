@@ -396,6 +396,20 @@ class TimesheetEditForm(KimaiModel):
     break_duration: BreakDuration = Field(None, alias="break")  # see _normalize_duration
 
 
+# Values Kimai's API accepts for `order` / `orderBy` (`Rest\QueryParam(...,
+# requirements: 'a|b|c', strict: true)` in src/API/*Controller.php). Anything else
+# is a 400, and the UI-only sort keys of the *Query classes (orderNumber,
+# project_locked_until, ...) are not accepted by the API at all.
+# scripts/audit_api_models.py compares these with Kimai's sources.
+SortOrder = Literal["ASC", "DESC"]
+TimesheetOrderBy = Literal["id", "begin", "end", "rate"]
+ProjectOrderBy = Literal["id", "name", "customer"]
+ActivityOrderBy = Literal["id", "name", "project"]
+CustomerOrderBy = Literal["id", "name"]
+UserOrderBy = Literal["id", "username", "alias", "email"]
+InvoiceStatus = Literal["pending", "paid", "canceled", "new"]
+
+
 class TimesheetFilter(KimaiModel):
     """Filters for timesheet queries."""
     user: str | None = None  # User ID or "all"
@@ -409,8 +423,8 @@ class TimesheetFilter(KimaiModel):
     page: int | None = None
     size: int | None = None
     tags: list[str] | None = None
-    order_by: str | None = Field(None, alias="orderBy")  # id, begin, end, rate
-    order: str | None = None  # ASC, DESC
+    order_by: TimesheetOrderBy | None = Field(None, alias="orderBy")
+    order: SortOrder | None = None
     begin: str | datetime | None = None  # HTML5 date format (YYYY-MM-DD)
     end: str | datetime | None = None  # HTML5 date format (YYYY-MM-DD)
     exported: int | None = None  # 0=not exported, 1=exported
@@ -430,9 +444,18 @@ class ProjectFilter(KimaiModel):
     end: str | None = None  # HTML5 date format (YYYY-MM-DD)
     ignore_dates: str | None = Field(None, alias="ignoreDates")
     global_activities: str | None = Field(None, alias="globalActivities")  # 0|1
-    order: str | None = None  # ASC, DESC
-    order_by: str | None = Field(None, alias="orderBy")  # id, name, customer, orderNumber, orderDate, project_start, project_end, project_locked_until (2.66+), budget, timeBudget, visible
+    order: SortOrder | None = None
+    order_by: ProjectOrderBy | None = Field(None, alias="orderBy")
     term: str | None = None
+
+    @classmethod
+    def everything(cls, **kwargs: Any) -> "ProjectFilter":
+        """Visible and hidden projects of any period.
+
+        Kimai's listing returns only visible projects running *today* unless
+        told otherwise, which a lookup by name or ID must not inherit.
+        """
+        return cls(visible=3, ignore_dates="1", **kwargs)
 
 
 class ActivityFilter(KimaiModel):
@@ -441,16 +464,16 @@ class ActivityFilter(KimaiModel):
     projects: list[int] | None = None
     visible: int | None = 1  # 1=visible, 2=hidden, 3=all
     globals: str | None = None  # 0|1
-    order_by: str | None = Field(None, alias="orderBy")  # id, name, project
-    order: str | None = None  # ASC, DESC
+    order_by: ActivityOrderBy | None = Field(None, alias="orderBy")
+    order: SortOrder | None = None
     term: str | None = None
 
 
 class CustomerFilter(KimaiModel):
     """Filters for customer queries."""
     visible: int | None = 1  # 1=visible, 2=hidden, 3=both
-    order: str | None = None  # ASC, DESC
-    order_by: str | None = Field(None, alias="orderBy")  # id, name
+    order: SortOrder | None = None
+    order_by: CustomerOrderBy | None = Field(None, alias="orderBy")
     term: str | None = None
     # Kimai 2.62+: 1 returns the full detail set (needs the 'details_customer'
     # permission; Kimai silently falls back to the short form without it).
@@ -515,10 +538,15 @@ class TeamMember(KimaiModel):
 
 
 class TeamEditForm(KimaiModel):
-    """Form for creating/editing teams."""
-    name: str
+    """Form for creating/editing teams.
+
+    ``name`` and ``members`` are needed to create a team (the handler checks
+    that); on update Kimai keeps what is not sent, and ``members`` replaces the
+    whole member list.
+    """
+    name: str | None = None
     color: str | None = None
-    members: list[dict[str, Any]]  # List of {user: int, teamlead: bool}
+    members: list[dict[str, Any]] | None = None  # List of {user: int, teamlead: bool}
 
 
 class Team(KimaiModel):
@@ -561,6 +589,16 @@ class TagFilter(KimaiModel):
 
 # Invoice models
 
+def _date_part(value: Any) -> Any:
+    """Kimai < 2.68 serializes ``paymentDate`` as a date-time, 2.68+ as ``Y-m-d``."""
+    if isinstance(value, str) and len(value) > 10 and value[10] == "T":
+        return value[:10]
+    return value
+
+
+PaymentDate = Annotated[date | None, BeforeValidator(_date_part)]
+
+
 class Invoice(KimaiModel):
     """Invoice model."""
     id: int | None = None
@@ -575,10 +613,20 @@ class Invoice(KimaiModel):
     due_days: int = Field(30, alias="dueDays")
     vat: float = 0.0
     status: str = "new"
-    payment_date: datetime | None = Field(None, alias="paymentDate")
+    payment_date: PaymentDate = Field(None, alias="paymentDate")
     meta_fields: list[dict[str, Any]] | None = Field(None, alias="metaFields")
     overdue: bool | None = None  # Whether the invoice is overdue
     invoice_filename: str | None = Field(None, alias="invoiceFilename")
+
+
+class InvoiceEditForm(KimaiModel):
+    """PATCH /api/invoices/{id} (Kimai 2.68+, ``InvoiceApiEditForm``).
+
+    Meta fields go through the ``meta`` tool (``/invoices/{id}/custom-fields``).
+    """
+    comment: str | None = None
+    status: InvoiceStatus | None = None
+    payment_date: str | None = Field(None, alias="paymentDate")  # YYYY-MM-DD
 
 
 class InvoiceFilter(KimaiModel):
@@ -586,7 +634,7 @@ class InvoiceFilter(KimaiModel):
     begin: datetime | None = None
     end: datetime | None = None
     customers: list[int] | None = None
-    status: list[str] | None = None  # pending, paid, canceled, new
+    status: list[InvoiceStatus] | None = None
     page: int | None = None
     size: int | None = None
 
@@ -634,26 +682,21 @@ class PublicHolidayFilter(KimaiModel):
 
 # User extended models
 
-class UserEntity(KimaiModel):
-    """Extended user entity model (serializer group ``User_Entity``)."""
-    id: int
-    username: str
-    alias: str | None = None
-    title: str | None = None
-    avatar: str | None = None
-    enabled: bool = False
+class UserEntity(User):
+    """A user with the ``User_Entity`` group: ``GET /users/{id}``, ``/users/me``,
+    create and update.
+
+    A subclass of :class:`User` because the payload is a superset, so every
+    caller that only needs ``id``/``username`` keeps working when it gets one.
+    ``/users/me`` used to be parsed as plain ``User``, which silently dropped
+    roles, teams, the supervisor and the preferences (work contract included).
+    """
     roles: list[str] = []
     supervisor: User | None = None
-    color: str | None = None
-    locale: str | None = None
-    timezone: str | None = None
-    language: str | None = None
     teams: list[Team] = []
+    # Visible preferences as {name, value}; Kimai hides the internal ones.
     preferences: list[dict[str, Any]] | None = None
-    email: str | None = None
-    account_number: str | None = Field(None, alias="accountNumber")
-    system_account: bool | None = Field(None, alias="systemAccount")
-    initials: str | None = None
+    # {team: {id, name, color}, teamlead: bool} per team
     memberships: list[dict[str, Any]] | None = None
 
 
@@ -673,16 +716,22 @@ class UserPreference(KimaiModel):
 
 
 class UserEditForm(KimaiModel):
-    """Form for updating users."""
+    """Form for updating users (PATCH: Kimai keeps every field not sent).
+
+    Nothing is required: ``language``/``locale``/``timezone`` are only on
+    Kimai's form when the token holds the ``preferences`` permission for that
+    user, so requiring them made a plain title change impossible for a token
+    without it, and needlessly verbose for every other one.
+    """
     alias: str | None = None
     title: str | None = None
     account_number: str | None = Field(None, alias="accountNumber")
     avatar: str | None = None
     color: str | None = None
-    email: str
-    language: str
-    locale: str
-    timezone: str
+    email: str | None = None
+    language: str | None = None
+    locale: str | None = None
+    timezone: str | None = None
     supervisor: int | None = None
     roles: list[str] | None = None
     enabled: bool | None = None
@@ -714,8 +763,8 @@ class UserCreateForm(KimaiModel):
 class UserFilter(KimaiModel):
     """Filters for user queries."""
     visible: int | None = 1
-    order_by: str | None = Field(None, alias="orderBy")
-    order: str | None = None
+    order_by: UserOrderBy | None = Field(None, alias="orderBy")
+    order: SortOrder | None = None
     term: str | None = None
     full: str | None = None
 

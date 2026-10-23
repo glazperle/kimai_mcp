@@ -1,6 +1,8 @@
 """Consolidated Entity Manager tool for all CRUD operations."""
 import builtins
 import logging
+from types import UnionType
+from typing import Annotated, Literal, Union, get_args, get_origin
 
 from mcp.types import TextContent, Tool
 
@@ -8,20 +10,29 @@ from ..client import KimaiAPIError, KimaiClient
 from ..models import (
     ActivityEditForm,
     ActivityFilter,
+    ActivityOrderBy,
     Customer,
     CustomerEditForm,
     CustomerFilter,
+    CustomerOrderBy,
+    InvoiceEditForm,
     InvoiceFilter,
+    InvoiceStatus,
     ProjectEditForm,
     ProjectFilter,
+    ProjectOrderBy,
     PublicHolidayFilter,
+    SortOrder,
     TagEditForm,
     TagFilter,
     TeamEditForm,
     UserCreateForm,
     UserEditForm,
+    UserFilter,
+    UserOrderBy,
 )
 from .batch_utils import execute_batch, format_batch_result
+from .dates import parse_local_datetime
 from .errors import ToolError
 from .user_discovery import resolve_accessible_users
 
@@ -69,6 +80,105 @@ def _budget_schema() -> dict:
     }
 
 
+def _order_by_description() -> str:
+    """The sort fields Kimai's API takes, per type, from the filter models.
+
+    The API's ``orderBy`` is a strict alternation (``Rest\\QueryParam``); the
+    UI-only sort keys of the *Query classes answer 400. Built from the same
+    Literals the audit script checks against Kimai, so the text cannot drift.
+    """
+    per_type = {
+        "project": ProjectOrderBy,
+        "activity": ActivityOrderBy,
+        "customer": CustomerOrderBy,
+        "user": UserOrderBy,
+    }
+    values = "; ".join(f"{t}: {', '.join(get_args(v))}" for t, v in per_type.items())
+    return f"Sort field. Allowed per type - {values}."
+
+
+def _json_type(annotation) -> dict:
+    """JSON schema for a form field annotation (Optional and Annotated unwrapped)."""
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _json_type(get_args(annotation)[0])
+    if origin in (Union, UnionType):
+        return _json_type(next(a for a in get_args(annotation) if a is not type(None)))
+    if origin is Literal:
+        return {"type": "string", "enum": list(get_args(annotation))}
+    if origin is list:
+        return {"type": "array", "items": _json_type(get_args(annotation)[0])}
+    simple = {bool: "boolean", int: "integer", float: "number", str: "string"}
+    return {"type": simple[annotation]} if annotation in simple else {"type": "object"}
+
+
+def _form_data_schema(form, description: str, notes: dict | None = None, override: dict | None = None,
+                      required: bool = False) -> dict:
+    """The closed ``data`` object of a create/update branch, derived from its form model.
+
+    Derived rather than written by hand, so the schema cannot lack a field the
+    request model sends, or offer one it drops. ``notes`` adds descriptions,
+    ``override`` replaces a field's schema; ``required`` takes the model's
+    required fields over.
+    """
+    properties = {}
+    for name, info in form.model_fields.items():
+        alias = info.alias or name
+        prop = dict((override or {}).get(alias) or _json_type(info.annotation))
+        if notes and alias in notes:
+            prop["description"] = notes[alias]
+        properties[alias] = prop
+    schema = {"type": "object", "description": description, "properties": properties, "additionalProperties": False}
+    if required:
+        schema["required"] = [info.alias or name for name, info in form.model_fields.items() if info.is_required()]
+    return schema
+
+
+def _data_branch(entity: str, actions: list[str], data: dict) -> dict:
+    return {
+        "if": {"properties": {"type": {"const": entity}, "action": {"enum": actions}}},
+        "then": {"properties": {"data": data}, "required": ["data"]},
+    }
+
+
+def _user_branches() -> list[dict]:
+    # One line instead of a note per field: every word here is sent with each request.
+    gated = (
+        "Fields to change; Kimai keeps the rest. Permission-gated: language, locale, timezone "
+        "(preferences); supervisor; roles, systemAccount, requiresPasswordReset (roles; 2.68+); "
+        "enabled (not on yourself); avatar (only if the instance enables avatars)."
+    )
+    return [
+        _data_branch("user", ["create"], _form_data_schema(UserCreateForm, "Fields of a new user.", required=True)),
+        _data_branch("user", ["update"], _form_data_schema(UserEditForm, gated)),
+    ]
+
+
+def _team_tag_invoice_branches() -> list[dict]:
+    members = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {"user": {"type": "integer"}, "teamlead": {"type": "boolean"}},
+            "required": ["user"],
+        },
+        "description": "Replaces the member list; to change one member use team_access.",
+    }
+    return [
+        _data_branch("team", ["create", "update"], _form_data_schema(
+            TeamEditForm, "Create needs name and members.", override={"members": members})),
+        _data_branch("tag", ["create"], _form_data_schema(TagEditForm, "Tag fields.")),
+        _data_branch("invoice", ["update"], _form_data_schema(
+            InvoiceEditForm, "Kimai 2.68+, permission edit_invoice. Meta fields: meta tool.",
+            {"paymentDate": "YYYY-MM-DD"})),
+    ]
+
+
+def _shown(value) -> str:
+    """A meta field or preference value as printed: '(empty)' for null and ''."""
+    return "(empty)" if value is None or value == "" else str(value)
+
+
 def _meta_fields_schema(entity: str) -> dict:
     return {
         "type": "array",
@@ -113,7 +223,7 @@ COMMON TASKS:
 - Lock timesheet month: action=lock_month, type=user, id=USER_ID, month="2024-12-01"
 - Create project: action=create, type=project, data={name:"...", customer:ID}
 - Lock a project's past: action=update, type=project, id=ID, data={lockedUntil:"2026-08-31T00:00:00"} (Kimai 2.66+)
-- Invoices: list/get/delete (delete needs Kimai 2.66+ and delete_invoice); create/update are not available via the API
+- Invoices: list/get; update status, payment date, comment (Kimai 2.68+, edit_invoice); delete (2.66+, delete_invoice). Invoices are created in Kimai's UI
 
 USER PREFERENCES (action=set_preferences, type=user only):
   holidays (vacation days), hours_per_week, work_contract_type, work_monday..work_sunday""",
@@ -147,31 +257,41 @@ USER PREFERENCES (action=set_preferences, type=user only):
                 },
                 "filters": {
                     "type": "object",
-                    "description": "Filters for list action (e.g., visible, term, customer, project)",
+                    "description": "Filters for list action (e.g., visible, term, customer, project). A filter that does not apply to the type is ignored, and the result says so.",
                     "properties": {
                         "visible": {"type": "integer", "enum": [1, 2, 3], "description": "1=visible, 2=hidden, 3=both"},
                         "term": {"type": "string",
                                  "description": "Search exact term. For entity types other then invoice and holiday you can just list all if you don't find it on first try."},
                         "customer": {"type": "integer", "description": "Customer ID filter (for projects)"},
                         "project": {"type": "integer", "description": "Project ID filter (for activities)"},
+                        "projects": {"type": "array", "items": {"type": "integer"},
+                                     "description": "Several project IDs (for activities)"},
                         "globals": {"type": "string", "enum": ["0", "1"], "description": "Global activities filter"},
-                        "page": {"type": "integer", "description": "Page number"},
-                        "size": {"type": "integer", "description": "Page size"},
-                        "order_by": {"type": "string", "description": "Sort field. Projects: id, name, customer, orderNumber, orderDate, project_start, project_end, project_locked_until (Kimai 2.66+), budget, timeBudget, visible."},
-                        "order": {"type": "string", "enum": ["ASC", "DESC"], "description": "Sort order"},
+                        "global_activities": {"type": "string", "enum": ["0", "1"],
+                                              "description": "type=project: only projects that do (1) or do not (0) allow global activities"},
+                        "ignore_dates": {
+                            "type": "boolean",
+                            "description": "type=project: include finished and future projects (Kimai's default: running today only)."
+                        },
+                        "name": {"type": "string", "description": "type=tag: tag name filter (term works too)"},
+                        "group": {"type": "integer", "description": "type=holiday: public holiday group ID"},
+                        "page": {"type": "integer", "minimum": 1, "description": "Page number"},
+                        "size": {"type": "integer", "minimum": 1, "description": "Page size"},
+                        "order_by": {"type": "string", "description": _order_by_description()},
+                        "order": {"type": "string", "enum": list(get_args(SortOrder)), "description": "Sort order"},
                         "begin": {
                             "type": "string",
                             "format": "date-time",
-                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00) Only records after this date will be included."
+                            "description": "Start date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T09:30:00) Only records after this date will be included. type=project: projects running at any time between begin and end."
                         },
                         "end": {
                             "type": "string",
                             "format": "date-time",
-                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00). Only records before this date will be included."
+                            "description": "End date and time filter (format: YYYY-MM-DDThh:mm:ss, e.g., 2023-10-27T17:00:00). Only records before this date will be included. type=project: see begin."
                         },
                         "customers": {"type": "array", "items": {"type": "integer"},
-                                      "description": "Customer IDs (for invoices)"},
-                        "status": {"type": "array", "items": {"type": "string"},
+                                      "description": "Customer IDs (for projects and invoices)"},
+                        "status": {"type": "array", "items": {"type": "string", "enum": list(get_args(InvoiceStatus))},
                                    "description": "Status filter (for invoices)"},
                         "full": {
                             "type": "boolean",
@@ -356,6 +476,10 @@ OTHER:
                                         "maxLength": 100,
                                         "format": "uri",
                                         "description": "Customer's website URL"
+                                    },
+                                    "color": {
+                                        "type": "string",
+                                        "description": "The assigned display color for the customer in HTML hex format (e.g., #dd1d00). If left empty, a color might be auto-calculated."
                                     },
                                     "timezone": {
                                         "type": "string",
@@ -549,6 +673,8 @@ OTHER:
                         "required": ["data"]
                     },
                 },
+                *_user_branches(),
+                *_team_tag_invoice_branches(),
                 {
                     "if": {
                         "properties": {
@@ -605,7 +731,16 @@ async def handle_entity(client: KimaiClient, **params) -> list[TextContent]:
 
     # Execute action - errors propagate to the central handler in server.py
     if action == "list":
-        return await handler.list(filters)
+        content = await handler.list(filters)
+        # The filters object is shared by all types; say which keys had no
+        # effect instead of returning an unfiltered list as if it were filtered.
+        ignored = sorted(set(filters) - handler.list_filters)
+        if ignored:
+            content.append(TextContent(
+                type="text",
+                text=f"Note: ignored filter(s) that do not apply to type={entity_type}: {', '.join(ignored)}",
+            ))
+        return content
     elif action == "get":
         if not entity_id:
             raise ToolError("Error: 'id' parameter is required for get action")
@@ -714,6 +849,9 @@ async def _handle_batch_delete(handler: 'BaseEntityHandler', entity_type: str, i
 class BaseEntityHandler:
     """Base class for entity-specific handlers."""
 
+    # Keys of the shared `filters` object that this type's list action passes on.
+    list_filters: frozenset[str] = frozenset()
+
     def __init__(self, client: KimaiClient):
         self.client = client
 
@@ -749,6 +887,19 @@ class BaseEntityHandler:
         names = [t.name or f"ID {t.id}" for t in teams]
         return f"Teams: {', '.join(names)}\n"
 
+    @staticmethod
+    def _serialize_meta_fields(entity) -> str:
+        """Render custom fields; items are MetaField models or plain dicts."""
+        meta_fields = getattr(entity, 'meta_fields', None)
+        if not meta_fields:
+            return ""
+        result = "Meta Fields:\n"
+        for mf in meta_fields:
+            name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
+            value = mf.value if hasattr(mf, 'value') else mf.get('value')
+            result += f"  - {name}: {_shown(value)}\n"
+        return result
+
     async def list(self, filters: dict) -> list[TextContent]:
         raise NotImplementedError
 
@@ -767,6 +918,11 @@ class BaseEntityHandler:
 
 class ProjectEntityHandler(BaseEntityHandler):
     """Handler for project operations."""
+
+    list_filters = frozenset({
+        "customer", "customers", "term", "visible", "order", "order_by",
+        "begin", "end", "ignore_dates", "global_activities",
+    })
 
     def serialize_project(self, project) -> str:
         result = f"Project: {project.name} (ID: {project.id})\n"
@@ -804,24 +960,35 @@ class ProjectEntityHandler(BaseEntityHandler):
 
         if getattr(project, 'comment', None):
             result += f"Comment: {project.comment}\n"
-        if getattr(project, 'meta_fields', None):
-            result += "Meta Fields:\n"
-            for mf in project.meta_fields:
-                name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
-                value = mf.value if hasattr(mf, 'value') else mf.get('value', '')
-                result += f"  - {name}: {value}\n"
+        result += self._serialize_meta_fields(project)
         result += "\n"
         return result
 
     async def list(self, filters: dict) -> list[TextContent]:
+        # begin/end select the projects running at any time in that period.
+        # Kimai's own start/end can't say that: each means "running on that
+        # day" and both together are ANDed, so a project that started or
+        # ended inside the period would be missing. Ask for all dates and
+        # compare each project's own start/end here instead.
+        first = parse_local_datetime(filters["begin"], "begin").date() if filters.get("begin") else None
+        last = parse_local_datetime(filters["end"], "end").date() if filters.get("end") else None
         project_filter = ProjectFilter(
             customer=filters.get("customer"),
+            customers=filters.get("customers"),
             term=filters.get("term"),
             visible=filters.get("visible", 1),
             order=filters.get("order"),
-            order_by=filters.get("order_by")
+            order_by=filters.get("order_by"),
+            ignore_dates="1" if filters.get("ignore_dates") or first or last else None,
+            global_activities=filters.get("global_activities"),
         )
         projects = await self.client.get_projects(project_filter)
+        if first or last:
+            projects = [
+                p for p in projects
+                if (last is None or p.start is None or p.start.date() <= last)
+                and (first is None or p.end is None or p.end.date() >= first)
+            ]
 
         result = f"Found {len(projects)} projects\n\n"
         for project in projects:
@@ -867,33 +1034,35 @@ class ProjectEntityHandler(BaseEntityHandler):
 class ActivityEntityHandler(BaseEntityHandler):
     """Handler for activity operations."""
 
+    list_filters = frozenset({"project", "projects", "visible", "globals", "term", "order", "order_by"})
+
     def serialize_activity(self, activity) -> str:
         result = f"Activity: {activity.name} (ID: {activity.id})\n"
         project_label = getattr(activity, 'parent_title', None)
         if project_label:
             result += f"Project: {project_label} (ID: {activity.project})\n"
+        elif activity.project:
+            result += f"Project ID: {activity.project}\n"
+        else:
+            result += "Project: none (global activity)\n"
         result += f"Status: {'Active' if activity.visible else 'Inactive'}\n"
         result += f"Billable: {'Yes' if activity.billable else 'No'}\n"
-        if hasattr(activity, 'global'):
-            result += f"Global: {'Yes' if getattr(activity, 'global', False) else 'No'}\n"
         if getattr(activity, 'number', None):
             result += f"Number: {activity.number}\n"
+        if getattr(activity, 'color', None):
+            result += f"Color: {activity.color}\n"
         result += self._serialize_budget(activity)
         result += self._serialize_teams(activity)
         if getattr(activity, 'comment', None):
             result += f"Comment: {activity.comment}\n"
-        if getattr(activity, 'meta_fields', None):
-            result += "Meta Fields:\n"
-            for mf in activity.meta_fields:
-                name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
-                value = mf.value if hasattr(mf, 'value') else mf.get('value', '')
-                result += f"  - {name}: {value}\n"
+        result += self._serialize_meta_fields(activity)
         result += "\n"
         return result
 
     async def list(self, filters: dict) -> list[TextContent]:
         activity_filter = ActivityFilter(
             project=filters.get("project"),
+            projects=filters.get("projects"),
             visible=filters.get("visible", 1),
             globals=filters.get("globals"),
             term=filters.get("term"),
@@ -938,6 +1107,8 @@ class ActivityEntityHandler(BaseEntityHandler):
 
 class CustomerEntityHandler(BaseEntityHandler):
     """Handler for customer operations."""
+
+    list_filters = frozenset({"visible", "term", "order", "order_by", "full"})
 
     def serialize_customer(self, customer: Customer) -> str:
         result = f"Customer: {customer.name} (ID: {customer.id})\n"
@@ -988,10 +1159,14 @@ class CustomerEntityHandler(BaseEntityHandler):
             if part
         )
         address_parts = [part for part in [*address_lines, city_line] if part]
+        legacy_address = getattr(customer, 'address', None)
         if address_parts:
             result += "Address: " + ", ".join(address_parts) + "\n"
-        elif getattr(customer, 'address', None):
-            result += f"Address: {customer.address}\n"
+            # Kimai stores the old single-line field separately, so both can be set.
+            if legacy_address:
+                result += f"Legacy Address: {legacy_address}\n"
+        elif legacy_address:
+            result += f"Address: {legacy_address}\n"
 
         # Invoicing / billing
         if getattr(customer, 'vat_id', None):
@@ -1005,12 +1180,7 @@ class CustomerEntityHandler(BaseEntityHandler):
 
         if getattr(customer, 'comment', None):
             result += f"Comment: {customer.comment}\n"
-        if getattr(customer, 'meta_fields', None):
-            result += "Meta Fields:\n"
-            for mf in customer.meta_fields:
-                name = mf.name if hasattr(mf, 'name') else mf.get('name', 'Unknown')
-                value = mf.value if hasattr(mf, 'value') else mf.get('value', '')
-                result += f"  - {name}: {value}\n"
+        result += self._serialize_meta_fields(customer)
         result += "\n"
 
         return result
@@ -1067,23 +1237,80 @@ class CustomerEntityHandler(BaseEntityHandler):
         return [TextContent(type="text", text=f"Deleted customer ID {id}")]
 
 
+def format_user(user) -> str:
+    """Render a ``User``; roles, supervisor, teams and preferences when it is a ``UserEntity``.
+
+    Shared by ``entity type=user`` and ``user_current``. ``initials`` is not
+    shown: Kimai derives it from the display name.
+    """
+    result = f"User: {user.username} (ID: {user.id})\n"
+    result += f"Name: {user.alias or 'Not set'}\n"
+    result += f"Title: {user.title or 'Not set'}\n"
+    result += f"Status: {'Active' if user.enabled else 'Inactive'}\n"
+    if user.system_account:
+        result += "System Account: Yes\n"
+    for label, value in (
+        ("Email", user.email),
+        ("Account Number", user.account_number),
+        ("Language", user.language),
+        ("Locale", user.locale),
+        ("Timezone", user.timezone),
+        ("Color", user.color),
+        ("Avatar", user.avatar),
+    ):
+        if value:
+            result += f"{label}: {value}\n"
+
+    roles = getattr(user, 'roles', None)
+    if roles:
+        result += f"Roles: {', '.join(roles)}\n"
+    supervisor = getattr(user, 'supervisor', None)
+    if supervisor:
+        result += f"Supervisor: {supervisor.alias or supervisor.username} (ID: {supervisor.id})\n"
+
+    # Memberships carry the team-lead flag; `teams` is the same set without it.
+    memberships = getattr(user, 'memberships', None)
+    teams = getattr(user, 'teams', None)
+    if memberships:
+        labels = []
+        for membership in memberships:
+            team = membership.get('team') or {}
+            lead = ", team lead" if membership.get('teamlead') else ""
+            labels.append(f"{team.get('name')} (ID: {team.get('id')}{lead})")
+        result += f"Teams: {', '.join(labels)}\n"
+    elif teams:
+        result += f"Teams: {', '.join(f'{t.name} (ID: {t.id})' for t in teams)}\n"
+
+    preferences = getattr(user, 'preferences', None)
+    if preferences:
+        result += "Preferences:\n"
+        for pref in preferences:
+            value = pref.get('value')
+            result += f"  - {pref.get('name')}: {_shown(value)}\n"
+    return result
+
+
 class UserEntityHandler(BaseEntityHandler):
     """Handler for user operations."""
 
+    list_filters = frozenset({"visible", "term", "order", "order_by"})
+
     def serialize_user(self, user) -> str:
-        result = f"User: {user.username} (ID: {user.id})\n"
-        result += f"Name: {user.alias or 'Not set'}\n"
-        result += f"Title: {user.title or 'Not set'}\n"
-        result += f"Status: {'Active' if user.enabled else 'Inactive'}\n"
-        if getattr(user, 'color', None):
-            result += f"Color: {user.color}\n"
-        result += "\n"
-        return result
+        return format_user(user) + "\n"
 
     async def list(self, filters: dict) -> list[TextContent]:
-        users = await self.client.get_users(
+        # Validated like the other types' filters, before Kimai answers 400.
+        user_filter = UserFilter(
             visible=filters.get("visible", 1),
-            term=filters.get("term")
+            term=filters.get("term"),
+            order_by=filters.get("order_by"),
+            order=filters.get("order"),
+        )
+        users = await self.client.get_users(
+            visible=user_filter.visible,
+            term=user_filter.term,
+            order_by=user_filter.order_by,
+            order=user_filter.order,
         )
 
         result = f"Found {len(users)} users\n\n"
@@ -1274,12 +1501,12 @@ class UserEntityHandler(BaseEntityHandler):
         result = f"Updated preferences for {user.username} (ID: {user.id})\n\n"
         result += "Updated preferences:\n"
         for pref in preferences:
-            result += f"  - {pref['name']}: {pref.get('value', '(empty)')}\n"
+            result += f"  - {pref['name']}: {_shown(pref.get('value'))}\n"
 
         if user.preferences:
             result += "\nAll current preferences:\n"
             for pref in user.preferences:
-                result += f"  - {pref.get('name')}: {pref.get('value', '(empty)')}\n"
+                result += f"  - {pref.get('name')}: {_shown(pref.get('value'))}\n"
 
         return [TextContent(type="text", text=result)]
 
@@ -1289,15 +1516,24 @@ class TeamEntityHandler(BaseEntityHandler):
 
     def serialize_team(self, team) -> str:
         result = f"Team: {team.name} (ID: {team.id})\n"
-        if hasattr(team, 'color') and team.color:
+        if team.color:
             result += f"Color: {team.color}\n"
-        if hasattr(team, 'members') and team.members:
+        if team.members:
             result += f"\nMembers ({len(team.members)}):\n"
             for member in team.members:
-                teamlead = " (Team Lead)" if getattr(member, 'teamlead', False) else ""
-                username = getattr(getattr(member, 'user', None), 'username', None) or getattr(member, 'username',
-                                                                                               'Unknown')
-                result += f"  - {username}{teamlead}\n"
+                teamlead = " (Team Lead)" if member.teamlead else ""
+                result += f"  - {member.user.username} (ID: {member.user.id}){teamlead}\n"
+        # What team_access grant/revoke changes. Kimai sends these on a single
+        # team only (Team_Entity), so a listing shows none of them.
+        for label, items in (
+            ("Customers", team.customers),
+            ("Projects", team.projects),
+            ("Activities", team.activities),
+        ):
+            if items:
+                result += f"\n{label} with access ({len(items)}):\n"
+                for item in items:
+                    result += f"  - {item.name} (ID: {item.id})\n"
         result += "\n"
         return result
 
@@ -1318,6 +1554,9 @@ class TeamEntityHandler(BaseEntityHandler):
         return [TextContent(type="text", text=result)]
 
     async def create(self, data: dict) -> builtins.list[TextContent]:
+        missing = [field for field in ("name", "members") if not data.get(field)]
+        if missing:
+            raise ToolError(f"Error: Missing required team fields: {', '.join(missing)}")
         form = TeamEditForm(**data)
         team = await self.client.create_team(form)
         return [TextContent(
@@ -1341,6 +1580,8 @@ class TeamEntityHandler(BaseEntityHandler):
 class TagEntityHandler(BaseEntityHandler):
     """Handler for tag operations."""
 
+    list_filters = frozenset({"name", "term"})
+
     def serialize_tag(self, tag) -> str:
         result = f"Tag: {tag.name} (ID: {tag.id})\n"
         visible_str = "Visible" if getattr(tag, 'visible', True) else "Hidden"
@@ -1352,7 +1593,10 @@ class TagEntityHandler(BaseEntityHandler):
 
     async def list(self, filters: dict) -> list[TextContent]:
         # Pass the name filter through to the API (server-side filtering)
-        tag_filter = TagFilter(name=filters["name"]) if filters.get("name") else None
+        if filters.get("name") and filters.get("term") and filters["name"] != filters["term"]:
+            raise ToolError("Error: tags are filtered by name only; pass either 'name' or 'term', not both")
+        name = filters.get("name") or filters.get("term")
+        tag_filter = TagFilter(name=name) if name else None
         tags = await self.client.get_tags_full(tag_filter)
 
         result = f"Found {len(tags)} tags\n\n"
@@ -1387,6 +1631,33 @@ class TagEntityHandler(BaseEntityHandler):
 class InvoiceEntityHandler(BaseEntityHandler):
     """Handler for invoice operations."""
 
+    list_filters = frozenset({"begin", "end", "customers", "status", "page", "size"})
+
+    def serialize_invoice(self, invoice) -> str:
+        result = f"Invoice: {invoice.invoice_number} (ID: {invoice.id})\n"
+        customer = invoice.customer
+        result += f"Customer: {customer.name} (ID: {customer.id})\n" if customer else "Customer: Unknown\n"
+        if invoice.user:
+            result += f"Created By: {invoice.user.alias or invoice.user.username} (ID: {invoice.user.id})\n"
+        result += f"Status: {invoice.status}\n"
+        if invoice.overdue is not None:
+            result += f"Overdue: {'Yes' if invoice.overdue else 'No'}\n"
+        currency = f" {invoice.currency}" if invoice.currency else ""
+        result += f"Total: {invoice.total}{currency}\n"
+        # `tax` is the amount, `vat` the rate the invoice template applied.
+        result += f"Tax: {invoice.tax}{currency} (VAT rate: {invoice.vat}%)\n"
+        result += f"Created: {invoice.created_at}\n"
+        result += f"Due Days: {invoice.due_days}\n"
+        if invoice.payment_date:
+            result += f"Payment Date: {invoice.payment_date}\n"
+        if invoice.comment:
+            result += f"Comment: {invoice.comment}\n"
+        if invoice.invoice_filename:
+            result += f"File: {invoice.invoice_filename}\n"
+        result += self._serialize_meta_fields(invoice)
+        result += "\n"
+        return result
+
     async def list(self, filters: dict) -> list[TextContent]:
         invoices = await self.client.get_invoices(InvoiceFilter(
             begin=filters.get("begin"),
@@ -1399,37 +1670,14 @@ class InvoiceEntityHandler(BaseEntityHandler):
 
         result = f"Found {len(invoices)} invoices\n\n"
         for invoice in invoices:
-            result += f"ID: {invoice.id} - {invoice.invoice_number}\n"
-            result += f"  Customer: {invoice.customer.name if invoice.customer else 'Unknown'}\n"
-            result += f"  Status: {invoice.status}\n"
-            if getattr(invoice, 'overdue', None) is not None:
-                result += f"  Overdue: {'Yes' if invoice.overdue else 'No'}\n"
-            result += f"  Total: {invoice.total}\n"
-            result += f"  Date: {invoice.created_at}\n"
-            result += "\n"
+            result += self.serialize_invoice(invoice)
 
         return [TextContent(type="text", text=result)]
 
     async def get(self, id: int) -> builtins.list[TextContent]:
         invoice = await self.client.get_invoice(id)
 
-        result = f"Invoice: {invoice.invoice_number} (ID: {invoice.id})\n"
-        result += f"Customer: {invoice.customer.name if invoice.customer else 'Unknown'}\n"
-        result += f"Status: {invoice.status}\n"
-        if getattr(invoice, 'overdue', None) is not None:
-            result += f"Overdue: {'Yes' if invoice.overdue else 'No'}\n"
-        result += f"Total: {invoice.total}\n"
-        result += f"Tax: {invoice.tax}\n"
-        result += f"Created: {invoice.created_at}\n"
-
-        if getattr(invoice, 'due_days', None):
-            result += f"Due Days: {invoice.due_days}\n"
-        if getattr(invoice, 'payment_date', None):
-            result += f"Payment Date: {invoice.payment_date}\n"
-        if getattr(invoice, 'comment', None):
-            result += f"Comment: {invoice.comment}\n"
-
-        return [TextContent(type="text", text=result)]
+        return [TextContent(type="text", text=self.serialize_invoice(invoice))]
 
     async def create(self, data: dict) -> builtins.list[TextContent]:
         raise ToolError(
@@ -1437,9 +1685,10 @@ class InvoiceEntityHandler(BaseEntityHandler):
         )
 
     async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
-        raise ToolError(
-            "Error: Invoice updates are not supported through this API."
-        )
+        # PATCH /api/invoices/{id} exists since Kimai 2.68 (#6184); older
+        # instances answer 404/405.
+        invoice = await self.client.update_invoice(id, InvoiceEditForm(**data))
+        return [TextContent(type="text", text="Updated " + self.serialize_invoice(invoice))]
 
     async def delete(self, id: int) -> builtins.list[TextContent]:
         # DELETE /api/invoices/{id} exists since Kimai 2.66 (#6141) and needs
@@ -1454,18 +1703,24 @@ class InvoiceEntityHandler(BaseEntityHandler):
 class HolidayEntityHandler(BaseEntityHandler):
     """Handler for holiday operations."""
 
+    list_filters = frozenset({"begin", "end", "group"})
+
     async def list(self, filters: dict) -> list[TextContent]:
         holidays = await self.client.get_public_holidays(PublicHolidayFilter(
             begin=filters.get("begin"),
-            end=filters.get("end")
+            end=filters.get("end"),
+            group=filters.get("group"),
         ))
 
         result = f"Found {len(holidays)} holidays\n\n"
         for holiday in holidays:
             result += f"ID: {holiday.id} - {holiday.name}\n"
             result += f"  Date: {holiday.date}\n"
-            if hasattr(holiday, "type") and holiday.type:
-                result += f"  Type: {holiday.type}\n"
+            if holiday.half_day:
+                result += "  Half Day: Yes\n"
+            group = holiday.public_holiday_group
+            if group:
+                result += f"  Group: {group.name} (ID: {group.id})\n"
             result += "\n"
 
         return [TextContent(type="text", text=result)]

@@ -68,9 +68,10 @@ def format_api_error(e: KimaiAPIError) -> str:
         # Symfony's router answers this when the route does not exist at all,
         # which for this client means the Kimai version is too old for it.
         text += (
-            "\nThis endpoint does not exist on this Kimai version. Routes added recently: DELETE /api/invoices/{id} "
-            "and the /api/favorites/timesheets endpoints need Kimai 2.66+, comments need 2.57+, invoice meta fields "
-            "2.56+. Check 'config' for the version and upgrade Kimai, or use the Kimai UI."
+            "\nThis endpoint does not exist on this Kimai version. Routes added recently: PATCH /api/invoices/{id} "
+            "(invoice update) needs Kimai 2.68+, DELETE /api/invoices/{id} and the /api/favorites/timesheets "
+            "endpoints need 2.66+, comments need 2.57+, invoice meta fields 2.56+. Check 'config' for the version "
+            "and upgrade Kimai, or use the Kimai UI."
         )
     if "should not contain extra fields" in details:
         # Kimai builds its API forms from the enabled features, so a field can

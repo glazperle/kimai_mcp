@@ -4,11 +4,15 @@ Having a single source of truth for the tool list and the name->handler dispatch
 prevents the two servers from drifting apart (e.g. a tool registered in one but
 not the other).
 """
+import functools
+import json
 from typing import Any
 
 import jsonschema
+import pydantic
 from mcp.types import TextContent, Tool
 
+from .. import models
 from ..client import KimaiClient
 from .absence_manager import absence_tool, handle_absence
 from .calendar_meta import (
@@ -66,14 +70,60 @@ _REGISTRY = {
 }
 
 
+def _close(schema: dict) -> None:
+    """Set ``additionalProperties: false`` on every input object, in place.
+
+    Reaches the root, everything below ``properties`` and ``items``, and the
+    objects a conditional branch declares under its ``properties``, but never
+    an ``if``/``then``/``else`` schema itself: a closed ``if`` would stop
+    matching, a closed ``then`` would reject every key it does not repeat.
+    An explicit ``additionalProperties`` (the entity ``data`` object, closed
+    per type by its branches) is left as it is.
+    """
+    if "properties" in schema:
+        schema.setdefault("additionalProperties", False)
+        for sub in schema["properties"].values():
+            if isinstance(sub, dict):
+                _close(sub)
+    if isinstance(schema.get("items"), dict):
+        _close(schema["items"])
+    for branch in schema.get("allOf", []):
+        for part in ("then", "else"):
+            for sub in branch.get(part, {}).get("properties", {}).values():
+                if isinstance(sub, dict):
+                    _close(sub)
+
+
+def _build(factory) -> Tool:
+    """A tool definition as advertised and validated: every input object closed.
+
+    SDK 2.x validates nothing server-side, and the Pydantic forms ignore
+    unknown keys, so an open object turns a misspelt key into a silently
+    ignored one while the call reports success. Closing them centrally covers
+    every tool, including the next one.
+    """
+    tool = factory()
+    _close(tool.input_schema)
+    return tool
+
+
 def all_tools() -> list[Tool]:
     """Return the full list of Tool definitions, in advertised order."""
-    return [factory() for factory, _ in _REGISTRY.values()]
+    return [_build(factory) for factory, _ in _REGISTRY.values()]
 
 
 def tool_names() -> list[str]:
     """Return the registered tool names."""
     return list(_REGISTRY.keys())
+
+
+@functools.lru_cache(maxsize=64)
+def _validator(schema_json: str) -> Any:
+    """A checked validator per distinct schema (keyed by its JSON text)."""
+    schema = json.loads(schema_json)
+    validator_class = jsonschema.validators.validator_for(schema)
+    validator_class.check_schema(schema)
+    return validator_class(schema)
 
 
 def validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
@@ -89,12 +139,52 @@ def validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
     Raises:
         ToolError: if the arguments do not satisfy the schema.
     """
-    try:
-        jsonschema.validate(instance=arguments, schema=tool.input_schema)
-    except jsonschema.ValidationError as e:
-        location = "/".join(str(part) for part in e.absolute_path)
+    # jsonschema.validate() checks the schema itself against the meta-schema
+    # on every call, ~70 ms for the entity schema; a cached validator ~0.2 ms.
+    _check(_validator(json.dumps(tool.input_schema, sort_keys=True)), arguments)
+
+
+def _check(validator: Any, arguments: dict[str, Any]) -> None:
+    error = jsonschema.exceptions.best_match(validator.iter_errors(arguments))
+    if error is not None:
+        location = "/".join(str(part) for part in error.absolute_path)
         where = f" at '{location}'" if location else ""
-        raise ToolError(f"Input validation error{where}: {e.message}")
+        raise ToolError(f"Input validation error{where}: {error.message}")
+
+
+@functools.cache
+def _declared_names(name: str) -> frozenset[str]:
+    """Every property name a registered tool's schema declares, at any depth."""
+    names: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            names.update(node.get("properties", {}))
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(_REGISTRY[name][0]().input_schema)
+    return frozenset(names)
+
+
+@functools.cache
+def _tool_validator(name: str) -> Any:
+    """The validator of a registered tool, from its schema built and closed once."""
+    return _validator(json.dumps(_closed_schema(name), sort_keys=True))
+
+
+@functools.cache
+def _closed_schema(name: str) -> dict:
+    """A registered tool's input schema as advertised (closed), built once.
+
+    Validation and the integer coercion read this same object; it is never
+    modified.
+    """
+    factory, _run = _REGISTRY[name]
+    return _build(factory).input_schema
 
 
 async def dispatch_tool(
@@ -107,7 +197,77 @@ async def dispatch_tool(
         raise ToolError(
             f"Unknown tool: {name}. Available tools: {', '.join(_REGISTRY)}"
         )
-    factory, run = entry
+    _factory, run = entry
     arguments = arguments or {}
-    validate_arguments(factory(), arguments)
-    return await run(client, arguments)
+    _check(_tool_validator(name), arguments)
+    arguments = _integers(_closed_schema(name), arguments)
+    try:
+        return await run(client, arguments)
+    except pydantic.ValidationError as e:
+        # A request model (*Form, *Filter) rejected a value the schema let
+        # through (a sort field Kimai does not take, an ambiguous duration).
+        # Say which and why, without pydantic's type codes and links. A
+        # response model failing means Kimai sent something unexpected; that
+        # is not the caller's input and propagates unchanged.
+        if not e.title.endswith(("Form", "Filter")):
+            raise
+        raise ToolError(_format_input_error(e, _declared_names(name))) from None
+
+
+def _integers(schema: dict, value: Any) -> Any:
+    """``value`` with every integral float the schema types as integer made an int.
+
+    JSON Schema's "integer" accepts 1.0, and 1.0 would reach Kimai as
+    ``/timesheets/1.0`` (404) or ``size=10.0`` (400). Untyped values (a meta
+    field's value) are left alone.
+    """
+    types = schema.get("type")
+    types = types if isinstance(types, list) else [types]
+    if isinstance(value, float) and value.is_integer() and "integer" in types:
+        return int(value)
+    if isinstance(value, list):
+        items = schema.get("items", {})
+        return [_integers(items, v) for v in value] if isinstance(items, dict) else value
+    if isinstance(value, dict):
+        properties = dict(schema.get("properties", {}))
+        for branch in schema.get("allOf", []):
+            for part in ("then", "else"):
+                for key, sub in branch.get(part, {}).get("properties", {}).items():
+                    properties.setdefault(key, {})
+                    # a key typed in a branch (the per-type entity data) wins
+                    if sub.get("properties") or sub.get("type"):
+                        properties[key] = _merge(properties[key], sub)
+        return {k: _integers(properties.get(k, {}), v) for k, v in value.items()}
+    return value
+
+
+def _merge(base: dict, extra: dict) -> dict:
+    merged = {**base, **extra}
+    merged["properties"] = {**base.get("properties", {}), **extra.get("properties", {})}
+    return merged
+
+
+def _format_input_error(error: "pydantic.ValidationError", declared: frozenset[str]) -> str:
+    """One line per problem, naming the field as the caller sends it.
+
+    Pydantic reports either spelling of a field, depending on how the handler
+    built the model (``break_duration=...`` vs. ``**data``), while each tool
+    schema declares one: the wire name for most forms (``break``), the Python
+    name for filters (``order_by``) and for the rate data (``internal_rate``).
+    The spelling the tool declares is the one reported.
+    """
+    model = getattr(models, error.title, None)
+    fields = getattr(model, "model_fields", {})
+    problems = []
+    for detail in error.errors():
+        loc = [str(part) for part in detail["loc"]]
+        info = fields.get(loc[0]) if loc else None
+        if info is None and loc:
+            info = next((f for f in fields.values() if f.alias == loc[0]), None)
+        if info is not None:
+            python_name = next(n for n, f in fields.items() if f is info)
+            spellings = [python_name, info.alias or python_name]
+            loc[0] = next((s for s in spellings if s in declared), loc[0])
+        field = ".".join(loc) or "input"
+        problems.append(f"'{field}': {detail['msg'].removeprefix('Value error, ')}")
+    return "Error: invalid value for " + "; ".join(problems)

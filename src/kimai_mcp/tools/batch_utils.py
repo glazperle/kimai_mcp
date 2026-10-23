@@ -30,6 +30,14 @@ async def execute_batch(
     if not items:
         return [], []
 
+    # A repeated ID would run twice concurrently: a delete then reports a false
+    # "Failed" (404), and a toggle (batch_export) undoes itself. (dispatch_tool
+    # has already turned 1.0 into 1, so a float spelling cannot win here.)
+    try:
+        items = list(dict.fromkeys(items))
+    except TypeError:
+        pass  # unhashable items (models) are not IDs and are not repeated
+
     semaphore = asyncio.Semaphore(max_concurrent)
 
     async def limited_operation(item: Any) -> Any:
@@ -72,8 +80,9 @@ def format_batch_result(
     Returns:
         Formatted result string
     """
+    past = operation_name + ("d" if operation_name.endswith("e") else "ed")  # Deleted, Exported
     result = f"Batch {operation_name} Complete\n"
-    result += f"✓ {operation_name}d: {len(success)} {item_name}\n"
+    result += f"✓ {past}: {len(success)} {item_name}\n"
 
     if failed:
         result += f"✗ Failed: {len(failed)}\n"

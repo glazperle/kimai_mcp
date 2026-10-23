@@ -67,7 +67,7 @@ Parameters: {
   "action": "list",
   "filters": {
     "visible": 1,
-    "orderBy": "name",
+    "order_by": "name",
     "order": "ASC"
   }
 }
@@ -137,7 +137,7 @@ Parameters: {
   "filters": {
     "begin": "2024-01-15T00:00:00",
     "end": "2024-01-21T23:59:59",
-    "orderBy": "begin",
+    "order_by": "begin",
     "order": "ASC",
     "user_scope": "self"
   }
@@ -213,7 +213,7 @@ Parameters: {
   "filters": {
     "project": 15,
     "visible": 1,
-    "orderBy": "name"
+    "order_by": "name"
   }
 }
 ```
@@ -229,7 +229,7 @@ Parameters: {
   "action": "list",
   "filters": {
     "visible": 1,
-    "orderBy": "name",
+    "order_by": "name",
     "order": "ASC"
   }
 }
@@ -271,7 +271,7 @@ Parameters: {
   "action": "list",
   "filters": {
     "visible": 1,
-    "orderBy": "username",
+    "order_by": "username",
     "order": "ASC"
   }
 }
@@ -292,7 +292,8 @@ Parameters: {
   "action": "create",
   "data": {
     "name": "Development Team",
-    "color": "#3498db"
+    "color": "#3498db",
+    "members": [{"user": 5, "teamlead": true}]
   }
 }
 ```
@@ -764,7 +765,7 @@ Parameters: {
   "data": {
     "user": 5,
     "rate": 75.00,
-    "internalRate": 65.00
+    "internal_rate": 65.00
   }
 }
 ```

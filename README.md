@@ -231,7 +231,7 @@ Options for the Streamable HTTP server (`kimai-mcp-streamable`):
 - **Team Management** - Create teams, manage members, control access permissions
 - **Absence Management** - Create, approve, reject, and track absences
 - **Tag Management** - Create and manage tags for better organization
-- **Invoice Queries** - View invoice information and status; delete invoices (Kimai 2.66+, permission `delete_invoice`)
+- **Invoice Management** - View invoices with status, totals, payment date and meta fields; update status, payment date and comment (Kimai 2.68+, permission `edit_invoice`); delete invoices (Kimai 2.66+, permission `delete_invoice`)
 - **Comments** - Manage pinned and regular comments on projects and customers (Kimai 2.57+)
 
 ### Advanced Features
@@ -408,6 +408,34 @@ Then use this Claude Desktop configuration:
 }
 ```
 
+`list` and `get` print the non-empty timesheet meta fields of each entry (e.g. `Meta: issue_tracker_id=CA-376`).
+Kimai only serializes meta fields whose definition is marked visible (`setIsVisible(true)` in the plugin).
+
+#### List Timesheets by Meta Field
+```json
+{
+  "tool": "timesheet",
+  "parameters": {
+    "action": "list",
+    "filters": {
+      "user_scope": "all",
+      "begin": "2026-10-01T00:00:00",
+      "meta": {"name": "issue_tracker_id", "value": "CA-376"}
+    }
+  }
+}
+```
+
+The value must match exactly (case-insensitive, the field name too). Omit `value` to get every entry where
+the field is set, or pass `"value": ""` for entries where it is not. The filter is sent to Kimai as the search
+term `issue_tracker_id:CA-376` to narrow the result; because Kimai matches that term as a substring (`CA-376`
+also finds `CA-3760`), the MCP server fetches the whole result and keeps only exact matches, then shows the
+requested `page`. A value Kimai's term syntax cannot express (spaces, a leading `!`, a backslash) is narrowed
+to "field is set" on the server and matched on the MCP side. Kimai sends back only the meta rows that are
+stored and visible, so an entry saved before the field existed, or while it was hidden, arrives without it:
+it counts as a match for `"value": ""`, is listed as Kimai's (substring) match when Kimai searched this value,
+and is left out when the value could not be sent; each case is stated in a note.
+
 #### Create a Timesheet Entry
 ```json
 {
@@ -465,6 +493,10 @@ Then use this Claude Desktop configuration:
 }
 ```
 
+Kimai lists only projects running today unless told otherwise. Add `"ignore_dates": true` to include
+finished and not yet started projects, or `"begin"` / `"end"` to list the projects running at any time in
+that period.
+
 #### Get Project Details
 ```json
 {
@@ -511,7 +543,8 @@ Then use this Claude Desktop configuration:
     "action": "create",
     "data": {
       "name": "Development Team",
-      "color": "#3498db"
+      "color": "#3498db",
+      "members": [{"user": 5, "teamlead": true}]
     }
   }
 }

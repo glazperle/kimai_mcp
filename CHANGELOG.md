@@ -7,6 +7,144 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.19.0] - 2026-10-23
+
+### Added
+
+- **Timesheet meta fields are readable.** `timesheet action=list` and `action=get` now print the
+  non-empty meta fields of each entry (`Meta: issue_tracker_id=CA-376`). They could be written with
+  `meta_update` but never read back, although Kimai has always sent them: `metaFields` is in the
+  `Timesheet` serializer group, which `GET /timesheets` uses with and without `full=true` and
+  `GET /timesheets/{id}` uses too, so this costs no extra request. Kimai serializes the stored, visible
+  meta rows; a stored row without a value arrives as `null` and is skipped.
+- **`filters.meta` on `timesheet action=list`**, e.g. `{name: "issue_tracker_id", value: "CA-376"}`.
+  It is sent as Kimai's `name:value` search term as a pre-filter, and then matched exactly
+  (case-insensitive, names too) on the MCP side, because Kimai compares that term with
+  `LIKE '%value%'` and `CA-376` would otherwise also return `CA-3760`. The whole result is fetched (in
+  pages of 500) before matching and the requested page is cut out afterwards; paging the pre-filter
+  would hide exact matches behind near-misses. Without `value` it matches entries where the field is
+  set; `value: ""` matches entries where it is not, including entries saved before the field existed
+  (no server term: Kimai's `name:""` misses values cleared to `''`). A value with spaces, a leading `!`
+  or a backslash falls back to `name:*` plus the exact match. An entry whose row is not sent back (saved
+  before the field existed, or while it was hidden) cannot be checked here: it counts for an empty
+  search, is kept as Kimai's match when Kimai searched this value, and is left out when it could not;
+  each case is stated in a note. The plain `filters.term` still searches the description only.
+- **Filters Kimai offers but no tool could send.** `timesheet action=list`: `users`, `customers`,
+  `projects`, `activities` (several IDs), `tags`, `order_by`, `order`, `modified_after` (UTC).
+  `entity action=list`: `ignore_dates`, `global_activities`, `customers` and `begin`/`end` for projects,
+  `projects` for activities, `order_by`/`order` for users, `name` for tags, `group` for holidays.
+  `analyze_project_team` takes `project_id` as an alternative to `project_name`.
+- **Checks for the whole bug class behind the timesheet meta fields**, so the next instance fails CI
+  instead of waiting for a user to notice. `tests/test_read_coverage.py` changes every field of every
+  record a tool renders, one at a time, and fails when the output does not change; it also requires
+  that whatever a tool can write is readable again. `tests/test_filter_coverage.py` does the same for
+  filters, tool argument to client call. `scripts/audit_api_models.py` now also reads Kimai's
+  controllers and the client source: wrong response model per route, query parameters the client
+  cannot send, fixed-value parameters typed with a different value set, deprecated and unused routes.
+  It resolves traits and virtual properties, which it used to skip, and exits 2 instead of 0 when a
+  source could not be read. `tests/test_doc_examples.py` validates every documented tool call in the
+  README and `examples/` against the schemas.
+- **`entity type=invoice action=update`** sets status, payment date and comment (Kimai 2.68+,
+  permission `edit_invoice`, `PATCH /api/invoices/{id}`).
+
+### Changed
+
+- **Every tool input object is closed** (`additionalProperties: false`), set centrally in the tool
+  registry so it covers every tool. A misspelt key (`filters.projet`, `data.emial`) is now an input
+  validation error naming it; before, it was ignored while the call reported success. User, team, tag
+  and invoice writes got closed `data` schemas derived from their request models.
+  `tests/test_schema_closure.py` checks that every key a handler reads is declared and that each write
+  schema lists exactly its model's fields.
+- **`timer action=recent`** reads Kimai's recent activities (`/timesheets/recent`): the latest record of
+  each customer/project/activity combination, with names, ready for `timer action=restart`. It used to
+  repeat `timesheet action=list` with IDs. `size` is capped at 100, as Kimai 2.67+ does.
+- **Tracked against Kimai 2.70.2** (was 2.66.0). Kimai 2.68 serializes an invoice's `paymentDate` as a
+  date; both forms parse. The conditional form fields changed for the timesheet `user` and the user
+  flags `systemAccount` / `requiresPasswordReset`; see CLAUDE.md.
+- Argument validation builds the schema validator once per tool instead of on every call
+  (`jsonschema.validate()` re-checked the schema each time, about 70 ms for the entity tool).
+
+### Fixed
+
+Each of these was data Kimai sent (or a filter it offered) that a tool silently dropped:
+
+- **`user_current` showed no roles, supervisor, teams or preferences**: `/users/me` was parsed as
+  `User`, which has none of them. It is a `UserEntity` now, and `UserEntity` is a subclass of `User`.
+- **`entity type=user`** printed name, title, status and colour only. `get` now shows email, account
+  number, language, locale, timezone, avatar, system account, roles, supervisor, teams (with the
+  team-lead flag) and the preferences, so a work contract written with `set_preferences` can be read back.
+- **`entity type=team action=get`** now lists the customers, projects and activities the team has
+  access to (what `team_access grant/revoke` changes), and member IDs, which `remove_member` needs.
+- **Invoices** show currency, VAT rate, creator, file name and meta fields (writable with the `meta`
+  tool since v2.12, never readable); the listing shows the same as `get`.
+- **Timesheet rows** in `timesheet list`, `timer recent`, `timer active` and `timer favorites` show
+  billable, exported, break and the rates Kimai sent; the timer rows also show the user and meta fields,
+  `timer recent` the tags and end time.
+- **Activities** show their colour and say when they are global; **holidays** their group and half-day
+  flag; a **customer** with both the structured and the legacy single-line address shows both.
+- **Finished and not yet started projects could not be listed.** Kimai's project listing returns only
+  projects running today unless the request names a day; `filters.ignore_dates=true` now lists them
+  all, and `begin`/`end` list the projects running at any time in that period (matched against each
+  project's start and end, since Kimai's own `start`/`end` are ANDed day checks).
+- **`order_by` advertised sort fields Kimai's API rejects.** Projects listed eleven, the API takes
+  `id`, `name`, `customer`; anything else was a 400. The allowed values per type now come from the
+  filter models, which the audit checks against Kimai.
+- **`entity action=list` ignored filters silently** when they do not apply to the type (e.g.
+  `customer` for activities). The result now ends with a note naming them.
+- **Lookups missed finished projects, hidden activities and disabled users**, for the same reason:
+  `analyze_project_team` answered "No project found" for a finished project, and it and the
+  timesheet statistics showed those records as bare IDs. An exact project name now wins over partial
+  matches and a visible project over a hidden one of the same name; names with `:` or a leading `!`
+  (search syntax for Kimai: `:`, a word starting with `!`, a backslash) are matched without a server
+  term. `analyze_project_team` with `user_scope=team` lets Kimai filter by the team's users, falling back
+  to everyone's records (with a warning in the report) when Kimai refuses a member (403), and keeps the
+  team's records in either case.
+- **`analyze_project_team` failed for every token except a super admin's**: it lists users only to
+  print their names, and `GET /users` needs `view_user`. A refused name lookup now degrades to team
+  member names or user IDs, with a note. `project_id` works for tokens that may not open a single
+  project (the listing is searched instead). The analysis fetches in pages of 500 (was 50, 100 requests
+  for 5000 records). With `user_scope=specific`, records of anyone else than the requested user (what
+  Kimai returns when it ignores the filter) are refused instead of being reported as that user's; a
+  team or `all` analysis made of the caller's records only says so.
+
+Other fixes:
+
+- **`timesheet action=batch_export` un-exported records that were exported already.** Kimai's export
+  endpoint toggles the flag; records are now read first and only toggled when not exported yet, and a
+  repeated ID is processed once.
+- **`analyze_project_team` analysed a silently truncated dataset** for projects with more than 5000
+  records in the period: the client stopped at 100 pages and the size guard compared against 10000. The
+  analysis now refuses a truncated fetch and asks for a shorter period.
+- **Filters Kimai ignored were not reported.** Without `view_other_timesheet`, or for user IDs that do not
+  exist, Kimai returns the caller's own records for `user`/`users`, and it answers `user_scope=all` with
+  the records the token may see (without `view_all_data`: its own and those of teams it leads). Unknown project and
+  activity IDs make it drop that filter entirely. When the returned records show this (records of users,
+  projects or activities that were not requested, or only the caller's records for `all`), the listing
+  now says so instead of presenting them as the requested ones. Unknown customer IDs, and cases where
+  the caller has no records in the period, cannot be told from the records and are not reported.
+- **A date-only `end` dropped the whole last day** in `timesheet action=list` and
+  `analyze_project_team`: Kimai keeps records started at or before `end`, and `2025-06-30` meant
+  midnight. A date alone now means the end of that day, as does the same midnight given as begin and end
+  (the listing used the next midnight, which took that day's first records too).
+- `page` and `size` must be at least 1; a negative value used to be sliced from the end of the result.
+- An integer argument given as `1.0` (JSON Schema's "integer" accepts it) is passed on as `1`; it used
+  to reach Kimai as `/timesheets/1.0` (404) or `size=10.0` (400).
+- **A repeated ID in a batch action** ran twice: deletes reported a false failure, exports undid
+  themselves. Every batch action processes an ID once.
+- **`entity type=user action=update` needed email, language, locale and timezone on every call**, and
+  the last three are only on Kimai's form with the `preferences` permission, so a token without it
+  could not change a user's title at all. A team rename needed the whole member list. Both take
+  just the changed fields now.
+- **A customer's `color` and a timesheet's `exported` could not be written**: the closed schemas did
+  not list them although the request models had them.
+- **An invalid value** (a sort field Kimai does not accept, an ambiguous duration) is reported as
+  "invalid value for 'order_by': ..." instead of pydantic's full report with type codes and links.
+- Meta fields and preferences without a value (null or `''`) print "(empty)" instead of "None" or
+  nothing, in `set_preferences` too; tag listings refuse
+  `name` and a different `term` together instead of dropping `term`; `stats_format=json` lists only the
+  reported projects' names, not every project of the instance.
+- Batch results said "Exportd" and "Rejectd".
+
 ## [2.18.2] - 2026-10-02
 
 ### Fixed
