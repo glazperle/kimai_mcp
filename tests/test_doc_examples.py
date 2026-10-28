@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from kimai_mcp.tools import registry
 from kimai_mcp.tools.registry import all_tools, validate_arguments
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -51,8 +52,12 @@ def test_examples_were_found():
 
 @pytest.mark.parametrize(("tool_name", "arguments"), CALLS)
 def test_documented_call_is_valid(tool_name, arguments):
+    """Against what the server validates, and against what a client is shown
+    (the entity schema is flattened for clients, issue #38): a client that
+    checks its arguments locally must not refuse a valid call."""
     tools = {t.name: t for t in all_tools()}
     assert tool_name in tools, f"documented tool '{tool_name}' does not exist"
     if isinstance(arguments, str):
         arguments, _end = json.JSONDecoder().raw_decode(arguments)
+    registry._check(registry._tool_validator(tool_name), arguments)
     validate_arguments(tools[tool_name], arguments)

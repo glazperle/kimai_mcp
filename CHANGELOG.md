@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `entity` tool went missing in Claude clients** ([#38](https://github.com/glazperle/kimai_mcp/issues/38)).
+  Its input schema had an `allOf` at the root, which the Anthropic API refuses there. Depending on the
+  client, the tool was dropped (no way to create or update customers, projects, activities, users, teams
+  or tags), the schema was flattened by the client and lost its per-type `data` fields, or the whole
+  request failed. Clients now get a plain object: `data` offers one alternative per type and action
+  (`type=customer, action=create|update: ...`), so every field stays documented. The server still
+  validates each call against the full schema, so a customer field sent for a project is refused as
+  before.
+
 ## [2.20.1] - 2026-10-24
 
 ### Security

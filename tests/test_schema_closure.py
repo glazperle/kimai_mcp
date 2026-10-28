@@ -42,16 +42,24 @@ def _objects(schema, path=""):
         for part in ("then", "else"):
             for key, sub in branch.get(part, {}).get("properties", {}).items():
                 yield from _objects(sub, f"{path}/allOf/{part}/{key}")
+    for i, sub in enumerate(schema.get("anyOf", [])):
+        yield from _objects(sub, f"{path}/anyOf[{i}]")
 
 
+# What the server validates against, and what clients are shown (registry._for_clients).
+SCHEMAS = [
+    *(pytest.param(name, registry._closed_schema(name), id=f"{name}-validated") for name in registry.tool_names()),
+    *(pytest.param(tool.name, tool.input_schema, id=f"{tool.name}-advertised") for tool in registry.all_tools()),
+]
 
-@pytest.mark.parametrize("tool", registry.all_tools(), ids=lambda t: t.name)
-def test_every_input_object_is_closed(tool):
+
+@pytest.mark.parametrize(("name", "schema"), SCHEMAS)
+def test_every_input_object_is_closed(name, schema):
     open_objects = [
-        path for path, obj in _objects(tool.input_schema)
-        if obj.get("additionalProperties") is not False and path not in OPEN_BY_DESIGN.get(tool.name, {})
+        path for path, obj in _objects(schema)
+        if obj.get("additionalProperties") is not False and path not in OPEN_BY_DESIGN.get(name, {})
     ]
-    assert not open_objects, f"{tool.name}: open object schemas {open_objects}"
+    assert not open_objects, f"{name}: open object schemas {open_objects}"
 
 
 # Objects that stay open, with the reason.
@@ -82,7 +90,8 @@ def _handler_modules() -> dict:
 def test_every_key_a_handler_reads_is_declared(module, tools):
     """Per variable, against the object it holds: a key read as ``filters.X``
     must be declared under ``filters``, not just anywhere in the schema."""
-    declared = {var: set().union(*(_declared_at(t.input_schema, var) for t in tools)) for var in INPUT_NAMES}
+    schemas = [registry._closed_schema(t.name) for t in tools]
+    declared = {var: set().union(*(_declared_at(s, var) for s in schemas)) for var in INPUT_NAMES}
     undeclared: dict[str, int] = {}
     for node in ast.walk(ast.parse(inspect.getsource(module))):
         var = key = None
@@ -117,7 +126,7 @@ def _declared_at(schema: dict, var: str) -> set[str]:
 def test_key_check_sees_a_key_declared_only_elsewhere():
     """The case the union over all property names missed: `name` exists in many
     data branches, so deleting it from filters went unnoticed."""
-    schema = next(t for t in registry.all_tools() if t.name == "entity").input_schema
+    schema = registry._closed_schema("entity")
     assert "name" in _declared_at(schema, "filters")
     assert "name" in _declared_at(schema, "data")
     assert "ignore_dates" not in _declared_at(schema, "data")
@@ -161,7 +170,7 @@ def _tool(name):
 
 
 def _entity_data(entity: str, action: str) -> dict | None:
-    for branch in _tool("entity").input_schema["allOf"]:
+    for branch in registry._closed_schema("entity")["allOf"]:
         given = branch.get("if", {}).get("properties", {})
         if given.get("type", {}).get("const") == entity and action in given.get("action", {}).get("enum", []):
             data = branch.get("then", {}).get("properties", {}).get("data")
@@ -197,6 +206,49 @@ def test_every_supported_entity_write_has_a_closed_data_schema():
             data = _entity_data(entity, action)
             assert data is not None, (entity, action)
             assert data.get("additionalProperties") is False, (entity, action)
+
+
+# --- what clients are shown ---------------------------------------------------
+
+
+def _advertised_data(entity: str, action: str) -> dict | None:
+    for option in _tool("entity").input_schema["properties"]["data"]["anyOf"]:
+        condition = option["description"].split(":", 1)[0]
+        if condition.startswith(f"type={entity}, action=") and action in condition.split("=")[-1].split("|"):
+            return option
+    return None
+
+
+@pytest.mark.parametrize(
+    "where", sorted({w for tool, w, _ in WRITE_SCHEMAS if tool == "entity"}), ids=lambda w: "-".join(w)
+)
+def test_clients_are_shown_each_entity_write_schema(where):
+    """The validated schema ties `data` to `type` and `action` with a root
+    allOf, which Claude clients refuse (issue #38). Clients get each branch's
+    data schema as an alternative on `data`; none may get lost on the way."""
+    shown = _advertised_data(*where)
+    assert shown is not None, f"entity {where}: no data alternative for clients"
+    validated = _entity_data(*where)
+    assert shown["properties"] == validated["properties"]
+    assert shown.get("required") == validated.get("required")
+    assert shown["additionalProperties"] is False
+
+
+def test_the_server_still_ties_data_to_its_type():
+    """`country` is a customer field: the advertised anyOf would take it on a
+    project, the server's validation must not."""
+    call = {"type": "project", "action": "create", "data": {"name": "P", "country": "DE"}}
+    registry.validate_arguments(_tool("entity"), call)
+    with pytest.raises(registry.ToolError, match="country"):
+        registry._check(registry._tool_validator("entity"), call)
+
+
+def test_rules_not_shown_as_schema_are_in_the_descriptions():
+    """The branches without a data schema (`id` required, `data` only on a
+    write) are not shown as schema; the property descriptions must say them."""
+    properties = _tool("entity").input_schema["properties"]
+    assert "get, update, delete" in properties["id"]["description"]
+    assert "create/update" in properties["data"]["description"]
 
 
 def test_the_tool_schemas_stay_within_their_token_budget():
