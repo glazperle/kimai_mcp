@@ -1,5 +1,6 @@
 """Consolidated Entity Manager tool for all CRUD operations."""
 import builtins
+import functools
 import logging
 from types import UnionType
 from typing import Annotated, Literal, Union, get_args, get_origin
@@ -36,6 +37,7 @@ from .batch_utils import execute_batch, format_batch_result
 from .dates import parse_local_datetime
 from .errors import ToolError
 from .user_discovery import resolve_accessible_users
+from .validation import check, close_objects, validator_for
 
 logger = logging.getLogger(__name__)
 
@@ -120,14 +122,11 @@ def _form_data_schema(form, description: str, notes: dict | None = None, overrid
     return schema
 
 
-def _data_branch(entity: str, actions: list[str], data: dict) -> dict:
-    return {
-        "if": {"properties": {"type": {"const": entity}, "action": {"enum": actions}}},
-        "then": {"properties": {"data": data}, "required": ["data"]},
-    }
+def _data_slot(entity: str, actions: list[str], data: dict) -> tuple[str, tuple[str, ...], dict]:
+    return entity, tuple(actions), data
 
 
-def _customer_project_activity_branches() -> list[dict]:
+def _customer_project_activity_data() -> list[tuple[str, tuple[str, ...], dict]]:
     """The three hand-documented write schemas, derived from their forms.
 
     Only what the field name does not say is described: every word here is
@@ -187,13 +186,13 @@ def _customer_project_activity_branches() -> list[dict]:
         override=override,
     )
     return [
-        _data_branch("customer", ["create", "update"], customer),
-        _data_branch("project", ["create", "update"], project),
-        _data_branch("activity", ["create", "update"], activity),
+        _data_slot("customer", ["create", "update"], customer),
+        _data_slot("project", ["create", "update"], project),
+        _data_slot("activity", ["create", "update"], activity),
     ]
 
 
-def _user_branches() -> list[dict]:
+def _user_data() -> list[tuple[str, tuple[str, ...], dict]]:
     # One line instead of a note per field: every word here is sent with each request.
     gated = (
         "Fields to change; Kimai keeps the rest. Permission-gated: language, locale, timezone "
@@ -201,12 +200,12 @@ def _user_branches() -> list[dict]:
         "enabled (not on yourself); avatar (only if the instance enables avatars)."
     )
     return [
-        _data_branch("user", ["create"], _form_data_schema(UserCreateForm, "Fields of a new user.", required=True)),
-        _data_branch("user", ["update"], _form_data_schema(UserEditForm, gated)),
+        _data_slot("user", ["create"], _form_data_schema(UserCreateForm, "Fields of a new user.", required=True)),
+        _data_slot("user", ["update"], _form_data_schema(UserEditForm, gated)),
     ]
 
 
-def _team_tag_invoice_branches() -> list[dict]:
+def _team_tag_invoice_data() -> list[tuple[str, tuple[str, ...], dict]]:
     members = {
         "type": "array",
         "items": {
@@ -217,13 +216,95 @@ def _team_tag_invoice_branches() -> list[dict]:
         "description": "Replaces the member list; to change one member use team_access.",
     }
     return [
-        _data_branch("team", ["create", "update"], _form_data_schema(
+        _data_slot("team", ["create", "update"], _form_data_schema(
             TeamEditForm, "Create needs name and members.", override={"members": members})),
-        _data_branch("tag", ["create"], _form_data_schema(TagEditForm, "Tag fields.")),
-        _data_branch("invoice", ["update"], _form_data_schema(
+        _data_slot("tag", ["create"], _form_data_schema(TagEditForm, "Tag fields.")),
+        _data_slot("invoice", ["update"], _form_data_schema(
             InvoiceEditForm, "Kimai 2.68+, permission edit_invoice. Meta fields: meta tool.",
             {"paymentDate": "YYYY-MM-DD"})),
     ]
+
+
+def _data_schemas() -> list[tuple[str, tuple[str, ...], dict]]:
+    """Every write's data schema, with the type and actions it belongs to.
+
+    The tool's ``data`` offers them as alternatives in this order, and
+    ``check_entity_call`` holds a call to the one its type and action select.
+    Built fresh on each call: the registry closes the tool schema in place.
+    """
+    return [*_customer_project_activity_data(), *_user_data(), *_team_tag_invoice_data()]
+
+
+@functools.cache
+def data_slots() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """(type, actions) of each alternative of the tool's ``data``, in order."""
+    return tuple((entity, actions) for entity, actions, _ in _data_schemas())
+
+
+def _data_alternative(entity: str, actions: tuple[str, ...], schema: dict) -> dict:
+    """A data schema as offered to clients, labelled with what it is for."""
+    return {**schema, "description": f"type={entity}, action={'|'.join(actions)}: {schema['description']}"}
+
+
+ENTITY_TYPES = ("project", "activity", "customer", "user", "team", "tag", "invoice", "holiday")
+ACTIONS = ("list", "get", "create", "update", "delete", "lock_month", "unlock_month", "batch_delete",
+           "set_preferences")
+WRITE_ACTIONS = ("create", "update")
+
+# Writes the API offers no way to make, with the reason given. Said before the
+# schema check, which would only report that `data` fits none of the types.
+UNSUPPORTED_WRITES = {
+    ("invoice", "create"): "Invoice creation is not supported through this API.",
+    ("tag", "update"): "Tags cannot be updated. Delete and recreate if needed.",
+    ("holiday", "create"): "Holiday creation is managed by administrators.",
+    ("holiday", "update"): "Holiday updates are not supported through this API.",
+}
+
+
+@functools.cache
+def _data_validator(entity_type: str, action: str):
+    """The validator of the data a type and write action take, or None.
+
+    Built from the tool schema as the registry closes and advertises it, so a
+    call is held to exactly the alternative clients are shown.
+    """
+    schema = entity_tool().input_schema
+    close_objects(schema)
+    options = schema["properties"]["data"]["anyOf"]
+    for option, (entity, actions) in zip(options, data_slots(), strict=True):
+        if entity == entity_type and action in actions:
+            return validator_for(option)
+    return None
+
+
+def check_entity_call(arguments: dict) -> None:
+    """Hold ``data`` to the fields of the call's type and action.
+
+    The schema cannot: only its root sees ``type`` and ``action`` next to
+    ``data``, and Claude clients refuse a combinator there (issue #38). So
+    ``data`` offers every type's fields as alternatives, and this picks the
+    one that applies. ``registry.validate_call`` runs it before the schema
+    check, so a wrong key is named against that type's fields instead of
+    being reported as fitting none of them. An unknown type or action is
+    left to the schema.
+
+    Raises:
+        ToolError: for data on an action that takes none, a write the API
+            does not offer, or data the type's form does not take.
+    """
+    entity_type, action = arguments.get("type"), arguments.get("action")
+    if entity_type not in ENTITY_TYPES or action not in ACTIONS:
+        return
+    reason = UNSUPPORTED_WRITES.get((entity_type, action))
+    if reason is not None:
+        raise ToolError(f"Error: {reason}")
+    if "data" not in arguments:
+        return
+    if action not in WRITE_ACTIONS:
+        raise ToolError(f"Input validation error at 'data': action={action} takes no data, only create and update do")
+    validator = _data_validator(entity_type, action)
+    if validator is not None:
+        check(validator, arguments["data"], at=("data",))
 
 
 def _shown(value) -> str:
@@ -274,12 +355,12 @@ USER PREFERENCES (action=set_preferences, type=user only):
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["project", "activity", "customer", "user", "team", "tag", "invoice", "holiday"],
+                    "enum": list(ENTITY_TYPES),
                     "description": "The entity type to operate on"
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["list", "get", "create", "update", "delete", "lock_month", "unlock_month", "batch_delete", "set_preferences"],
+                    "enum": list(ACTIONS),
                     "description": "lock_month, unlock_month, set_preferences: type=user only. batch_delete takes 'ids'."
                 },
                 "id": {
@@ -327,11 +408,13 @@ USER PREFERENCES (action=set_preferences, type=user only):
                         }
                     }
                 },
+                # One alternative per type and write action; check_entity_call
+                # holds a call to the one its type and action select.
                 "data": {
                     "type": "object",
                     "description": "Required for create/update, refused for other actions; the fields depend on "
                                    "type and action",
-                    "additionalProperties": True
+                    "anyOf": [_data_alternative(*slot) for slot in _data_schemas()],
                 },
                 "month": {
                     "type": "string",
@@ -366,34 +449,6 @@ USER PREFERENCES (action=set_preferences, type=user only):
                     )
                 }
             },
-            "allOf": [
-                *_customer_project_activity_branches(),
-                *_user_branches(),
-                *_team_tag_invoice_branches(),
-                {
-                    "if": {
-                        "properties": {
-                            "action": {"enum": ["create", "update"]}
-                        }
-                    },
-                    "else": {
-                        "properties": {
-                            "data": {"not": {}}  # `data` should not be present / empty if action is not create / update
-                        }
-                    }
-                },
-                {
-                    "if": {
-                        "properties": {
-                            "action": {"enum": ["get", "update", "delete"]}
-                        }
-                    },
-                    "then": {
-                        "required": ["id"]
-                    }
-                }
-            ]
-
         }
     )
 
@@ -407,22 +462,12 @@ async def handle_entity(client: KimaiClient, **params) -> list[TextContent]:
     data = params.get("data", {})
 
     # Route to appropriate handler
-    handlers = {
-        "project": ProjectEntityHandler(client),
-        "activity": ActivityEntityHandler(client),
-        "customer": CustomerEntityHandler(client),
-        "user": UserEntityHandler(client),
-        "team": TeamEntityHandler(client),
-        "tag": TagEntityHandler(client),
-        "invoice": InvoiceEntityHandler(client),
-        "holiday": HolidayEntityHandler(client)
-    }
-
-    handler = handlers.get(entity_type)
-    if not handler:
+    handler_class = _HANDLERS.get(entity_type)
+    if handler_class is None:
         raise ToolError(
-            f"Error: Unknown entity type '{entity_type}'. Valid types: {', '.join(handlers.keys())}"
+            f"Error: Unknown entity type '{entity_type}'. Valid types: {', '.join(ENTITY_TYPES)}"
         )
+    handler = handler_class(client)
 
     # Execute action - errors propagate to the central handler in server.py
     if action == "list":
@@ -1306,7 +1351,7 @@ class TagEntityHandler(BaseEntityHandler):
 
     async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         raise ToolError(
-            "Error: Tags cannot be updated. Delete and recreate if needed."
+            "Error: " + UNSUPPORTED_WRITES[("tag", "update")]
         )
 
     async def delete(self, id: int) -> builtins.list[TextContent]:
@@ -1367,7 +1412,7 @@ class InvoiceEntityHandler(BaseEntityHandler):
 
     async def create(self, data: dict) -> builtins.list[TextContent]:
         raise ToolError(
-            "Error: Invoice creation is not supported through this API."
+            "Error: " + UNSUPPORTED_WRITES[("invoice", "create")]
         )
 
     async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
@@ -1418,14 +1463,27 @@ class HolidayEntityHandler(BaseEntityHandler):
 
     async def create(self, data: dict) -> builtins.list[TextContent]:
         raise ToolError(
-            "Error: Holiday creation is managed by administrators."
+            "Error: " + UNSUPPORTED_WRITES[("holiday", "create")]
         )
 
     async def update(self, id: int, data: dict) -> builtins.list[TextContent]:
         raise ToolError(
-            "Error: Holiday updates are not supported through this API."
+            "Error: " + UNSUPPORTED_WRITES[("holiday", "update")]
         )
 
     async def delete(self, id: int) -> builtins.list[TextContent]:
         await self.client.delete_public_holiday(id)
         return [TextContent(type="text", text=f"Deleted holiday ID {id}")]
+
+
+# The handler of each entity type, one per ENTITY_TYPES (a test holds them equal).
+_HANDLERS = {
+    "project": ProjectEntityHandler,
+    "activity": ActivityEntityHandler,
+    "customer": CustomerEntityHandler,
+    "user": UserEntityHandler,
+    "team": TeamEntityHandler,
+    "tag": TagEntityHandler,
+    "invoice": InvoiceEntityHandler,
+    "holiday": HolidayEntityHandler,
+}

@@ -5,10 +5,8 @@ prevents the two servers from drifting apart (e.g. a tool registered in one but
 not the other).
 """
 import functools
-import json
 from typing import Any
 
-import jsonschema
 import pydantic
 from mcp.types import TextContent, Tool
 
@@ -25,7 +23,7 @@ from .calendar_meta import (
 )
 from .comment_tool import comment_tool, handle_comment
 from .config_info import config_tool, handle_config
-from .entity_manager import entity_tool, handle_entity
+from .entity_manager import check_entity_call, entity_tool, handle_entity
 from .errors import ToolError
 from .project_analysis import analyze_project_team_tool, handle_analyze_project_team
 from .rate_manager import handle_rate, rate_tool
@@ -36,6 +34,7 @@ from .timesheet_consolidated import (
     timer_tool,
     timesheet_tool,
 )
+from .validation import check, close_objects, validator_for
 
 
 def _kw(handler):
@@ -70,32 +69,15 @@ _REGISTRY = {
 }
 
 
-def _close(schema: dict) -> None:
-    """Set ``additionalProperties: false`` on every input object, in place.
-
-    Reaches the root, everything below ``properties`` and ``items``, and the
-    objects a conditional branch declares under its ``properties``, but never
-    an ``if``/``then``/``else`` schema itself: a closed ``if`` would stop
-    matching, a closed ``then`` would reject every key it does not repeat.
-    An explicit ``additionalProperties`` (the entity ``data`` object, closed
-    per type by its branches) is left as it is.
-    """
-    if "properties" in schema:
-        schema.setdefault("additionalProperties", False)
-        for sub in schema["properties"].values():
-            if isinstance(sub, dict):
-                _close(sub)
-    if isinstance(schema.get("items"), dict):
-        _close(schema["items"])
-    for branch in schema.get("allOf", []):
-        for part in ("then", "else"):
-            for sub in branch.get(part, {}).get("properties", {}).values():
-                if isinstance(sub, dict):
-                    _close(sub)
+# A tool's own check, run before its schema: what a schema cannot say without
+# a combinator at its root, which Claude clients refuse (issue #38).
+_CHECKS = {
+    "entity": check_entity_call,
+}
 
 
 def _build(factory) -> Tool:
-    """A tool definition as validated: every input object closed.
+    """A tool definition as advertised and validated: every input object closed.
 
     SDK 2.x validates nothing server-side, and the Pydantic forms ignore
     unknown keys, so an open object turns a misspelt key into a silently
@@ -103,64 +85,18 @@ def _build(factory) -> Tool:
     every tool, including the next one.
     """
     tool = factory()
-    _close(tool.input_schema)
+    close_objects(tool.input_schema)
     return tool
 
 
-def _for_clients(schema: dict) -> dict:
-    """``schema`` as advertised: a plain object, no combinator at its root.
-
-    The Anthropic API refuses an ``input_schema`` with ``allOf``, ``anyOf`` or
-    ``oneOf`` at the top level; Claude clients drop such a tool, others fail
-    the whole request (issue #38). The entity tool needs its root ``allOf``,
-    because only the root sees ``type`` and ``action`` next to ``data``.
-    Clients get each branch's schema of a property as one alternative of an
-    ``anyOf`` on that property, labelled with the branch's condition. The
-    rules without a schema of their own (``id`` required, ``data`` required
-    on a write and refused otherwise) are in the property descriptions;
-    ``tests/test_schema_closure.py`` holds every such rule to that. Validation
-    keeps the full schema (``validate_call``).
-    """
-    branches = schema.get("allOf")
-    if not branches:
-        return schema
-    properties = dict(schema["properties"])
-    alternatives: dict[str, list[dict]] = {}
-    for branch in branches:
-        condition = ", ".join(
-            f"{key}={'|'.join(map(str, sub['enum'])) if 'enum' in sub else sub.get('const')}"
-            for key, sub in branch.get("if", {}).get("properties", {}).items()
-        )
-        for key, sub in branch.get("then", {}).get("properties", {}).items():
-            label = f"{condition}: {sub['description']}" if sub.get("description") else condition
-            alternatives.setdefault(key, []).append({**sub, "description": label})
-    for key, options in alternatives.items():
-        shared = {k: v for k, v in properties.get(key, {}).items() if k != "additionalProperties"}
-        properties[key] = {**shared, "anyOf": options}
-    return {**{k: v for k, v in schema.items() if k != "allOf"}, "properties": properties}
-
-
 def all_tools() -> list[Tool]:
-    """Return the Tool definitions as advertised to clients, in order."""
-    tools = []
-    for factory, _ in _REGISTRY.values():
-        tool = _build(factory)
-        tools.append(tool.model_copy(update={"input_schema": _for_clients(tool.input_schema)}))
-    return tools
+    """Return the full list of Tool definitions, in advertised order."""
+    return [_build(factory) for factory, _ in _REGISTRY.values()]
 
 
 def tool_names() -> list[str]:
     """Return the registered tool names."""
     return list(_REGISTRY.keys())
-
-
-@functools.lru_cache(maxsize=64)
-def _validator(schema_json: str) -> Any:
-    """A checked validator per distinct schema (keyed by its JSON text)."""
-    schema = json.loads(schema_json)
-    validator_class = jsonschema.validators.validator_for(schema)
-    validator_class.check_schema(schema)
-    return validator_class(schema)
 
 
 def validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
@@ -173,33 +109,25 @@ def validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
     false`` while the Pydantic forms ignore extras, so ``{"langauge": "de"}``
     would produce an empty PATCH and still report success.
 
-    A tool from ``all_tools()`` carries the form clients are shown, which is
-    looser for the entity tool; ``validate_call`` is the server's check.
+    This is the schema alone, as a client can check it; ``validate_call`` adds
+    the tool's own check.
 
     Raises:
         ToolError: if the arguments do not satisfy the schema.
     """
-    # jsonschema.validate() checks the schema itself against the meta-schema
-    # on every call, ~70 ms for the entity schema; a cached validator ~0.2 ms.
-    _check(_validator(json.dumps(tool.input_schema, sort_keys=True)), arguments)
+    check(validator_for(tool.input_schema), arguments)
 
 
 def validate_call(name: str, arguments: dict[str, Any]) -> None:
-    """The check ``dispatch_tool`` runs: a registered tool's arguments against
-    its full schema (``_closed_schema``), not the form clients are shown.
+    """The check ``dispatch_tool`` runs: the tool's own check, then its schema.
 
     Raises:
-        ToolError: if the arguments do not satisfy the schema.
+        ToolError: if the arguments do not satisfy either.
     """
-    _check(_tool_validator(name), arguments)
-
-
-def _check(validator: Any, arguments: dict[str, Any]) -> None:
-    error = jsonschema.exceptions.best_match(validator.iter_errors(arguments))
-    if error is not None:
-        location = "/".join(str(part) for part in error.absolute_path)
-        where = f" at '{location}'" if location else ""
-        raise ToolError(f"Input validation error{where}: {error.message}")
+    own_check = _CHECKS.get(name)
+    if own_check is not None:
+        own_check(arguments)
+    check(_tool_validator(name), arguments)
 
 
 @functools.cache
@@ -223,16 +151,15 @@ def _declared_names(name: str) -> frozenset[str]:
 @functools.cache
 def _tool_validator(name: str) -> Any:
     """The validator of a registered tool, from its schema built and closed once."""
-    return _validator(json.dumps(_closed_schema(name), sort_keys=True))
+    return validator_for(_closed_schema(name))
 
 
 @functools.cache
 def _closed_schema(name: str) -> dict:
-    """A registered tool's input schema as validated (closed, with its root
-    ``allOf``), built once.
+    """A registered tool's input schema as advertised (closed), built once.
 
     Validation and the integer coercion read this same object; it is never
-    modified. Clients see ``all_tools()``, which flattens the root.
+    modified.
     """
     factory, _run = _REGISTRY[name]
     return _build(factory).input_schema
@@ -281,20 +208,22 @@ def _integers(schema: dict, value: Any) -> Any:
         return [_integers(items, v) for v in value] if isinstance(items, dict) else value
     if isinstance(value, dict):
         properties = dict(schema.get("properties", {}))
-        for branch in schema.get("allOf", []):
-            for part in ("then", "else"):
-                for key, sub in branch.get(part, {}).get("properties", {}).items():
-                    properties.setdefault(key, {})
-                    # a key typed in a branch (the per-type entity data) wins
-                    if sub.get("properties") or sub.get("type"):
-                        properties[key] = _merge(properties[key], sub)
+        # The alternatives of the entity data: a key is an integer if any of
+        # them types it so (1.0 for a number field becomes 1, which is equal).
+        for option in schema.get("anyOf", []):
+            for key, sub in option.get("properties", {}).items():
+                properties[key] = _merge(properties.get(key, {}), sub)
         return {k: _integers(properties.get(k, {}), v) for k, v in value.items()}
     return value
 
 
 def _merge(base: dict, extra: dict) -> dict:
     merged = {**base, **extra}
+    types = [t for s in (base, extra) for t in (s["type"] if isinstance(s.get("type"), list) else [s.get("type")])]
+    merged["type"] = [t for t in dict.fromkeys(types) if t]
     merged["properties"] = {**base.get("properties", {}), **extra.get("properties", {})}
+    if isinstance(base.get("items"), dict) and isinstance(extra.get("items"), dict):
+        merged["items"] = _merge(base["items"], extra["items"])
     return merged
 
 

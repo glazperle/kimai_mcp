@@ -52,9 +52,8 @@ def test_examples_were_found():
 
 @pytest.mark.parametrize(("tool_name", "arguments"), CALLS)
 def test_documented_call_is_valid(tool_name, arguments):
-    """Against what the server validates, and against what a client is shown
-    (the entity schema is flattened for clients, issue #38): a client that
-    checks its arguments locally must not refuse a valid call."""
+    """Against the server's check, and against the schema alone, as a client
+    that checks its arguments locally does: neither may refuse a valid call."""
     tools = {t.name: t for t in all_tools()}
     assert tool_name in tools, f"documented tool '{tool_name}' does not exist"
     if isinstance(arguments, str):

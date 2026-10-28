@@ -20,7 +20,7 @@ from collections import defaultdict
 import pytest
 
 from kimai_mcp import models
-from kimai_mcp.tools import registry
+from kimai_mcp.tools import entity_manager, registry
 
 # Names under which handlers hold tool input.
 INPUT_NAMES = {"params", "filters", "data", "arguments", "meta_filter"}
@@ -36,39 +36,14 @@ def _objects(schema, path=""):
         yield from _objects(sub, f"{path}/{key}")
     if isinstance(schema.get("items"), dict):
         yield from _objects(schema["items"], f"{path}[]")
-    # if/then/else/allOf branches are deliberately not closed: a closed `if`
-    # would stop matching, a closed `then` would reject every other key.
-    for branch in schema.get("allOf", []):
-        for part in ("then", "else"):
-            for key, sub in branch.get(part, {}).get("properties", {}).items():
-                yield from _objects(sub, f"{path}/allOf/{part}/{key}")
     for i, sub in enumerate(schema.get("anyOf", [])):
         yield from _objects(sub, f"{path}/anyOf[{i}]")
 
 
-# What the server validates against, and what clients are shown (registry._for_clients).
-SCHEMAS = [
-    *(pytest.param(name, registry._closed_schema(name), id=f"{name}-validated") for name in registry.tool_names()),
-    *(pytest.param(tool.name, tool.input_schema, id=f"{tool.name}-advertised") for tool in registry.all_tools()),
-]
-
-
-@pytest.mark.parametrize(("name", "schema"), SCHEMAS)
-def test_every_input_object_is_closed(name, schema):
-    open_objects = [
-        path for path, obj in _objects(schema)
-        if obj.get("additionalProperties") is not False and path not in OPEN_BY_DESIGN.get(name, {})
-    ]
-    assert not open_objects, f"{name}: open object schemas {open_objects}"
-
-
-# Objects that stay open, with the reason.
-OPEN_BY_DESIGN = {
-    "entity": {
-        "/data": "validated form only: closed per type by the allOf branches; one shared object cannot list "
-                 "every type's fields (clients are shown them as closed anyOf alternatives)",
-    },
-}
+@pytest.mark.parametrize("tool", registry.all_tools(), ids=lambda t: t.name)
+def test_every_input_object_is_closed(tool):
+    open_objects = [path for path, obj in _objects(tool.input_schema) if obj.get("additionalProperties") is not False]
+    assert not open_objects, f"{tool.name}: open object schemas {open_objects}"
 
 
 def test_misspelt_filter_is_rejected():
@@ -117,10 +92,11 @@ def _declared_at(schema: dict, var: str) -> set[str]:
         return set(root.get("filters", {}).get("properties", {}))
     if var == "meta_filter":
         return set(root.get("filters", {}).get("properties", {}).get("meta", {}).get("properties", {}))
-    # data: the shared object and every per-type branch
-    names = set(root.get("data", {}).get("properties", {}))
-    for branch in schema.get("allOf", []):
-        names |= set(branch.get("then", {}).get("properties", {}).get("data", {}).get("properties", {}))
+    # data: the object itself and every alternative of the entity data
+    data = root.get("data", {})
+    names = set(data.get("properties", {}))
+    for option in data.get("anyOf", []):
+        names |= set(option.get("properties", {}))
     return names
 
 
@@ -135,9 +111,6 @@ def test_key_check_sees_a_key_declared_only_elsewhere():
 
 # --- write schemas vs. request models ---------------------------------------
 
-
-# Entity writes the handler refuses outright, so no data schema is needed.
-UNSUPPORTED_WRITES = {("invoice", "create"), ("holiday", "create"), ("holiday", "update"), ("tag", "update")}
 
 # Write schemas that deliberately take a subset of their request model.
 SUBSET_BY_DESIGN = {
@@ -171,12 +144,11 @@ def _tool(name):
 
 
 def _entity_data(entity: str, action: str) -> dict | None:
-    for branch in registry._closed_schema("entity")["allOf"]:
-        given = branch.get("if", {}).get("properties", {})
-        if given.get("type", {}).get("const") == entity and action in given.get("action", {}).get("enum", []):
-            data = branch.get("then", {}).get("properties", {}).get("data")
-            if data is not None:
-                return data
+    """The alternative of the entity data a type and action select, by position."""
+    options = _tool("entity").input_schema["properties"]["data"]["anyOf"]
+    for option, (slot_type, actions) in zip(options, entity_manager.data_slots(), strict=True):
+        if slot_type == entity and action in actions:
+            return option
     return None
 
 
@@ -198,88 +170,89 @@ def test_write_schema_matches_its_request_model(tool, where, form):
     assert not missing, f"{tool} {where}: model fields the schema cannot send: {missing}"
 
 
-def test_every_supported_entity_write_has_a_closed_data_schema():
-    types = _tool("entity").input_schema["properties"]["type"]["enum"]
-    for entity in types:
-        for action in ("create", "update"):
-            if (entity, action) in UNSUPPORTED_WRITES:
+def test_every_entity_type_has_a_handler():
+    assert tuple(entity_manager._HANDLERS) == entity_manager.ENTITY_TYPES
+
+
+def test_every_entity_write_has_one_data_schema_or_a_reason():
+    """Each write either has exactly one closed alternative in `data`, or is
+    refused with the reason in UNSUPPORTED_WRITES; nothing falls in between."""
+    slots = entity_manager.data_slots()
+    assert len(slots) == len(_tool("entity").input_schema["properties"]["data"]["anyOf"])
+    for entity in entity_manager.ENTITY_TYPES:
+        for action in entity_manager.WRITE_ACTIONS:
+            schemas = [s for s, (t, actions) in enumerate(slots) if t == entity and action in actions]
+            if (entity, action) in entity_manager.UNSUPPORTED_WRITES:
+                assert not schemas, f"{entity} {action}: refused, yet has a data schema"
                 continue
-            data = _entity_data(entity, action)
-            assert data is not None, (entity, action)
-            assert data.get("additionalProperties") is False, (entity, action)
+            assert len(schemas) == 1, f"{entity} {action}: {len(schemas)} data schemas"
+            assert _entity_data(entity, action)["additionalProperties"] is False, (entity, action)
+    assert {t for t, _ in slots} <= set(entity_manager.ENTITY_TYPES)
+    assert {a for _, actions in slots for a in actions} <= set(entity_manager.WRITE_ACTIONS)
 
 
-# --- what clients are shown ---------------------------------------------------
+# --- what the schema cannot say (entity_manager.check_entity_call) -----------
 
 
-def _advertised_data(entity: str, action: str) -> dict | None:
-    for option in _tool("entity").input_schema["properties"]["data"]["anyOf"]:
-        condition = option["description"].split(":", 1)[0]
-        if condition.startswith(f"type={entity}, action=") and action in condition.split("=")[-1].split("|"):
-            return option
-    return None
+@pytest.mark.parametrize("slot", entity_manager.data_slots(), ids=lambda s: f"{s[0]}-{'|'.join(s[1])}")
+def test_the_check_holds_data_to_the_alternative_clients_are_shown(slot):
+    """One schema: the check validates against the very alternative a client
+    sees (closed as the registry closes it), not a copy built on its own."""
+    shown = registry._closed_schema("entity")["properties"]["data"]["anyOf"][entity_manager.data_slots().index(slot)]
+    entity, actions = slot
+    for action in actions:
+        assert entity_manager._data_validator(entity, action).schema == shown
 
 
-@pytest.mark.parametrize(
-    "where", sorted({w for tool, w, _ in WRITE_SCHEMAS if tool == "entity"}), ids=lambda w: "-".join(w)
-)
-def test_clients_are_shown_each_entity_write_schema(where):
-    """The validated schema ties `data` to `type` and `action` with a root
-    allOf, which Claude clients refuse (issue #38). Clients get each branch's
-    data schema as an alternative on `data`; none may get lost on the way."""
-    shown = _advertised_data(*where)
-    assert shown is not None, f"entity {where}: no data alternative for clients"
-    validated = _entity_data(*where)
-    assert shown["properties"] == validated["properties"]
-    assert shown.get("required") == validated.get("required")
-    assert shown["additionalProperties"] is False
-
-
-def test_the_server_still_ties_data_to_its_type():
-    """`country` is a customer field: the advertised anyOf would take it on a
-    project, the server's validation must not."""
-    call = {"type": "project", "action": "create", "data": {"name": "P", "country": "DE"}}
-    registry.validate_arguments(_tool("entity"), call)
-    with pytest.raises(registry.ToolError, match="country"):
-        registry.validate_call("entity", call)
-
-
-# Rules of a root allOf that clients are not shown as schema
-# (registry._for_clients), with the property whose description states each.
-NOT_SHOWN = {
-    ("entity", "then.required: id"): ("id", "Required for get, update, delete"),
-    ("entity", "then.required: data"): ("data", "Required for create/update"),
-    ("entity", "else: data"): ("data", "refused for other actions"),
+# Rules neither the schema nor a client holds (the handler or check_entity_call
+# does), with the words that tell a client about them.
+STATED_IN_DESCRIPTIONS = {
+    "id": "Required for get, update, delete",
+    "data": "Required for create/update, refused for other actions",
 }
 
 
-def test_every_rule_clients_are_not_shown_is_described():
-    """_for_clients shows the property schemas of a branch's `then` and nothing
-    else. Every other rule must be stated in a description, and a branch it
-    cannot show (no `if`, a condition other than const/enum, any other
-    keyword) fails here instead of vanishing from what clients see."""
-    hidden, unknown = set(), []
-    for name in registry.tool_names():
-        for i, branch in enumerate(registry._closed_schema(name).get("allOf", [])):
-            where = f"{name} allOf[{i}]"
-            condition = branch.get("if", {})
-            unknown += [f"{where}: no condition"] if not condition.get("properties") else []
-            unknown += [f"{where}.{k}" for k in branch if k not in ("if", "then", "else")]
-            unknown += [f"{where}.if.{k}" for k in condition if k != "properties"]
-            unknown += [
-                f"{where}.if.properties.{k}" for k, sub in condition.get("properties", {}).items()
-                if len(sub) != 1 or not {"const", "enum"} & sub.keys()
-            ]
-            then, otherwise = branch.get("then", {}), branch.get("else", {})
-            unknown += [f"{where}.then.{k}" for k in then if k not in ("properties", "required")]
-            unknown += [f"{where}.else.{k}" for k in otherwise if k != "properties"]
-            hidden |= {(name, f"then.required: {k}") for k in then.get("required", [])}
-            hidden |= {(name, f"else: {k}") for k in otherwise.get("properties", {})}
-    assert not unknown, f"branch content _for_clients cannot show: {unknown}"
-    assert hidden == set(NOT_SHOWN), f"NOT_SHOWN is out of date: {sorted(hidden ^ set(NOT_SHOWN))}"
-    for (name, rule), (key, text) in NOT_SHOWN.items():
-        description = _tool(name).input_schema["properties"][key]["description"]
-        assert text in description, f"{name} {rule}: not stated in the description of {key}"
+@pytest.mark.parametrize(("key", "text"), STATED_IN_DESCRIPTIONS.items())
+def test_rules_outside_the_schema_are_stated_to_clients(key, text):
+    assert text in _tool("entity").input_schema["properties"][key]["description"]
+
+
+def test_data_is_held_to_its_type():
+    """`country` is a customer field: the schema's alternatives take it on a
+    project, the tool's own check must not, and must name the field."""
+    call = {"type": "project", "action": "create", "data": {"name": "P", "country": "DE"}}
+    registry.validate_arguments(_tool("entity"), call)
+    with pytest.raises(registry.ToolError, match=r"at 'data': .*'country' was unexpected"):
+        registry.validate_call("entity", call)
+
+
+def test_a_typo_in_data_is_named_against_its_type():
+    """Not as 'is not valid under any of the given schemas'."""
+    with pytest.raises(registry.ToolError, match=r"at 'data/members/0': .*'lead' was unexpected"):
+        registry.validate_call("entity", {"type": "team", "action": "create",
+                                          "data": {"name": "T", "members": [{"user": 1, "lead": True}]}})
+
+
+@pytest.mark.parametrize("action", ["list", "get", "delete", "batch_delete"])
+def test_data_is_refused_where_no_write_happens(action):
+    with pytest.raises(registry.ToolError, match=f"action={action} takes no data"):
+        registry.validate_call("entity", {"type": "project", "action": action, "id": 1, "data": {}})
+
+
+@pytest.mark.parametrize(("entity", "action"), sorted(entity_manager.UNSUPPORTED_WRITES))
+def test_an_unsupported_write_gets_its_reason(entity, action):
+    """Holiday data fits none of the alternatives; the caller learns why the
+    write is not possible, not that the data has the wrong shape."""
+    with pytest.raises(registry.ToolError, match=entity_manager.UNSUPPORTED_WRITES[(entity, action)]):
+        registry.validate_call("entity", {"type": entity, "action": action, "id": 1,
+                                          "data": {"name": "X", "date": "2026-12-24"}})
+
+
+def test_an_unknown_type_or_action_is_left_to_the_schema():
+    with pytest.raises(registry.ToolError, match="at 'action'"):
+        registry.validate_call("entity", {"type": "project", "action": "craete", "data": {"name": "P"}})
+    with pytest.raises(registry.ToolError, match="at 'type'"):
+        registry.validate_call("entity", {"type": "projekt", "action": "list"})
 
 
 def test_the_tool_schemas_stay_within_their_token_budget():
@@ -294,3 +267,13 @@ def test_the_tool_schemas_stay_within_their_token_budget():
         for tool in registry.all_tools()
     )
     assert size <= 32_000, f"tool schemas are {size} characters (about {size // 4} tokens)"
+
+
+def test_integers_inside_data_do_not_depend_on_the_order_of_the_alternatives():
+    """A key typed integer in one alternative is coerced even when a later
+    alternative types it otherwise, inside arrays too."""
+    data = {"anyOf": [
+        {"properties": {"ids": {"type": "array", "items": {"type": "integer"}}}},
+        {"properties": {"ids": {"type": "array", "items": {"type": "string"}}}},
+    ]}
+    assert registry._integers(data, {"ids": [1.0, 2.0]}) == {"ids": [1, 2]}

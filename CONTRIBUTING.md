@@ -126,10 +126,8 @@ When adding new MCP tools:
 
    Keep the root of `input_schema` a plain object: the Anthropic API refuses `allOf`, `anyOf` or `oneOf`
    there, and Claude clients drop such a tool. A rule that ties one property to another (the `entity`
-   tool's per-type `data`) may still go into a root `allOf` of `if`/`then` branches: the server
-   validates it, and `tools/registry.py::_for_clients` shows clients each branch's property schema as
-   an `anyOf` alternative. A `required` or `else` in such a branch is not shown, so state it in the
-   property's description.
+   tool's per-type `data`) goes into the tool's own check, which `tools/registry.py::validate_call` runs
+   before the schema (`_CHECKS`); nested combinators such as an `anyOf` on one property are fine.
 
 2. **Handler Function Structure:**
    ```python
