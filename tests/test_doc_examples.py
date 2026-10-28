@@ -59,5 +59,5 @@ def test_documented_call_is_valid(tool_name, arguments):
     assert tool_name in tools, f"documented tool '{tool_name}' does not exist"
     if isinstance(arguments, str):
         arguments, _end = json.JSONDecoder().raw_decode(arguments)
-    registry._check(registry._tool_validator(tool_name), arguments)
+    registry.validate_call(tool_name, arguments)
     validate_arguments(tools[tool_name], arguments)

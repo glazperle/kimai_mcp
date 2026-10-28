@@ -65,7 +65,8 @@ def test_every_input_object_is_closed(name, schema):
 # Objects that stay open, with the reason.
 OPEN_BY_DESIGN = {
     "entity": {
-        "/data": "closed per type by the allOf branches; one shared object cannot list every type's fields",
+        "/data": "validated form only: closed per type by the allOf branches; one shared object cannot list "
+                 "every type's fields (clients are shown them as closed anyOf alternatives)",
     },
 }
 
@@ -240,15 +241,45 @@ def test_the_server_still_ties_data_to_its_type():
     call = {"type": "project", "action": "create", "data": {"name": "P", "country": "DE"}}
     registry.validate_arguments(_tool("entity"), call)
     with pytest.raises(registry.ToolError, match="country"):
-        registry._check(registry._tool_validator("entity"), call)
+        registry.validate_call("entity", call)
 
 
-def test_rules_not_shown_as_schema_are_in_the_descriptions():
-    """The branches without a data schema (`id` required, `data` only on a
-    write) are not shown as schema; the property descriptions must say them."""
-    properties = _tool("entity").input_schema["properties"]
-    assert "get, update, delete" in properties["id"]["description"]
-    assert "create/update" in properties["data"]["description"]
+# Rules of a root allOf that clients are not shown as schema
+# (registry._for_clients), with the property whose description states each.
+NOT_SHOWN = {
+    ("entity", "then.required: id"): ("id", "Required for get, update, delete"),
+    ("entity", "then.required: data"): ("data", "Required for create/update"),
+    ("entity", "else: data"): ("data", "refused for other actions"),
+}
+
+
+def test_every_rule_clients_are_not_shown_is_described():
+    """_for_clients shows the property schemas of a branch's `then` and nothing
+    else. Every other rule must be stated in a description, and a branch it
+    cannot show (no `if`, a condition other than const/enum, any other
+    keyword) fails here instead of vanishing from what clients see."""
+    hidden, unknown = set(), []
+    for name in registry.tool_names():
+        for i, branch in enumerate(registry._closed_schema(name).get("allOf", [])):
+            where = f"{name} allOf[{i}]"
+            condition = branch.get("if", {})
+            unknown += [f"{where}: no condition"] if not condition.get("properties") else []
+            unknown += [f"{where}.{k}" for k in branch if k not in ("if", "then", "else")]
+            unknown += [f"{where}.if.{k}" for k in condition if k != "properties"]
+            unknown += [
+                f"{where}.if.properties.{k}" for k, sub in condition.get("properties", {}).items()
+                if len(sub) != 1 or not {"const", "enum"} & sub.keys()
+            ]
+            then, otherwise = branch.get("then", {}), branch.get("else", {})
+            unknown += [f"{where}.then.{k}" for k in then if k not in ("properties", "required")]
+            unknown += [f"{where}.else.{k}" for k in otherwise if k != "properties"]
+            hidden |= {(name, f"then.required: {k}") for k in then.get("required", [])}
+            hidden |= {(name, f"else: {k}") for k in otherwise.get("properties", {})}
+    assert not unknown, f"branch content _for_clients cannot show: {unknown}"
+    assert hidden == set(NOT_SHOWN), f"NOT_SHOWN is out of date: {sorted(hidden ^ set(NOT_SHOWN))}"
+    for (name, rule), (key, text) in NOT_SHOWN.items():
+        description = _tool(name).input_schema["properties"][key]["description"]
+        assert text in description, f"{name} {rule}: not stated in the description of {key}"
 
 
 def test_the_tool_schemas_stay_within_their_token_budget():

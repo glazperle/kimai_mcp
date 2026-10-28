@@ -116,9 +116,10 @@ def _for_clients(schema: dict) -> dict:
     because only the root sees ``type`` and ``action`` next to ``data``.
     Clients get each branch's schema of a property as one alternative of an
     ``anyOf`` on that property, labelled with the branch's condition. The
-    rules without a schema of their own (``id`` required, ``data`` only on a
-    write) are in the property descriptions; validation keeps the full schema
-    (``_closed_schema``).
+    rules without a schema of their own (``id`` required, ``data`` required
+    on a write and refused otherwise) are in the property descriptions;
+    ``tests/test_schema_closure.py`` holds every such rule to that. Validation
+    keeps the full schema (``validate_call``).
     """
     branches = schema.get("allOf")
     if not branches:
@@ -134,7 +135,7 @@ def _for_clients(schema: dict) -> dict:
             label = f"{condition}: {sub['description']}" if sub.get("description") else condition
             alternatives.setdefault(key, []).append({**sub, "description": label})
     for key, options in alternatives.items():
-        shared = {k: v for k, v in properties[key].items() if k != "additionalProperties"}
+        shared = {k: v for k, v in properties.get(key, {}).items() if k != "additionalProperties"}
         properties[key] = {**shared, "anyOf": options}
     return {**{k: v for k, v in schema.items() if k != "allOf"}, "properties": properties}
 
@@ -172,12 +173,25 @@ def validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
     false`` while the Pydantic forms ignore extras, so ``{"langauge": "de"}``
     would produce an empty PATCH and still report success.
 
+    A tool from ``all_tools()`` carries the form clients are shown, which is
+    looser for the entity tool; ``validate_call`` is the server's check.
+
     Raises:
         ToolError: if the arguments do not satisfy the schema.
     """
     # jsonschema.validate() checks the schema itself against the meta-schema
     # on every call, ~70 ms for the entity schema; a cached validator ~0.2 ms.
     _check(_validator(json.dumps(tool.input_schema, sort_keys=True)), arguments)
+
+
+def validate_call(name: str, arguments: dict[str, Any]) -> None:
+    """The check ``dispatch_tool`` runs: a registered tool's arguments against
+    its full schema (``_closed_schema``), not the form clients are shown.
+
+    Raises:
+        ToolError: if the arguments do not satisfy the schema.
+    """
+    _check(_tool_validator(name), arguments)
 
 
 def _check(validator: Any, arguments: dict[str, Any]) -> None:
@@ -236,7 +250,7 @@ async def dispatch_tool(
         )
     _factory, run = entry
     arguments = arguments or {}
-    _check(_tool_validator(name), arguments)
+    validate_call(name, arguments)
     arguments = _integers(_closed_schema(name), arguments)
     try:
         return await run(client, arguments)
