@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The `entity` tool has one schema, for clients and server alike.** 2.20.2 showed clients a flattened copy
+  and validated against another one with a root `allOf`. Now the schema has no combinator at its root, `data`
+  offers one alternative per type and action, and the rule that ties `data` to the call's type and action is
+  checked before the schema: a wrong key is still named against that type's fields (`at 'data': ... 'country'
+  was unexpected`), `data` on an action that takes none is refused, and a write the API does not offer
+  (holiday create and update, tag update, invoice create) is answered with its reason, also without `data`.
+  A missing `id` on get, update or delete is now reported by the handler (`'id' parameter is required`)
+  instead of the schema.
+
 ## [2.20.2] - 2026-10-28
 
 ### Fixed
