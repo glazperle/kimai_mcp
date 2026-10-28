@@ -329,7 +329,8 @@ USER PREFERENCES (action=set_preferences, type=user only):
                 },
                 "data": {
                     "type": "object",
-                    "description": "For create/update; the fields depend on the type",
+                    "description": "Required for create/update, refused for other actions; the fields depend on "
+                                   "type and action",
                     "additionalProperties": True
                 },
                 "month": {

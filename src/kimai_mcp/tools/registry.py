@@ -95,7 +95,7 @@ def _close(schema: dict) -> None:
 
 
 def _build(factory) -> Tool:
-    """A tool definition as advertised and validated: every input object closed.
+    """A tool definition as validated: every input object closed.
 
     SDK 2.x validates nothing server-side, and the Pydantic forms ignore
     unknown keys, so an open object turns a misspelt key into a silently
@@ -107,9 +107,46 @@ def _build(factory) -> Tool:
     return tool
 
 
+def _for_clients(schema: dict) -> dict:
+    """``schema`` as advertised: a plain object, no combinator at its root.
+
+    The Anthropic API refuses an ``input_schema`` with ``allOf``, ``anyOf`` or
+    ``oneOf`` at the top level; Claude clients drop such a tool, others fail
+    the whole request (issue #38). The entity tool needs its root ``allOf``,
+    because only the root sees ``type`` and ``action`` next to ``data``.
+    Clients get each branch's schema of a property as one alternative of an
+    ``anyOf`` on that property, labelled with the branch's condition. The
+    rules without a schema of their own (``id`` required, ``data`` required
+    on a write and refused otherwise) are in the property descriptions;
+    ``tests/test_schema_closure.py`` holds every such rule to that. Validation
+    keeps the full schema (``validate_call``).
+    """
+    branches = schema.get("allOf")
+    if not branches:
+        return schema
+    properties = dict(schema["properties"])
+    alternatives: dict[str, list[dict]] = {}
+    for branch in branches:
+        condition = ", ".join(
+            f"{key}={'|'.join(map(str, sub['enum'])) if 'enum' in sub else sub.get('const')}"
+            for key, sub in branch.get("if", {}).get("properties", {}).items()
+        )
+        for key, sub in branch.get("then", {}).get("properties", {}).items():
+            label = f"{condition}: {sub['description']}" if sub.get("description") else condition
+            alternatives.setdefault(key, []).append({**sub, "description": label})
+    for key, options in alternatives.items():
+        shared = {k: v for k, v in properties.get(key, {}).items() if k != "additionalProperties"}
+        properties[key] = {**shared, "anyOf": options}
+    return {**{k: v for k, v in schema.items() if k != "allOf"}, "properties": properties}
+
+
 def all_tools() -> list[Tool]:
-    """Return the full list of Tool definitions, in advertised order."""
-    return [_build(factory) for factory, _ in _REGISTRY.values()]
+    """Return the Tool definitions as advertised to clients, in order."""
+    tools = []
+    for factory, _ in _REGISTRY.values():
+        tool = _build(factory)
+        tools.append(tool.model_copy(update={"input_schema": _for_clients(tool.input_schema)}))
+    return tools
 
 
 def tool_names() -> list[str]:
@@ -136,12 +173,25 @@ def validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
     false`` while the Pydantic forms ignore extras, so ``{"langauge": "de"}``
     would produce an empty PATCH and still report success.
 
+    A tool from ``all_tools()`` carries the form clients are shown, which is
+    looser for the entity tool; ``validate_call`` is the server's check.
+
     Raises:
         ToolError: if the arguments do not satisfy the schema.
     """
     # jsonschema.validate() checks the schema itself against the meta-schema
     # on every call, ~70 ms for the entity schema; a cached validator ~0.2 ms.
     _check(_validator(json.dumps(tool.input_schema, sort_keys=True)), arguments)
+
+
+def validate_call(name: str, arguments: dict[str, Any]) -> None:
+    """The check ``dispatch_tool`` runs: a registered tool's arguments against
+    its full schema (``_closed_schema``), not the form clients are shown.
+
+    Raises:
+        ToolError: if the arguments do not satisfy the schema.
+    """
+    _check(_tool_validator(name), arguments)
 
 
 def _check(validator: Any, arguments: dict[str, Any]) -> None:
@@ -178,10 +228,11 @@ def _tool_validator(name: str) -> Any:
 
 @functools.cache
 def _closed_schema(name: str) -> dict:
-    """A registered tool's input schema as advertised (closed), built once.
+    """A registered tool's input schema as validated (closed, with its root
+    ``allOf``), built once.
 
     Validation and the integer coercion read this same object; it is never
-    modified.
+    modified. Clients see ``all_tools()``, which flattens the root.
     """
     factory, _run = _REGISTRY[name]
     return _build(factory).input_schema
@@ -199,7 +250,7 @@ async def dispatch_tool(
         )
     _factory, run = entry
     arguments = arguments or {}
-    _check(_tool_validator(name), arguments)
+    validate_call(name, arguments)
     arguments = _integers(_closed_schema(name), arguments)
     try:
         return await run(client, arguments)

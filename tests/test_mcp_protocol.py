@@ -31,6 +31,8 @@ from kimai_mcp.user_config import UserConfig
 
 EXPECTED_TOOL_COUNT = 12
 
+ROOT_COMBINATORS = {"allOf", "anyOf", "oneOf", "not", "if", "then", "else"}
+
 LIST_ARGS = {"type": "project", "action": "list"}
 
 
@@ -88,6 +90,10 @@ async def test_handshake_and_tool_listing(transport, mode):
     for tool in result.tools:
         assert tool.description, f"{tool.name} must describe itself to the model"
         assert tool.input_schema.get("type") == "object"
+        # The Anthropic API refuses allOf/anyOf/oneOf at the top level, and
+        # Claude clients drop such a tool (issue #38: entity went missing).
+        root = sorted(ROOT_COMBINATORS & tool.input_schema.keys())
+        assert not root, f"{tool.name} advertises {root} at its schema root"
 
 
 @pytest.mark.asyncio
