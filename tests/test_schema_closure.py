@@ -46,15 +46,6 @@ def test_every_input_object_is_closed(tool):
     assert not open_objects, f"{tool.name}: open object schemas {open_objects}"
 
 
-@pytest.mark.parametrize("name", registry.tool_names())
-def test_clients_are_shown_the_schema_the_server_validates(name):
-    """One schema: what a client checks locally is what the server checks,
-    plus the tool's own check (registry._CHECKS) for what a schema without a
-    root combinator cannot say (issue #38)."""
-    shown = next(t for t in registry.all_tools() if t.name == name).input_schema
-    assert shown == registry._closed_schema(name)
-
-
 def test_misspelt_filter_is_rejected():
     tool = next(t for t in registry.all_tools() if t.name == "timesheet")
     with pytest.raises(registry.ToolError, match="projet"):
@@ -179,6 +170,10 @@ def test_write_schema_matches_its_request_model(tool, where, form):
     assert not missing, f"{tool} {where}: model fields the schema cannot send: {missing}"
 
 
+def test_every_entity_type_has_a_handler():
+    assert tuple(entity_manager._HANDLERS) == entity_manager.ENTITY_TYPES
+
+
 def test_every_entity_write_has_one_data_schema_or_a_reason():
     """Each write either has exactly one closed alternative in `data`, or is
     refused with the reason in UNSUPPORTED_WRITES; nothing falls in between."""
@@ -197,6 +192,29 @@ def test_every_entity_write_has_one_data_schema_or_a_reason():
 
 
 # --- what the schema cannot say (entity_manager.check_entity_call) -----------
+
+
+@pytest.mark.parametrize("slot", entity_manager.data_slots(), ids=lambda s: f"{s[0]}-{'|'.join(s[1])}")
+def test_the_check_holds_data_to_the_alternative_clients_are_shown(slot):
+    """One schema: the check validates against the very alternative a client
+    sees (closed as the registry closes it), not a copy built on its own."""
+    shown = registry._closed_schema("entity")["properties"]["data"]["anyOf"][entity_manager.data_slots().index(slot)]
+    entity, actions = slot
+    for action in actions:
+        assert entity_manager._data_validator(entity, action).schema == shown
+
+
+# Rules neither the schema nor a client holds (the handler or check_entity_call
+# does), with the words that tell a client about them.
+STATED_IN_DESCRIPTIONS = {
+    "id": "Required for get, update, delete",
+    "data": "Required for create/update, refused for other actions",
+}
+
+
+@pytest.mark.parametrize(("key", "text"), STATED_IN_DESCRIPTIONS.items())
+def test_rules_outside_the_schema_are_stated_to_clients(key, text):
+    assert text in _tool("entity").input_schema["properties"][key]["description"]
 
 
 def test_data_is_held_to_its_type():
@@ -249,3 +267,13 @@ def test_the_tool_schemas_stay_within_their_token_budget():
         for tool in registry.all_tools()
     )
     assert size <= 32_000, f"tool schemas are {size} characters (about {size // 4} tokens)"
+
+
+def test_integers_inside_data_do_not_depend_on_the_order_of_the_alternatives():
+    """A key typed integer in one alternative is coerced even when a later
+    alternative types it otherwise, inside arrays too."""
+    data = {"anyOf": [
+        {"properties": {"ids": {"type": "array", "items": {"type": "integer"}}}},
+        {"properties": {"ids": {"type": "array", "items": {"type": "string"}}}},
+    ]}
+    assert registry._integers(data, {"ids": [1.0, 2.0]}) == {"ids": [1, 2]}

@@ -222,6 +222,8 @@ def _merge(base: dict, extra: dict) -> dict:
     types = [t for s in (base, extra) for t in (s["type"] if isinstance(s.get("type"), list) else [s.get("type")])]
     merged["type"] = [t for t in dict.fromkeys(types) if t]
     merged["properties"] = {**base.get("properties", {}), **extra.get("properties", {})}
+    if isinstance(base.get("items"), dict) and isinstance(extra.get("items"), dict):
+        merged["items"] = _merge(base["items"], extra["items"])
     return merged
 
 

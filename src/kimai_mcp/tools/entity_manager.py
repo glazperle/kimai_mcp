@@ -235,9 +235,10 @@ def _data_schemas() -> list[tuple[str, tuple[str, ...], dict]]:
     return [*_customer_project_activity_data(), *_user_data(), *_team_tag_invoice_data()]
 
 
-def data_slots() -> list[tuple[str, tuple[str, ...]]]:
+@functools.cache
+def data_slots() -> tuple[tuple[str, tuple[str, ...]], ...]:
     """(type, actions) of each alternative of the tool's ``data``, in order."""
-    return [(entity, actions) for entity, actions, _ in _data_schemas()]
+    return tuple((entity, actions) for entity, actions, _ in _data_schemas())
 
 
 def _data_alternative(entity: str, actions: tuple[str, ...], schema: dict) -> dict:
@@ -262,11 +263,17 @@ UNSUPPORTED_WRITES = {
 
 @functools.cache
 def _data_validator(entity_type: str, action: str):
-    """The validator of the data a type and write action take (closed), or None."""
-    for entity, actions, schema in _data_schemas():
+    """The validator of the data a type and write action take, or None.
+
+    Built from the tool schema as the registry closes and advertises it, so a
+    call is held to exactly the alternative clients are shown.
+    """
+    schema = entity_tool().input_schema
+    close_objects(schema)
+    options = schema["properties"]["data"]["anyOf"]
+    for option, (entity, actions) in zip(options, data_slots(), strict=True):
         if entity == entity_type and action in actions:
-            close_objects(schema)
-            return validator_for(schema)
+            return validator_for(option)
     return None
 
 
@@ -455,22 +462,12 @@ async def handle_entity(client: KimaiClient, **params) -> list[TextContent]:
     data = params.get("data", {})
 
     # Route to appropriate handler
-    handlers = {
-        "project": ProjectEntityHandler(client),
-        "activity": ActivityEntityHandler(client),
-        "customer": CustomerEntityHandler(client),
-        "user": UserEntityHandler(client),
-        "team": TeamEntityHandler(client),
-        "tag": TagEntityHandler(client),
-        "invoice": InvoiceEntityHandler(client),
-        "holiday": HolidayEntityHandler(client)
-    }
-
-    handler = handlers.get(entity_type)
-    if not handler:
+    handler_class = _HANDLERS.get(entity_type)
+    if handler_class is None:
         raise ToolError(
-            f"Error: Unknown entity type '{entity_type}'. Valid types: {', '.join(handlers.keys())}"
+            f"Error: Unknown entity type '{entity_type}'. Valid types: {', '.join(ENTITY_TYPES)}"
         )
+    handler = handler_class(client)
 
     # Execute action - errors propagate to the central handler in server.py
     if action == "list":
@@ -1477,3 +1474,16 @@ class HolidayEntityHandler(BaseEntityHandler):
     async def delete(self, id: int) -> builtins.list[TextContent]:
         await self.client.delete_public_holiday(id)
         return [TextContent(type="text", text=f"Deleted holiday ID {id}")]
+
+
+# The handler of each entity type, one per ENTITY_TYPES (a test holds them equal).
+_HANDLERS = {
+    "project": ProjectEntityHandler,
+    "activity": ActivityEntityHandler,
+    "customer": CustomerEntityHandler,
+    "user": UserEntityHandler,
+    "team": TeamEntityHandler,
+    "tag": TagEntityHandler,
+    "invoice": InvoiceEntityHandler,
+    "holiday": HolidayEntityHandler,
+}
