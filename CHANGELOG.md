@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.20.3] - 2026-10-28
+
 ### Changed
 
 - **The `entity` tool has one schema, for clients and server alike.** 2.20.2 showed clients a flattened copy
