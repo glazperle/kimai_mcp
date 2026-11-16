@@ -1,5 +1,5 @@
 # Multi-stage build for Kimai MCP Remote Server
-FROM python:3.14-slim AS builder
+FROM python:3.15-slim AS builder
 
 # Set working directory
 WORKDIR /app
@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -e ".[server]"
 
 
 # Production stage
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # Set working directory
 WORKDIR /app
